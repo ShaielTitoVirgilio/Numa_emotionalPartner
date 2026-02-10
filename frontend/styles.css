@@ -387,3 +387,23 @@
   .hidden {
     display: none !important;
   }
+
+  .suggestions {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 16px 12px;
+  }
+  
+  .suggestion-chip {
+    border: none;
+    border-radius: 999px;
+    padding: 6px 12px;
+    background: #eee;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  
+  .suggestion-chip:hover {
+    background: #ddd;
+  }
+  

@@ -406,6 +406,42 @@ async function mostrarPaso() {
     guiadoTimer = setTimeout(mostrarPaso, TIEMPO_POR_PASO * 1000);
 }
 
+function renderSuggestions(suggestions) {
+    if (!suggestions || suggestions.length === 0) return;
+  
+    const container = document.createElement("div");
+    container.className = "suggestions";
+  
+    suggestions.forEach(s => {
+      const chip = document.createElement("button");
+      chip.className = "suggestion-chip";
+      chip.innerText = s.label;
+  
+      chip.onclick = () => openExercise(s.id);
+  
+      container.appendChild(chip);
+    });
+  
+    chat.appendChild(container);
+  }
+
+  
+  import { ejercicios } from "./ejerciciosData.js";
+
+function openExercise(id) {
+  const ejercicio = ejercicios[id];
+  if (!ejercicio) return;
+
+  const modal = document.getElementById("exercise-modal");
+
+  modal.querySelector("h2").innerText = ejercicio.titulo;
+  modal.querySelector("p").innerText = ejercicio.descripcion;
+  modal.querySelector("video").src = ejercicio.video;
+
+  modal.classList.add("open");
+}
+
+
 // --- A. MOTOR DE RESPIRACIÓN ---
 let intervalRespiracion = null;
 

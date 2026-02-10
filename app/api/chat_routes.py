@@ -17,10 +17,7 @@ chat_service = ChatService(GroqClient())
 
 @router.post("/chat")
 def chat(payload: dict):
-    texto = payload.get("message", "")
-    historial = payload.get("history")
-
-    return {
-        "response": chat_service.chat(texto, historial)
-    }
-
+    return chat_service.chat(
+        payload.get("message", ""),
+        payload.get("history")
+    )
