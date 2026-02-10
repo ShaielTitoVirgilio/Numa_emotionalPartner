@@ -14,7 +14,7 @@ let historialConversacion = [];
 // ⏱️ Control de "Enfriamiento" (Throttling)
 // Evita que la IA sugiera ejercicios en cada mensaje seguido
 let ultimoEjercicioSugeridoTime = 0;
-const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos (300,000 ms)
+const TIEMPO_ENFRIAMIENTO = 100000; // 5 minutos (300,000 ms)
 
 /**
  * Agrega un mensaje al chat visualmente
@@ -42,64 +42,42 @@ async function enviarMensaje() {
     const texto = input.value.trim();
     if (!texto) return;
   
-    // 1. Mostrar mensaje usuario
     agregarMensaje(texto, "user");
     input.value = "";
     historialConversacion.push({ role: "user", content: texto });
   
-    // 2. Estado del oso: Atento
-    if (window.setBearState) window.setBearState('listening');
+    if (window.setBearState) window.setBearState("listening");
   
     try {
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          texto,
-          historial: historialConversacion
+        body: JSON.stringify({
+          message: texto,
+          history: historialConversacion
         })
       });
   
-      if (!res.ok) throw new Error("Error en respuesta HTTP");
-      
-      const data = await res.json();
-      let respuestaOso = data.oso;
-
-      // ======================================================
-      // 🕵️‍♀️ DETECCIÓN INTELIGENTE DE EJERCICIOS (NUEVO)
-      // ======================================================
-      // Buscamos si la IA mandó una etiqueta oculta tipo: [EJERCICIO: respiracion_box]
-      const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
-      const match = respuestaOso.match(regexEjercicio);
-      
-      // Limpiamos la etiqueta para que el usuario no vea el código técnico
-      let textoLimpio = respuestaOso.replace(regexEjercicio, "").trim();
-
-      // 3. Mostrar respuesta limpia del oso
-      agregarMensaje(textoLimpio, "oso");
-      historialConversacion.push({ role: "assistant", content: textoLimpio });
-
-      // 4. Lógica de Sugerencia
-      if (match) {
-        const ejercicioId = match[1]; // ej: "respiracion_478"
-        const ahora = Date.now();
-
-        // Verificamos si pasó el tiempo de enfriamiento
-        if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
-            mostrarBotonSugerencia(ejercicioId);
-            ultimoEjercicioSugeridoTime = ahora;
-        } else {
-            console.log("Sugerencia suprimida por enfriamiento (anti-spam).");
-        }
+      if (!res.ok) {
+        throw new Error("HTTP error " + res.status);
       }
-
+  
+      const data = await res.json();
+  
+      // 🔹 DEFENSA
+      const textoOso = data.text || "Estoy acá contigo.";
+  
+      agregarMensaje(textoOso, "oso");
+      historialConversacion.push({ role: "assistant", content: textoOso });
+  
     } catch (error) {
-      console.error("❌ Error:", error);
+      console.error("❌ ERROR:", error);
       agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
     } finally {
-      if (window.setBearState) window.setBearState('calm');
+      if (window.setBearState) window.setBearState("calm");
     }
-}
+  }
+  
 
 // Exponer enviarMensaje globalmente para el botón HTML
 window.enviarMensaje = enviarMensaje;

@@ -10,26 +10,26 @@ class ChatService:
     def __init__(self, llm_client: LLMClient):
         self.llm = llm_client
 
-def chat(self, user_text: str, history=None) -> dict:
-    mood = infer_mood(user_text)
-    suggestions = get_suggestions(mood)
+    def chat(self, user_text: str, history: List[Dict[str, str]] = None) -> dict:
+        mood = infer_mood(user_text)
+        suggestions = get_suggestions(mood)
 
-    messages = [
-        {
-            "role": "system",
-            "content": f"{NUMA_PROMPT}\n\nEstado general del usuario: {mood}"
+        messages = [
+            {
+                "role": "system",
+                "content": f"{NUMA_PROMPT}\n\nEstado general del usuario: {mood}"
+            }
+        ]
+
+        if history:
+            messages.extend(history)
+
+        messages.append({"role": "user", "content": user_text})
+
+        response_text = self.llm.chat(messages)
+
+        return {
+            "text": response_text or "Estoy acá contigo.",
+            "mood": mood,
+            "suggestions": suggestions
         }
-    ]
-
-    if history:
-        messages.extend(history)
-
-    messages.append({"role": "user", "content": user_text})
-
-    response_text = self.llm.chat(messages)
-
-    return {
-        "text": response_text or "Estoy acá contigo.",
-        "mood": mood,
-        "suggestions": suggestions
-    }
