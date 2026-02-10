@@ -1,0 +1,14 @@
+# Variables de entorno
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+
+# OS
+.DS_Store

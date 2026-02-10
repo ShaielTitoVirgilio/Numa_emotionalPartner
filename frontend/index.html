@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Numa 🐻</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="bear-container" id="bear-container"></div>
+
+  <div class="chat" id="chat"></div>
+
+  <div class="input-container">
+    <input
+      id="input"
+      placeholder="¿Cómo te sentís ahora?"
+      autocomplete="off"
+      onkeypress="if(event.key === 'Enter') enviarMensaje()"
+    />
+    <button class="btn-enviar" onclick="enviarMensaje()">Enviar</button>
+  </div>
+
+  <div class="nav-buttons">
+    <button class="nav-btn" onclick="irAEjercicios()">
+      <span>🧘</span> Ejercicios
+    </button>
+    <button class="nav-btn" onclick="volverAlChat()">
+      <span>💬</span> Chat
+    </button>
+  </div>
+
+  <div id="prep-screen" class="prep-screen hidden">
+    <div class="loader-circle"></div>
+    <h2 id="prep-text">Preparando tu espacio...</h2>
+  </div>
+
+  <div class="ejercicios-panel hidden" id="ejercicios-menu">
+    <button class="close-btn" onclick="cerrarMenuEjercicios()">✕</button>
+    <h2>¿Qué necesitás hoy?</h2>
+    <div id="lista-categorias" style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 15px;"></div>
+  </div>
+
+  <div class="ejercicios-panel hidden" id="submenu-detalle">
+    <button class="close-btn" onclick="volverAMenuPrincipal()">←</button>
+    <h2 id="titulo-submenu" style="margin-bottom: 20px;">Categoría</h2>
+    <div id="lista-ejercicios-detalle" style="width: 100%; padding-bottom: 40px;"></div>
+  </div>
+
+  <div class="breathing hidden" id="overlay-respiracion">
+    <button class="close-btn" onclick="detenerRespiracion()">✕</button>
+    <h3 id="resp-titulo" style="margin-bottom:20px; color:#4a6a5e; font-size: 1.4rem;"></h3>
+    
+    <div class="circle" id="resp-circle"></div>
+    
+    <p id="resp-text-instruccion" style="margin-top:30px; font-size:1.5rem; font-weight: bold;">Preparate...</p>
+    <p id="resp-subtext" style="font-size:0.9rem; opacity:0.7; margin-top:10px;"></p>
+  </div>
+
+  <div class="meditation hidden" id="overlay-guiado">
+    <button class="close-btn" onclick="detenerGuiado()">✕</button>
+    
+    <h3 id="guiado-titulo" style="margin-bottom: 30px;">Ejercicio</h3>
+    
+    <div id="guiado-contenido" style="display: flex; flex-direction: column; align-items: center;">
+      <h2 id="guiado-paso-principal" style="color:#6b8e7d; font-size:1.6rem; margin-bottom:15px; text-align: center;"></h2>
+      
+      <div id="numa-animacion-container">
+        <video id="numa-video-pose"
+         autoplay
+         loop
+         muted
+         playsinline
+         style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; border: 4px solid #f0f0f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+            <source id="numa-video-source" src="">
+        </video>
+    </div>
+    
+    <div class="progress-container" style="width: 80%; height: 8px; background: #eee; border-radius: 10px; margin: 20px auto; overflow: hidden;">
+        <div id="guiado-progress" class="progress-bar" style="width: 0%; height: 100%; background: #a6c7b8; transition: width 1s linear;"></div>
+    </div>
+      
+      <p id="guiado-instruccion" style="font-size:1.1rem; line-height:1.6; max-width: 80%; text-align: center;"></p>
+      
+      <div id="guiado-timer" class="meditation-timer hidden" style="margin-top: 20px;"></div>
+    </div>
+  </div>
+
+  <div class="reading hidden" id="reading">
+    <button class="close-btn" onclick="closeReading()">✕</button>
+    <h3>Un momento de lectura</h3>
+    <div id="reading-content">
+      <p class="quote">"La paz viene de adentro. No la busques afuera."</p>
+      <p class="author">— Buda</p>
+    </div>
+    <button onclick="nextReading()">Siguiente →</button>
+  </div>
+
+  <div class="breathing hidden" id="breathing"><button class="close-btn" onclick="stopBreathing()">✕</button><div class="circle"></div><p id="breathing-text">Inhalá</p></div>
+  <div class="meditation hidden" id="meditation"><button class="close-btn" onclick="closeMeditation()">✕</button><h3>Meditación</h3><p id="meditation-text">...</p><div class="meditation-timer" id="meditation-timer">3:00</div></div>
+  <div class="yoga hidden" id="yoga"><button class="close-btn" onclick="closeYoga()">✕</button><h3>Estiramiento</h3><div id="yoga-content"><p>Postura:</p><h2 id="yoga-pose">Inicio</h2><p id="yoga-instruction">...</p></div></div>
+
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script src="/static/bear3d.js"></script>
+<script type="module" src="/static/app.js"></script>
+
+</body>
+</html>
