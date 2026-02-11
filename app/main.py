@@ -1,25 +1,63 @@
 from fastapi import FastAPI
+from fastapi import Request
+from pydantic import BaseModel
+from typing import List, Literal
+from app.ai import process_chat
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import List, Dict
-from app.ai import hablar_con_oso
+import os
 
-app = FastAPI(title="Numa 🐻")
+app = FastAPI(
+    title="Numa Emotional Partner API",
+    version="1.0.0"
+)
+
+
+# ==========================
+# MODELOS
+# ==========================
+
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    conversation: List[Message]
+
+
+from typing import Optional
+
+class ChatResponse(BaseModel):
+    message: str
+    mood: str
+    suggested_action: Optional[str] = None
+    risk_level: Optional[str] = None
+
+
+
+# ==========================
+# ROUTES
+# ==========================
 
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 @app.get("/")
-def home():
-    return FileResponse("frontend/index.html")
+def serve_frontend():
+    return FileResponse(os.path.join("frontend", "index.html"))
 
 
-class Mensaje(BaseModel):
-    texto: str
-    historial: List[Dict[str, str]] = []  # 🧠 NUEVO: Recibe historial
+@app.post("/chat", response_model=ChatResponse)
+def chat_endpoint(request: ChatRequest):
+    """
+    Endpoint principal de conversación.
+    Recibe historial y devuelve respuesta generada por el LLM.
+    """ 
 
+    result = process_chat(
+        conversation=[m.dict() for m in request.conversation]
 
-@app.post("/chat")
-def chat(mensaje: Mensaje):
-    respuesta = hablar_con_oso(mensaje.texto, mensaje.historial)  # 🧠 NUEVO
-    return { "oso": respuesta }
+    )
+
+    return result
+

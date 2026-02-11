@@ -55,15 +55,14 @@ async function enviarMensaje() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          texto,
-          historial: historialConversacion
+            conversation: historialConversacion
         })
       });
   
       if (!res.ok) throw new Error("Error en respuesta HTTP");
       
       const data = await res.json();
-      let respuestaOso = data.oso;
+      let respuestaOso = data?.message || "Estoy acá contigo.";
 
       // ======================================================
       // 🕵️‍♀️ DETECCIÓN INTELIGENTE DE EJERCICIOS (NUEVO)
@@ -77,7 +76,7 @@ async function enviarMensaje() {
 
       // 3. Mostrar respuesta limpia del oso
       agregarMensaje(textoLimpio, "oso");
-      historialConversacion.push({ role: "assistant", content: textoLimpio });
+      historialConversacion.push({ role: "assistant", content: respuestaOso });
 
       // 4. Lógica de Sugerencia
       if (match) {
