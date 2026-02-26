@@ -7,7 +7,7 @@ export const CATALOGO_EJERCICIOS = {
       nombre: "Respiración Cuadrada (Box)",
       descripcion: "Técnica usada por los Navy SEALs para recuperar el control y la concentración en situaciones de alto estrés.",
       cientifico: "Regula el sistema nervioso autónomo imponiendo un ritmo constante.",
-      patron: { inhalar: 4, retener: 4, exhalar: 4, esperar: 4 }, // Segundos
+      patron: { inhalar: 4, retener: 4, exhalar: 4, esperar: 4 },
       instruccion: "Imaginá un cuadrado. Inhalá, retené, exhalá y esperá en tiempos iguales."
     },
     {
@@ -32,7 +32,7 @@ export const CATALOGO_EJERCICIOS = {
       id: "meditacion_bodyscan",
       nombre: "Escaneo Corporal (Body Scan)",
       descripcion: "Para liberar tensión física acumulada por estrés o ansiedad.",
-      duracion: 180, // 3 min
+      duracion: 180,
       pasos: [
         "Cerrá los ojos y llevá la atención a los pies.",
         "Notá si hay tensión. Soltala al exhalar.",
@@ -75,7 +75,8 @@ export const CATALOGO_EJERCICIOS = {
         { 
             pose: "Mentón al pecho", 
             guia: "Entrelazá manos detrás de la nuca y dejá caer el peso de los brazos.",
-            animacion: "/static/assets/haciaAtras.mp4" },
+            animacion: "/static/assets/haciaAtras.mp4"
+        },
         { 
             pose: "Apertura de pecho",
             guia: "Brazos atrás, abrí el pecho y mirá ligeramente arriba.",
@@ -104,6 +105,14 @@ export const CATALOGO_EJERCICIOS = {
             animacion: "/static/assets/haciaAdelante.mp4"
         }
       ]
+    }
+  ],
+  lectura: [ 
+    {
+      id: "lectura",
+      nombre: "Momento de Lectura",
+      descripcion: "Frases inspiradoras para reflexionar y encontrar perspectiva.",
+      cientifico: "La lectura contemplativa puede ayudar a cambiar el foco mental y ofrecer nuevas perspectivas."
     }
   ]
 };

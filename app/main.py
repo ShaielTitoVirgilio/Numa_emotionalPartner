@@ -5,6 +5,7 @@ from typing import List, Literal
 from app.ai import process_chat
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+import time
 import os
 
 app = FastAPI(
@@ -49,11 +50,7 @@ def serve_frontend():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest):
-    """
-    Endpoint principal de conversación.
-    Recibe historial y devuelve respuesta generada por el LLM.
-    """ 
-
+    
     result = process_chat(
         conversation=[m.dict() for m in request.conversation]
 

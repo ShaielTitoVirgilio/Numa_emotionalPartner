@@ -41,6 +41,7 @@ class LLMClient:
         completion = self.client.chat.completions.create(
             model="llama-3.1-8b-instant",
             temperature=0.7,
+            max_tokens=200,
             messages=[
                 {"role": "system", "content": NUMA_PROMPT},
                 *conversation,
