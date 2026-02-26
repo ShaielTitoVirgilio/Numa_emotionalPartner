@@ -1,7 +1,7 @@
 // app.js - Archivo principal (orquestador)
 
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje } from './modules/chat.js';
 import { 
   irAEjercicios, 
   cerrarMenuEjercicios,
@@ -38,3 +38,5 @@ window.closeReading = closeReading;
 
 console.log("✅ Numa cargado correctamente");
 console.log(`📚 Catálogo: ${Object.keys(CATALOGO_EJERCICIOS).length} categorías`);
+
+agregarMensaje("Hola, soy Numa 🐼 Estoy acá si querés hablar, desahogarte, o simplemente no estar solo. ¿Cómo estás hoy?", "oso");

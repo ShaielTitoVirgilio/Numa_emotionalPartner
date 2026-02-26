@@ -3,6 +3,9 @@ let scene, camera, renderer, bearGroup;
 let isCalm = true;
 let isListening = false;
 let isHappy = false;
+let isStressed = false;
+let isSad = false;
+let isThinking = false;
 
 function init3DBear() {
   const container = document.getElementById('bear-container');
@@ -215,10 +218,8 @@ function animate() {
     // Respiración suave
     bearGroup.scale.y = 1 + Math.sin(time * 0.8) * 0.02;
     bearGroup.scale.x = 1 + Math.sin(time * 0.8) * 0.01;
-    
     // Flotación
     bearGroup.position.y = Math.sin(time * 0.6) * 0.15;
-    
     // Balanceo muy sutil
     bearGroup.rotation.z = Math.sin(time * 0.5) * 0.03;
     bearGroup.rotation.y = Math.sin(time * 0.4) * 0.05;
@@ -240,6 +241,28 @@ function animate() {
     bearGroup.position.y = Math.abs(Math.sin(time * 4)) * 0.4;
     bearGroup.rotation.z = Math.sin(time * 4) * 0.1;
     bearGroup.scale.x = 1 + Math.sin(time * 8) * 0.03;
+  }
+
+  if (isStressed) {
+    // Vibración pequeña y rápida — nerviosismo
+    bearGroup.position.x = Math.sin(time * 12) * 0.06;
+    bearGroup.position.y = Math.sin(time * 10) * 0.04;
+    bearGroup.rotation.z = Math.sin(time * 8) * 0.05;
+    bearGroup.scale.y = 1 + Math.sin(time * 6) * 0.02;
+  }
+
+  if (isSad) {
+    // Movimiento lento y caído — pesadez
+    bearGroup.position.y = -0.2 + Math.sin(time * 0.4) * 0.05;
+    bearGroup.rotation.z = Math.sin(time * 0.3) * 0.04;
+    bearGroup.rotation.x = -0.15 + Math.sin(time * 0.3) * 0.02; // cabeza ligeramente hacia abajo
+  }
+
+  if (isThinking) {
+    // Inclinación lenta a un lado — reflexivo
+    bearGroup.rotation.z = 0.12 + Math.sin(time * 0.8) * 0.05;
+    bearGroup.rotation.y = Math.sin(time * 0.6) * 0.08;
+    bearGroup.position.y = Math.sin(time * 0.5) * 0.1;
   }
   
   renderer.render(scene, camera);
@@ -264,14 +287,29 @@ function blink() {
 
 // === CONTROL DE ESTADOS ===
 function setBearState(state) {
+  // Resetear todos los estados
   isCalm = false;
   isListening = false;
   isHappy = false;
-  
-  if (state === 'calm') isCalm = true;
+  isStressed = false;
+  isSad = false;
+  isThinking = false;
+
+  // Resetear transformaciones para que no queden residuos del estado anterior
+  bearGroup.position.x = 0;
+  bearGroup.rotation.x = -0.1;
+
+  if (state === 'calm')      isCalm = true;
   else if (state === 'listening') isListening = true;
-  else if (state === 'happy') isHappy = true;
+  else if (state === 'happy')     isHappy = true;
+  else if (state === 'stressed')  isStressed = true;
+  else if (state === 'sad')       isSad = true;
+  else if (state === 'thinking')  isThinking = true;
+  else isCalm = true; // fallback
 }
+
+// Exponer al window para que chat.js pueda llamarlo
+window.setBearState = setBearState;
 
 // Inicializar cuando cargue la página
 if (document.readyState === 'loading') {

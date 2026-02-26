@@ -14,7 +14,42 @@ let historialConversacion = [];
 
 // ⏱️ Control de "Enfriamiento" (Throttling)
 let ultimoEjercicioSugeridoTime = 0;
-const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos
+const TIEMPO_ENFRIAMIENTO = 10000; // 10 segundos (para desarrollo)
+// const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos 
+
+
+// 🐻 Estados del oso según mood
+const MOOD_TO_BEAR_STATE = {
+  stressed:    'stressed',
+  overwhelmed: 'stressed',
+  sad:         'sad',
+  anxious:     'thinking',
+  happy:       'happy',
+  excited:     'happy',
+  calm:        'calm',
+  neutral:     'calm',
+};
+
+// 💬 Frases de introducción para la sugerencia de ejercicio
+const FRASES_POR_MOOD = {
+  stressed:    "Che, probá esto. Ayuda más de lo que parece:",
+  overwhelmed: "Para un segundo. Esto puede acomodarte:",
+  sad:         "No tenés que hacer nada grande. Esto es suave:",
+  anxious:     "Para bajar un cambio:",
+  default:     "Esto podría ayudarte ahora:",
+};
+
+// 🏷️ Etiquetas de mood para el indicador
+const MOOD_LABELS = {
+  stressed:    '😤 un poco estresado/a',
+  overwhelmed: '😮‍💨 bastante al límite',
+  sad:         '🌧️ bajón',
+  happy:       '☀️ bien',
+  excited:     '✨ con energía',
+  anxious:     '😬 ansioso/a',
+  calm:        '🌿 tranquilo/a',
+  neutral:     '',
+};
 
 // ============================================
 // FUNCIONES PÚBLICAS
@@ -23,7 +58,7 @@ const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos
 /**
  * Agrega un mensaje al chat visualmente
  */
-export function agregarMensaje(texto, tipo) {
+export function agregarMensaje(texto, tipo, mood = null) {
   const bubble = document.createElement("div");
   bubble.className = `bubble ${tipo}`;
 
@@ -35,6 +70,10 @@ export function agregarMensaje(texto, tipo) {
     bubble.innerText = "…";
   }
 
+  if (tipo === "oso" && mood) {
+    bubble.classList.add(`mood-${mood}`);
+  }
+
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
 }
@@ -43,83 +82,128 @@ export function agregarMensaje(texto, tipo) {
  * Envía mensaje al backend y procesa la respuesta inteligente
  */
 export async function enviarMensaje() {
-    const texto = input.value.trim();
-    if (!texto) return;
-  
-    // 1. Mostrar mensaje usuario
-    agregarMensaje(texto, "user");
-    input.value = "";
-    
-    // 2. Estado del oso: Atento
-    if (window.setBearState) window.setBearState('listening');
-  
-    try {
-      // 🔥 IMPORTANTE: El backend espera SOLO "conversation"
-      // Agregamos el mensaje actual al final del historial antes de enviar
-      const conversationToSend = [
-        ...historialConversacion,
-        { role: "user", content: texto }
-      ];
+  const texto = input.value.trim();
+  if (!texto) return;
 
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          conversation: conversationToSend  // ✅ Solo conversation
-        })
-      });
-  
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error("❌ ERROR DEL SERVIDOR:", errorText);
-        throw new Error("Error en respuesta HTTP");
-      }
-      
-      const data = await res.json();
-      
-      // El backend ahora devuelve { message, mood, suggested_action, risk_level }
-      let respuestaOso = data.message;
+  agregarMensaje(texto, "user");
+  input.value = "";
+  _prepararEnvio();
 
-      // Detección de ejercicios sugeridos (si lo implementás en el futuro)
-      const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
-      const match = respuestaOso.match(regexEjercicio);
-      
-      // Limpiar etiqueta técnica
-      let textoLimpio = respuestaOso.replace(regexEjercicio, "").trim();
+  try {
+      const data = await _llamarBackend(texto);
+      _procesarRespuesta(data, texto);
+  } catch (error) {
+      _manejarError(error);
+  }
+}
 
-      // 3. Mostrar respuesta limpia
-      agregarMensaje(textoLimpio, "oso");
-      
-      // 4. Actualizar historial DESPUÉS de recibir respuesta
-      historialConversacion.push({ role: "user", content: texto });
-      historialConversacion.push({ role: "assistant", content: textoLimpio });
+function _prepararEnvio() {
+  if (window.setBearState) window.setBearState('listening');
+  mostrarTyping();
+}
 
-      // 5. Lógica de Sugerencia con enfriamiento
-      if (match) {
-        const ejercicioId = match[1];
-        const ahora = Date.now();
+async function _llamarBackend(texto) {
+  const conversationToSend = [
+      ...historialConversacion,
+      { role: "user", content: texto }
+  ];
 
-        if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
-            mostrarBotonSugerencia(ejercicioId);
-            ultimoEjercicioSugeridoTime = ahora;
-        } else {
-            console.log("Sugerencia suprimida por enfriamiento (anti-spam).");
-        }
-      }
+  const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation: conversationToSend })
+  });
 
-    } catch (error) {
-      console.error("❌ Error:", error);
-      agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
-    } finally {
-      if (window.setBearState) window.setBearState('calm');
-    }
+  if (!res.ok) {
+      const errorText = await res.text();
+      console.error("❌ ERROR DEL SERVIDOR:", errorText);
+      throw new Error("Error en respuesta HTTP");
+  }
+
+  return await res.json();
+}
+
+function _procesarRespuesta(data, textoUsuario) {
+  const mood = data.mood || 'neutral';
+  const textoLimpio = _limpiarMensaje(data.message);
+
+  ocultarTyping();
+  agregarMensaje(textoLimpio, "oso", mood);
+
+  if (window.setBearState) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
+  actualizarMoodIndicator(mood);
+
+  _actualizarHistorial(textoUsuario, textoLimpio);
+  _manejarSugerencia(data, mood);
+}
+
+function _limpiarMensaje(mensaje) {
+  return mensaje.replace(/\[EJERCICIO:\s*(\w+)\]/, "").trim();
+}
+
+function _actualizarHistorial(textoUsuario, textoOso) {
+  historialConversacion.push({ role: "user", content: textoUsuario });
+  historialConversacion.push({ role: "assistant", content: textoOso });
+}
+
+function _manejarSugerencia(data, mood) {
+  const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
+  const ejercicioId = (data.suggested_action && data.suggested_action !== 'none')
+      ? data.suggested_action
+      : data.message.match(regexEjercicio)?.[1] ?? null;
+
+  if (!ejercicioId) return;
+
+  const ahora = Date.now();
+  if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
+      mostrarBotonSugerencia(ejercicioId, mood);
+      ultimoEjercicioSugeridoTime = ahora;
+  } else {
+      console.log("Sugerencia suprimida por enfriamiento (anti-spam).");
+  }
+}
+
+function _manejarError(error) {
+  ocultarTyping();
+  console.error("❌ Error:", error);
+  agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
+  if (window.setBearState) window.setBearState('calm');
+}
+// ============================================
+// FUNCIONES PRIVADAS
+// ============================================
+
+/**
+ * Actualiza el indicador de mood debajo del oso
+ */
+function actualizarMoodIndicator(mood) {
+  const indicator = document.getElementById('mood-indicator');
+  if (!indicator) return;
+
+  const label = MOOD_LABELS[mood] || '';
+  indicator.textContent = label;
+  indicator.style.opacity = label ? '1' : '0';
+}
+
+
+function mostrarTyping() {
+  const bubble = document.createElement("div");
+  bubble.className = "bubble oso typing";
+  bubble.id = "typing-indicator";
+  bubble.innerHTML = `<span></span><span></span><span></span>`;
+  chat.appendChild(bubble);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function ocultarTyping() {
+  const indicator = document.getElementById("typing-indicator");
+  if (indicator) indicator.remove();
 }
 
 /**
  * Muestra un botón de sugerencia de ejercicio en el chat
  */
-function mostrarBotonSugerencia(id) {
-    // Buscar el ejercicio en el catálogo
+function mostrarBotonSugerencia(id, mood = 'neutral') {
     let ejercicioEncontrado = null;
     let tipoEncontrado = "";
 
@@ -134,13 +218,15 @@ function mostrarBotonSugerencia(id) {
 
     if (!ejercicioEncontrado) return;
 
+    const frase = FRASES_POR_MOOD[mood] || FRASES_POR_MOOD.default;
+
     const bubble = document.createElement("div");
     bubble.className = "bubble oso";
+    bubble.classList.add(`mood-${mood}`); 
     
-    // Crear tarjeta de sugerencia
     const div = document.createElement("div");
     div.innerHTML = `
-        <p style="font-size: 0.9em; margin-bottom: 8px;">Creo que esto te puede ayudar ahora:</p>
+        <p style="font-size: 0.9em; margin-bottom: 8px;">${frase}</p>
         <button class="exercise-suggestion-btn">
             ✨ ${ejercicioEncontrado.nombre}
         </button>
@@ -149,7 +235,6 @@ function mostrarBotonSugerencia(id) {
         </p>
     `;
     
-    // Estilar botón
     const btn = div.querySelector('button');
     btn.style.cssText = `
         background: #a6c7b8; 
@@ -172,7 +257,10 @@ function mostrarBotonSugerencia(id) {
     chat.scrollTop = chat.scrollHeight;
 }
 
-// Exportar historial si otros módulos lo necesitan
+// ============================================
+// EXPORTS
+// ============================================
+
 export function getHistorial() {
     return historialConversacion;
 }

@@ -89,7 +89,32 @@
     border-bottom-left-radius: 4px;
   }
   
-  /* 📝 Input container */
+  /* 🎨 Mood - Colores de bubble */
+  .bubble.oso.mood-stressed    { background: #ffe5e5; }
+  .bubble.oso.mood-overwhelmed { background: #ffd6d6; }
+  .bubble.oso.mood-sad         { background: #e8e8f0; }
+  .bubble.oso.mood-anxious     { background: #ffecd6; }
+  .bubble.oso.mood-happy       { background: #e5f5e0; }
+  .bubble.oso.mood-excited     { background: #fff3cd; }
+  .bubble.oso.mood-calm        { background: #f2efe9; }
+  .bubble.oso.mood-neutral     { background: #f2efe9; }
+
+  .bubble.oso {
+    transition: background 0.4s ease;
+  }
+
+
+  #mood-indicator {
+    font-size: 0.75rem;
+    color: #8fb5a3;
+    text-align: center;
+    height: 20px;
+    margin-top: -6px;
+    margin-bottom: 4px;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+  }
+  
   
   .input-container {
     width: 100%;
@@ -387,3 +412,21 @@
   .hidden {
     display: none !important;
   }
+
+  /* Loading indicator */
+.bubble.typing span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #999;
+  border-radius: 50%;
+  margin: 0 2px;
+  animation: bounce 1.2s infinite;
+}
+.bubble.typing span:nth-child(2) { animation-delay: 0.2s; }
+.bubble.typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-6px); }
+}
