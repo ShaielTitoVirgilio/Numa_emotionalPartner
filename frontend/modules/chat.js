@@ -97,6 +97,47 @@ export async function enviarMensaje() {
   }
 }
 
+/**
+ * Maneja la respuesta del usuario al feedback post-ejercicio.
+ * Muestra la opción elegida como burbuja de usuario y la respuesta de Numa.
+ * También actualiza el historial de conversación.
+ * 
+ * @param {string} textoOpcion  - Texto que eligió el usuario ("Me sirvió mucho", etc.)
+ * @param {string} respuestaNuma - Respuesta generada localmente por Numa
+ * @param {string} valor        - Valor interno ("positive_high", "neutral", etc.)
+ */
+export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
+  // Mostrar lo que eligió el usuario como burbuja user
+  agregarMensaje(textoOpcion, "user");
+
+  // Pequeño delay para que sienta natural
+  setTimeout(() => {
+    // Determinar mood aproximado para colorear la burbuja de Numa
+    const moodParaFeedback = _valorAMood(valor);
+    agregarMensaje(respuestaNuma, "oso", moodParaFeedback);
+
+    if (window.setBearState) {
+      window.setBearState(MOOD_TO_BEAR_STATE[moodParaFeedback] || 'calm');
+    }
+
+    // Actualizar historial para que Numa tenga contexto en próximos mensajes
+    historialConversacion.push({
+      role: "user",
+      content: `[Post-ejercicio] ${textoOpcion}`,
+    });
+    historialConversacion.push({
+      role: "assistant",
+      content: respuestaNuma,
+    });
+
+    chat.scrollTop = chat.scrollHeight;
+  }, 400);
+}
+
+// ============================================
+// FUNCIONES PRIVADAS - ENVÍO
+// ============================================
+
 function _prepararEnvio() {
   if (window.setBearState) window.setBearState('listening');
   mostrarTyping();
@@ -169,9 +210,23 @@ function _manejarError(error) {
   agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
   if (window.setBearState) window.setBearState('calm');
 }
+
 // ============================================
-// FUNCIONES PRIVADAS
+// FUNCIONES PRIVADAS - UI
 // ============================================
+
+/**
+ * Convierte valor de feedback a mood para colorear la burbuja de Numa
+ */
+function _valorAMood(valor) {
+  const map = {
+    positive_high: 'happy',
+    positive_low:  'calm',
+    neutral:       'neutral',
+    negative:      'sad',
+  };
+  return map[valor] || 'neutral';
+}
 
 /**
  * Actualiza el indicador de mood debajo del oso
@@ -184,7 +239,6 @@ function actualizarMoodIndicator(mood) {
   indicator.textContent = label;
   indicator.style.opacity = label ? '1' : '0';
 }
-
 
 function mostrarTyping() {
   const bubble = document.createElement("div");

@@ -1,5 +1,7 @@
 // modules/motorGuiado.js
 
+import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+
 // ============================================
 // ESTADO INTERNO
 // ============================================
@@ -8,6 +10,7 @@ let guiadoTimer = null;
 let guiadoInterval = null;
 let pasoIndex = 0;
 let datosEjercicioActual = null;
+let _onFeedbackRespuesta = null;
 
 const TIEMPO_POR_PASO = 15; // segundos
 
@@ -16,23 +19,28 @@ const TIEMPO_POR_PASO = 15; // segundos
 // ============================================
 
 /**
+ * Configura el callback para cuando el usuario responde el feedback.
+ * Debe ser llamado desde app.js antes de runGuiado.
+ */
+export function setFeedbackCallback(fn) {
+  _onFeedbackRespuesta = fn;
+}
+
+/**
  * Ejecuta ejercicios guiados (meditación/yoga)
  */
 export function runGuiado(tipo, data) {
     const overlay = document.getElementById("overlay-guiado");
     if (!overlay) return;
 
-    // 1. Mostrar el panel
     overlay.classList.remove("hidden");
     
-    // 2. Referencias a elementos
     document.getElementById("guiado-titulo").innerText = data.nombre;
     const principal = document.getElementById("guiado-paso-principal");
     const instruccion = document.getElementById("guiado-instruccion");
     const timerDisplay = document.getElementById("guiado-timer");
     const videoElement = document.getElementById("numa-video-pose");
     
-    // 3. Resetear estado
     timerDisplay.classList.add("hidden");
     principal.innerText = "";
     instruccion.innerText = "";
@@ -41,26 +49,22 @@ export function runGuiado(tipo, data) {
     pasoIndex = 0; 
     datosEjercicioActual = data; 
 
-    // 4. Resetear barra de progreso
     const progressBar = document.getElementById("guiado-progress");
     if (progressBar) {
         progressBar.style.transition = "none";
         progressBar.style.width = "0%";
     }
 
-    // 5. Decidir qué motor arrancar
     if (data.pasos && Array.isArray(data.pasos)) {
-        // Modo con pasos (Yoga/Meditación guiada)
         mostrarPaso(); 
     } 
     else if (data.duracion) {
-        // Modo simple con timer
         runTimerSimple(data.duracion);
     }
 }
 
 /**
- * Detiene el ejercicio guiado
+ * Detiene el ejercicio guiado (botón ✕ — sin feedback)
  */
 export function detenerGuiado() {
     document.getElementById("overlay-guiado").classList.add("hidden");
@@ -71,10 +75,9 @@ export function detenerGuiado() {
 }
 
 /**
- * Finaliza el ejercicio con mensaje de cierre
+ * Finaliza el ejercicio con mensaje de cierre + feedback
  */
 export function finalizarEjercicio() {
-    // Detener timers
     clearInterval(guiadoInterval);
     clearTimeout(guiadoTimer);
 
@@ -82,16 +85,23 @@ export function finalizarEjercicio() {
     const instruccion = document.getElementById("guiado-instruccion");
     
     if (principal) principal.innerText = "¡Excelente!";
-    if (instruccion) instruccion.innerText = "Podés volver cuando quieras.";
+    if (instruccion) instruccion.innerText = "Terminaste. Bien hecho.";
 
-    // Ocultar video
     const video = document.getElementById("numa-video-pose");
     if (video) video.style.display = "none";
 
-    // Cerrar automáticamente después de 4 segundos
     setTimeout(() => {
+        const nombreEjercicio = datosEjercicioActual?.nombre || "el ejercicio";
         detenerGuiado();
-    }, 4000);
+
+        mostrarFeedback(nombreEjercicio, (valor, textoOpcion) => {
+            if (_onFeedbackRespuesta) {
+                const respuestaNuma = getRespuestaNuma(valor);
+                _onFeedbackRespuesta(textoOpcion, respuestaNuma, valor);
+            }
+        });
+
+    }, 2500);
 }
 
 // ============================================
@@ -116,32 +126,23 @@ async function mostrarPaso() {
     principal.innerText = paso.pose || "Paso " + (pasoIndex + 1);
     instruccion.innerText = paso.guia || paso;
 
-    // Manejo de video
     if (paso.animacion) {
         videoElement.style.display = "block";
         videoElement.pause();
         sourceElement.src = paso.animacion;
-
-        if (paso.animacion.toLowerCase().endsWith('.mov')) {
-            sourceElement.type = 'video/quicktime';
-        } else {
-            sourceElement.type = 'video/mp4';
-        }
-
+        sourceElement.type = paso.animacion.toLowerCase().endsWith('.mov') 
+            ? 'video/quicktime' 
+            : 'video/mp4';
         videoElement.load();
         videoElement.oncanplay = async () => {
-            try { 
-                await videoElement.play(); 
-            } catch (e) { 
-                console.log("Play diferido"); 
-            }
+            try { await videoElement.play(); } 
+            catch (e) { console.log("Play diferido"); }
             videoElement.oncanplay = null;
         };
     } else {
         videoElement.style.display = "none";
     }
 
-    // Barra de progreso
     if (progressBar) {
         progressBar.style.transition = "none";
         progressBar.style.width = "0%";
@@ -156,7 +157,6 @@ async function mostrarPaso() {
 }
 
 function runTimerSimple(duracion) {
-    // Implementación simple para meditaciones sin pasos
     const timerDisplay = document.getElementById("guiado-timer");
     timerDisplay.classList.remove("hidden");
     
@@ -171,7 +171,6 @@ function runTimerSimple(duracion) {
             finalizarEjercicio();
             return;
         }
-        
         tiempoRestante--;
     }
     

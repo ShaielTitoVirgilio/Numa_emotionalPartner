@@ -1,14 +1,25 @@
 // modules/motorRespiracion.js
 
+import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+
 // ============================================
 // ESTADO INTERNO
 // ============================================
 
 let intervalRespiracion = null;
+let _onFeedbackRespuesta = null; // callback externo (desde chat.js)
 
 // ============================================
 // FUNCIONES PÚBLICAS
 // ============================================
+
+/**
+ * Configura el callback para cuando el usuario responde el feedback.
+ * Debe ser llamado desde chat.js antes de runRespiracion.
+ */
+export function setFeedbackCallback(fn) {
+  _onFeedbackRespuesta = fn;
+}
 
 /**
  * Ejecuta el motor de respiración guiada
@@ -76,12 +87,12 @@ export function runRespiracion(data) {
 
     // Finalizar después de 1 minuto
     setTimeout(() => {
-        finalizarRespiracion();
+        finalizarRespiracion(data.nombre);
     }, 60000);
 }
 
 /**
- * Detiene el ejercicio de respiración
+ * Detiene el ejercicio de respiración (sin mostrar feedback — botón ✕)
  */
 export function detenerRespiracion() {
     document.getElementById("overlay-respiracion").classList.add("hidden");
@@ -93,7 +104,7 @@ export function detenerRespiracion() {
 // FUNCIONES PRIVADAS
 // ============================================
 
-function finalizarRespiracion() {
+function finalizarRespiracion(nombreEjercicio) {
     clearInterval(intervalRespiracion);
     intervalRespiracion = null;
 
@@ -102,12 +113,21 @@ function finalizarRespiracion() {
     const circulo = document.getElementById("resp-circle");
     
     if (titulo) titulo.innerText = "¡Excelente!";
-    if (instruccion) instruccion.innerText = "Podés volver cuando quieras.";
+    if (instruccion) instruccion.innerText = "Terminaste. Bien hecho.";
     if (circulo) circulo.style.display = "none";
 
+    // Cerrar overlay y mostrar feedback después de 2.5 seg
     setTimeout(() => {
         detenerRespiracion();
-        // Restaurar visibilidad del círculo
         if (circulo) circulo.style.display = "block";
-    }, 4000);
+
+        // Mostrar panel de feedback post-ejercicio
+        mostrarFeedback(nombreEjercicio || "la respiración", (valor, textoOpcion) => {
+            if (_onFeedbackRespuesta) {
+                const respuestaNuma = getRespuestaNuma(valor);
+                _onFeedbackRespuesta(textoOpcion, respuestaNuma, valor);
+            }
+        });
+
+    }, 2500);
 }
