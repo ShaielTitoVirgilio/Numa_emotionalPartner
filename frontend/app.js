@@ -1,37 +1,20 @@
-// app.js - Archivo principal (orquestador)
-
+// app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje, recibirFeedbackEjercicio } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje } from './modules/chat.js';
 import { 
-  irAEjercicios, 
-  cerrarMenuEjercicios,
-  abrirSubmenu,
-  volverAMenuPrincipal,
-  volverAlChat 
+    irAEjercicios, 
+    cerrarMenuEjercicios,
+    abrirSubmenu,
+    volverAMenuPrincipal,
+    volverAlChat 
 } from './modules/menuEjercicios.js';
-import { detenerRespiracion, setFeedbackCallback as setRespiracionFeedback } from './modules/motorRespiracion.js';
-import { detenerGuiado, setFeedbackCallback as setGuiadoFeedback } from './modules/motorGuiado.js';
-import { 
-  showReading, 
-  nextReading, 
-  closeReading 
-} from './modules/lectura.js';
+import { detenerRespiracion } from './modules/motorRespiracion.js';
+import { detenerGuiado } from './modules/motorGuiado.js';
+import { showReading, nextReading, closeReading } from './modules/lectura.js';
+import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
 
 // ============================================
-// CONECTAR FEEDBACK DE EJERCICIOS → CHAT
-// ============================================
-
-// Callback compartido: cuando el usuario responde el feedback,
-// chat.js recibe la respuesta del usuario + la respuesta de Numa
-const handleFeedback = (textoOpcion, respuestaNuma, valor) => {
-  recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor);
-};
-
-setRespiracionFeedback(handleFeedback);
-setGuiadoFeedback(handleFeedback);
-
-// ============================================
-// EXPONER FUNCIONES AL WINDOW (para HTML inline)
+// EXPONER FUNCIONES AL WINDOW
 // ============================================
 
 window.enviarMensaje = enviarMensaje;
@@ -49,7 +32,17 @@ window.closeReading = closeReading;
 // INICIALIZACIÓN
 // ============================================
 
-console.log("✅ Numa cargado correctamente");
-console.log(`📚 Catálogo: ${Object.keys(CATALOGO_EJERCICIOS).length} categorías`);
+function init() {
+    // Verificar si ya hay sesión guardada
+    const savedUser = localStorage.getItem('numa_user');
 
-agregarMensaje("Hola, soy Numa 🐼 Estoy acá si querés hablar, desahogarte, o simplemente no estar solo. ¿Cómo estás hoy?", "oso");
+    if (savedUser) {
+        // Ya tiene sesión → ir directo al chat
+        agregarMensaje("Bienvenido de nuevo 🐼 ¿Cómo estás hoy?", "oso");
+    } else {
+        // No tiene sesión → mostrar login
+        showAuthScreen();
+    }
+}
+
+init();
