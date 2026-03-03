@@ -48,6 +48,15 @@ class LoginRequest(BaseModel):
 
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
+class OnboardingAnswer(BaseModel):
+    pregunta_numero: int
+    pregunta: str
+    respuesta: str
+
+class OnboardingRequest(BaseModel):
+    user_id: str
+    answers: List[OnboardingAnswer]
+
 @app.get("/")
 def serve_frontend():
     return FileResponse(os.path.join("frontend", "index.html"))
@@ -75,7 +84,53 @@ def profile_endpoint(user_id: str):
         return profile
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
+    
 
+
+@app.post("/onboarding")
+def onboarding_endpoint(request: OnboardingRequest):
+    try:
+        from app.supabase_client import supabase
+
+        # 1️⃣ Verificar si existe el profile
+        existing_profile = supabase.table("users_profiles") \
+            .select("id") \
+            .eq("id", request.user_id) \
+            .execute()
+
+        if not existing_profile.data:
+            # Crear profile si no existe
+            supabase.table("users_profiles").insert({
+                "id": request.user_id,
+                "onboarding_completo": False,
+                "nombre": ""
+            }).execute()
+
+        # 2️⃣ Guardar respuestas
+        rows = [
+            {
+                "user_id": request.user_id,
+                "pregunta_numero": a.pregunta_numero,
+                "pregunta": a.pregunta,
+                "respuesta": a.respuesta,
+            }
+            for a in request.answers
+        ]
+
+        supabase.table("onboarding_answers").insert(rows).execute()
+
+        # 3️⃣ Marcar onboarding como completo y guardar nombre
+        nombre = request.answers[0].respuesta if request.answers else ""
+
+        supabase.table("users_profiles").update({
+            "onboarding_completo": True,
+            "nombre": nombre
+        }).eq("id", request.user_id).execute()
+
+        return {"message": "Onboarding guardado correctamente"}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest):
     result = process_chat(
