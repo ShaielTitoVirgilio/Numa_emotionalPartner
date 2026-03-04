@@ -61,14 +61,14 @@ function _crearAuthScreen() {
             <!-- LOGIN -->
             <div id="form-login" class="auth-form">
                 <input 
-                    type="email" 
-                    id="login-email" 
+                    type="email"
+                    id="login-email"
                     placeholder="Tu email"
                     class="auth-input"
                 />
                 <input 
-                    type="password" 
-                    id="login-password" 
+                    type="password"
+                    id="login-password"
                     placeholder="Contraseña"
                     class="auth-input"
                 />
@@ -81,20 +81,20 @@ function _crearAuthScreen() {
             <!-- REGISTRO -->
             <div id="form-register" class="auth-form hidden">
                 <input 
-                    type="text" 
-                    id="register-nombre" 
+                    type="text"
+                    id="register-nombre"
                     placeholder="¿Cómo te llamás?"
                     class="auth-input"
                 />
                 <input 
-                    type="email" 
-                    id="register-email" 
+                    type="email"
+                    id="register-email"
                     placeholder="Tu email"
                     class="auth-input"
                 />
                 <input 
-                    type="password" 
-                    id="register-password" 
+                    type="password"
+                    id="register-password"
                     placeholder="Contraseña (mínimo 6 caracteres)"
                     class="auth-input"
                 />
@@ -172,7 +172,7 @@ async function _submitLogin() {
 }
 
 // ============================================
-// SUBMIT REGISTRO
+// SUBMIT REGISTRO — con onboarding para usuarios nuevos
 // ============================================
 
 async function _submitRegister() {
@@ -215,7 +215,12 @@ async function _submitRegister() {
         currentUser = data;
         localStorage.setItem('numa_user', JSON.stringify(data));
 
-        hideAuthScreen();
+        // ✅ ÚNICO CAMBIO: ocultar auth y mostrar onboarding (en vez de ir directo al chat)
+        const authScreen = document.getElementById('auth-screen');
+        if (authScreen) authScreen.classList.add('hidden');
+
+        const { showOnboarding } = await import('./onboarding.js');
+        showOnboarding(data.user_id);
 
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
@@ -238,11 +243,11 @@ function _mostrarError(el, mensaje) {
 function _logout() {
     localStorage.removeItem('numa_user');
     currentUser = null;
-    
+
     // Limpiar el chat
     const chat = document.getElementById('chat');
     if (chat) chat.innerHTML = '';
-    
+
     // Mostrar pantalla de login
     showAuthScreen();
 }

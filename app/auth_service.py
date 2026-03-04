@@ -16,6 +16,7 @@ def register_user(email: str, password: str, nombre: str):
     supabase.table("users_profiles").insert({
         "id": user.id,
         "nombre": nombre,
+        "onboarding_completo": False,
     }).execute()
 
     return user
@@ -41,10 +42,14 @@ def login_user(email: str, password: str):
 
 
 def get_user_profile(user_id: str):
-    response = supabase.table("users_profiles")\
-        .select("*")\
-        .eq("id", user_id)\
-        .single()\
+    response = supabase.table("users_profiles") \
+        .select("*") \
+        .eq("id", user_id) \
         .execute()
 
-    return response.data
+    # Si no existe el perfil, devolver onboarding_completo False
+    # para que la app lo mande al onboarding en vez de romper
+    if not response.data:
+        return {"onboarding_completo": False}
+
+    return response.data[0]

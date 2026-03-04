@@ -1,8 +1,11 @@
-from fastapi import FastAPI, HTTPException
+# app/main.py
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Literal, Optional
-from app.ai import process_chat
+from typing import List, Literal, Optional, Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile
+from app.llm_client import LLMClient
+from app.numa_prompt import construir_prompt
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
@@ -12,8 +15,38 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+llm = LLMClient()
+
 # ==========================
-# MODELOS CHAT
+# DETECCIÓN DE RIESGO
+# (antes estaba en chat_service.py)
+# ==========================
+
+HIGH_RISK_PHRASES = [
+    "no quiero seguir", "no vale la pena", "me quiero morir",
+    "no aguanto más", "quiero desaparecer", "ya no puedo más",
+    "no tiene sentido seguir", "quiero terminar con todo",
+    "no quiero estar acá", "mejor si no existiera",
+]
+
+LOW_RISK_PHRASES = [
+    "me siento muy mal", "estoy destruido",
+    "no sé cuánto más aguanto", "todo está mal", "estoy al límite",
+]
+
+def _detectar_riesgo(ultimo_mensaje: str) -> str:
+    msg = ultimo_mensaje.lower()
+    for phrase in HIGH_RISK_PHRASES:
+        if phrase in msg:
+            return "high"
+    for phrase in LOW_RISK_PHRASES:
+        if phrase in msg:
+            return "low"
+    return "none"
+
+# ==========================
+# MODELOS
 # ==========================
 
 class Message(BaseModel):
@@ -22,16 +55,15 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation: List[Message]
+    user_id: Optional[str] = None
+    perfil: Optional[Dict[str, Any]] = None
 
 class ChatResponse(BaseModel):
     message: str
     mood: str
     suggested_action: Optional[str] = None
     risk_level: Optional[str] = None
-
-# ==========================
-# MODELOS AUTH
-# ==========================
+    nueva_memoria: Optional[str] = None
 
 class RegisterRequest(BaseModel):
     email: str
@@ -42,12 +74,6 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
-# ==========================
-# ROUTES
-# ==========================
-
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
-
 class OnboardingAnswer(BaseModel):
     pregunta_numero: int
     pregunta: str
@@ -57,9 +83,19 @@ class OnboardingRequest(BaseModel):
     user_id: str
     answers: List[OnboardingAnswer]
 
+# ==========================
+# ROUTES ESTÁTICAS
+# ==========================
+
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
+
 @app.get("/")
 def serve_frontend():
     return FileResponse(os.path.join("frontend", "index.html"))
+
+# ==========================
+# AUTH
+# ==========================
 
 @app.post("/register")
 def register_endpoint(request: RegisterRequest):
@@ -84,29 +120,26 @@ def profile_endpoint(user_id: str):
         return profile
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
 
+# ==========================
+# ONBOARDING
+# ==========================
 
 @app.post("/onboarding")
 def onboarding_endpoint(request: OnboardingRequest):
     try:
         from app.supabase_client import supabase
 
-        # 1️⃣ Verificar si existe el profile
-        existing_profile = supabase.table("users_profiles") \
-            .select("id") \
-            .eq("id", request.user_id) \
-            .execute()
+        existing = supabase.table("users_profiles") \
+            .select("id").eq("id", request.user_id).execute()
 
-        if not existing_profile.data:
-            # Crear profile si no existe
+        if not existing.data:
             supabase.table("users_profiles").insert({
                 "id": request.user_id,
                 "onboarding_completo": False,
                 "nombre": ""
             }).execute()
 
-        # 2️⃣ Guardar respuestas
         rows = [
             {
                 "user_id": request.user_id,
@@ -116,24 +149,116 @@ def onboarding_endpoint(request: OnboardingRequest):
             }
             for a in request.answers
         ]
-
         supabase.table("onboarding_answers").insert(rows).execute()
 
-        # 3️⃣ Marcar onboarding como completo y guardar nombre
-        nombre = request.answers[0].respuesta if request.answers else ""
+        resp = {a.pregunta_numero: a.respuesta for a in request.answers}
 
-        supabase.table("users_profiles").update({
+        perfil_update = {
             "onboarding_completo": True,
-            "nombre": nombre
-        }).eq("id", request.user_id).execute()
+            "nombre":              resp.get(1, ""),
+            "edad":                resp.get(2),
+            "pronombres":          resp.get(3),
+            "tono_preferido":      resp.get(5),
+            "como_reacciona":      resp.get(6),
+            "que_lo_calma":        resp.get(7),
+            "prefiere_respuestas": resp.get(8),
+            "momento_vida":        resp.get(9),
+            "preferencias_extra":  resp.get(10),
+        }
+        perfil_update = {k: v for k, v in perfil_update.items() if v is not None}
+
+        supabase.table("users_profiles").upsert({
+            "id": request.user_id,
+            **perfil_update
+        }).execute()
 
         return {"message": "Onboarding guardado correctamente"}
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ==========================
+# BACKGROUND TASKS
+# ==========================
+
+def _guardar_en_db(user_id: str, mensaje_usuario: str, mensaje_numa: str, memoria: Optional[str]):
+    try:
+        from app.supabase_client import supabase
+
+        supabase.table("conversations").insert([
+            {"user_id": user_id, "role": "user",     "content": mensaje_usuario},
+            {"user_id": user_id, "role": "assistant", "content": mensaje_numa},
+        ]).execute()
+
+        if memoria:
+            supabase.table("memories").insert({
+                "user_id":   user_id,
+                "content":   memoria,
+                "category":  "chat",
+                "source":    "chat",
+                "is_active": True,
+            }).execute()
+
+    except Exception as e:
+        print(f"⚠️ Error en background task: {e}")
+
+# ==========================
+# CHAT
+# ==========================
+
 @app.post("/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest):
-    result = process_chat(
-        conversation=[m.dict() for m in request.conversation]
-    )
-    return result
+def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+    try:
+        perfil = request.perfil
+
+        # Fallback: si no vino perfil desde el frontend, buscarlo en DB
+        if perfil is None and request.user_id:
+            try:
+                from app.supabase_client import supabase
+                perfil_res = supabase.table("users_profiles") \
+                    .select("*").eq("id", request.user_id).single().execute()
+                perfil = perfil_res.data
+            except Exception:
+                perfil = None
+
+        # Extraer memorias de sesión acumuladas en el frontend
+        memorias_sesion = []
+        if perfil and "_memorias_sesion" in perfil:
+            memorias_sesion = perfil.pop("_memorias_sesion", [])
+
+        # Construir prompt dinámico
+        system_prompt = construir_prompt(perfil=perfil, memorias=memorias_sesion)
+
+        # ✅ Usar el cliente ya inicializado — no crea conexión nueva
+        result = llm.generate_response(
+            conversation=[m.dict() for m in request.conversation],
+            system_prompt=system_prompt,
+        )
+
+        memoria_detectada = result.get("memory")
+
+        # Detectar riesgo en el último mensaje del usuario
+        risk_level = "none"
+        if request.conversation:
+            risk_level = _detectar_riesgo(request.conversation[-1].content)
+
+        # Guardar en DB en background (no bloquea la respuesta)
+        if request.user_id and request.conversation:
+            background_tasks.add_task(
+                _guardar_en_db,
+                request.user_id,
+                request.conversation[-1].content,
+                result["message"],
+                memoria_detectada,
+            )
+
+        return {
+            "message":          result["message"],
+            "mood":             result["mood"],
+            "suggested_action": result.get("suggested_action"),
+            "risk_level":       risk_level,
+            "nueva_memoria":    memoria_detectada,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

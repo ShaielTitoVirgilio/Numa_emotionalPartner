@@ -1,7 +1,7 @@
 // modules/chat.js
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
-
+import { TIEMPO_ENFRIAMIENTO } from './utils.js';
 // ============================================
 // ESTADO Y CONFIGURACIÓN
 // ============================================
@@ -9,13 +9,15 @@ import { iniciarEjercicio } from './utils.js';
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 
-// 🧠 Historial de conversación
+// 🧠 Historial de conversación — limitado a últimos 20 mensajes
 let historialConversacion = [];
+const MAX_HISTORIAL = 20;
 
-// ⏱️ Control de "Enfriamiento" (Throttling)
+// 👤 Perfil cacheado — se carga una vez al inicio, se actualiza si hay memoria nueva
+let perfilCacheado = null;
+
+// ⏱️ Control de Enfriamiento
 let ultimoEjercicioSugeridoTime = 0;
-const TIEMPO_ENFRIAMIENTO = 10000; // 10 segundos (para desarrollo)
-// const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos 
 
 
 // 🐻 Estados del oso según mood
@@ -30,7 +32,7 @@ const MOOD_TO_BEAR_STATE = {
   neutral:     'calm',
 };
 
-// 💬 Frases de introducción para la sugerencia de ejercicio
+// 💬 Frases de introducción para sugerencia de ejercicio
 const FRASES_POR_MOOD = {
   stressed:    "Che, probá esto. Ayuda más de lo que parece:",
   overwhelmed: "Para un segundo. Esto puede acomodarte:",
@@ -52,12 +54,29 @@ const MOOD_LABELS = {
 };
 
 // ============================================
+// INICIALIZACIÓN — cargar perfil al arrancar
+// ============================================
+
+export async function inicializarChat() {
+  const numaUser = localStorage.getItem('numa_user');
+  if (!numaUser) return;
+
+  const user = JSON.parse(numaUser);
+
+  try {
+    const res = await fetch(`/profile/${user.user_id}`);
+    if (res.ok) {
+      perfilCacheado = await res.json();
+    }
+  } catch (e) {
+    console.warn('No se pudo cargar el perfil:', e);
+  }
+}
+
+// ============================================
 // FUNCIONES PÚBLICAS
 // ============================================
 
-/**
- * Agrega un mensaje al chat visualmente
- */
 export function agregarMensaje(texto, tipo, mood = null) {
   const bubble = document.createElement("div");
   bubble.className = `bubble ${tipo}`;
@@ -78,9 +97,6 @@ export function agregarMensaje(texto, tipo, mood = null) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-/**
- * Envía mensaje al backend y procesa la respuesta inteligente
- */
 export async function enviarMensaje() {
   const texto = input.value.trim();
   if (!texto) return;
@@ -90,29 +106,17 @@ export async function enviarMensaje() {
   _prepararEnvio();
 
   try {
-      const data = await _llamarBackend(texto);
-      _procesarRespuesta(data, texto);
+    const data = await _llamarBackend(texto);
+    _procesarRespuesta(data, texto);
   } catch (error) {
-      _manejarError(error);
+    _manejarError(error);
   }
 }
 
-/**
- * Maneja la respuesta del usuario al feedback post-ejercicio.
- * Muestra la opción elegida como burbuja de usuario y la respuesta de Numa.
- * También actualiza el historial de conversación.
- * 
- * @param {string} textoOpcion  - Texto que eligió el usuario ("Me sirvió mucho", etc.)
- * @param {string} respuestaNuma - Respuesta generada localmente por Numa
- * @param {string} valor        - Valor interno ("positive_high", "neutral", etc.)
- */
 export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
-  // Mostrar lo que eligió el usuario como burbuja user
   agregarMensaje(textoOpcion, "user");
 
-  // Pequeño delay para que sienta natural
   setTimeout(() => {
-    // Determinar mood aproximado para colorear la burbuja de Numa
     const moodParaFeedback = _valorAMood(valor);
     agregarMensaje(respuestaNuma, "oso", moodParaFeedback);
 
@@ -120,22 +124,16 @@ export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
       window.setBearState(MOOD_TO_BEAR_STATE[moodParaFeedback] || 'calm');
     }
 
-    // Actualizar historial para que Numa tenga contexto en próximos mensajes
-    historialConversacion.push({
-      role: "user",
-      content: `[Post-ejercicio] ${textoOpcion}`,
-    });
-    historialConversacion.push({
-      role: "assistant",
-      content: respuestaNuma,
-    });
+    historialConversacion.push({ role: "user", content: `[Post-ejercicio] ${textoOpcion}` });
+    historialConversacion.push({ role: "assistant", content: respuestaNuma });
+    _trimHistorial();
 
     chat.scrollTop = chat.scrollHeight;
   }, 400);
 }
 
 // ============================================
-// FUNCIONES PRIVADAS - ENVÍO
+// FUNCIONES PRIVADAS — ENVÍO
 // ============================================
 
 function _prepararEnvio() {
@@ -144,27 +142,38 @@ function _prepararEnvio() {
 }
 
 async function _llamarBackend(texto) {
+  // Limitar historial antes de enviar
+  const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
+
   const conversationToSend = [
-      ...historialConversacion,
-      { role: "user", content: texto }
+    ...historialLimitado,
+    { role: "user", content: texto }
   ];
 
+  const numaUser = localStorage.getItem('numa_user');
+  const userId = numaUser ? JSON.parse(numaUser).user_id : null;
+
   const res = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation: conversationToSend })
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversation: conversationToSend,
+      user_id: userId,
+      perfil: perfilCacheado,   // ← mandamos el perfil cacheado, backend no lo busca en DB
+    })
   });
 
   if (!res.ok) {
-      const errorText = await res.text();
-      console.error("❌ ERROR DEL SERVIDOR:", errorText);
-      throw new Error("Error en respuesta HTTP");
+    const errorText = await res.text();
+    console.error("❌ ERROR DEL SERVIDOR:", errorText);
+    throw new Error("Error en respuesta HTTP");
   }
 
   return await res.json();
 }
 
 function _procesarRespuesta(data, textoUsuario) {
+  console.log("📨 Respuesta completa del backend:", JSON.stringify(data, null, 2));
   const mood = data.mood || 'neutral';
   const textoLimpio = _limpiarMensaje(data.message);
 
@@ -176,6 +185,15 @@ function _procesarRespuesta(data, textoUsuario) {
 
   _actualizarHistorial(textoUsuario, textoLimpio);
   _manejarSugerencia(data, mood);
+
+  // Si el backend detectó una memoria nueva, actualizarla en el perfil cacheado
+  // para que los próximos mensajes ya la tengan en cuenta
+  if (data.nueva_memoria && perfilCacheado) {
+    if (!perfilCacheado._memorias_sesion) {
+      perfilCacheado._memorias_sesion = [];
+    }
+    perfilCacheado._memorias_sesion.push(data.nueva_memoria);
+  }
 }
 
 function _limpiarMensaje(mensaje) {
@@ -185,15 +203,39 @@ function _limpiarMensaje(mensaje) {
 function _actualizarHistorial(textoUsuario, textoOso) {
   historialConversacion.push({ role: "user", content: textoUsuario });
   historialConversacion.push({ role: "assistant", content: textoOso });
+  _trimHistorial();
+}
+
+// Mantener el historial dentro del límite
+function _trimHistorial() {
+  if (historialConversacion.length > MAX_HISTORIAL) {
+    historialConversacion = historialConversacion.slice(-MAX_HISTORIAL);
+  }
 }
 
 function _manejarSugerencia(data, mood) {
+  console.log("🔍 _manejarSugerencia llamada con:", { data, mood });
   const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
   const ejercicioId = (data.suggested_action && data.suggested_action !== 'none')
       ? data.suggested_action
       : data.message.match(regexEjercicio)?.[1] ?? null;
+    console.log("🎯 ejercicioId detectado:", ejercicioId);
+    console.log("📦 suggested_action del backend:", data.suggested_action);
+    console.log("📝 mensaje crudo del backend:", data.message);
+  if (!ejercicioId){
+    console.log("⛔ Sin ejercicio — se corta acá");
+    return;
+  }
 
-  if (!ejercicioId) return;
+  // Si el ejercicio requiere espacio físico y el usuario parece estar ocupado/en trabajo
+  const ejerciciosFisicos = ['yoga_cuello', 'yoga_ansiedad', 'meditacion_bodyscan', 'meditacion_mindfulness'];
+  const ultimoMensajeUsuario = historialConversacion.filter(m => m.role === 'user').slice(-1)[0]?.content?.toLowerCase() || '';
+  const contextoCupado = /trabajo|ocupado|cansad|sin tiempo|jefe|reunión|oficina/i.test(ultimoMensajeUsuario);
+
+  if (contextoCupado && ejerciciosFisicos.includes(ejercicioId)) {
+      console.log("Ejercicio físico suprimido por contexto de trabajo/ocupación.");
+      return;
+  }
 
   const ahora = Date.now();
   if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
@@ -212,12 +254,9 @@ function _manejarError(error) {
 }
 
 // ============================================
-// FUNCIONES PRIVADAS - UI
+// FUNCIONES PRIVADAS — UI
 // ============================================
 
-/**
- * Convierte valor de feedback a mood para colorear la burbuja de Numa
- */
 function _valorAMood(valor) {
   const map = {
     positive_high: 'happy',
@@ -228,13 +267,9 @@ function _valorAMood(valor) {
   return map[valor] || 'neutral';
 }
 
-/**
- * Actualiza el indicador de mood debajo del oso
- */
 function actualizarMoodIndicator(mood) {
   const indicator = document.getElementById('mood-indicator');
   if (!indicator) return;
-
   const label = MOOD_LABELS[mood] || '';
   indicator.textContent = label;
   indicator.style.opacity = label ? '1' : '0';
@@ -254,71 +289,55 @@ function ocultarTyping() {
   if (indicator) indicator.remove();
 }
 
-/**
- * Muestra un botón de sugerencia de ejercicio en el chat
- */
 function mostrarBotonSugerencia(id, mood = 'neutral') {
-    let ejercicioEncontrado = null;
-    let tipoEncontrado = "";
+  let ejercicioEncontrado = null;
+  let tipoEncontrado = "";
 
-    for (const [tipo, lista] of Object.entries(CATALOGO_EJERCICIOS)) {
-        const found = lista.find(e => e.id === id);
-        if (found) {
-            ejercicioEncontrado = found;
-            tipoEncontrado = tipo;
-            break;
-        }
+  for (const [tipo, lista] of Object.entries(CATALOGO_EJERCICIOS)) {
+    const found = lista.find(e => e.id === id);
+    if (found) {
+      ejercicioEncontrado = found;
+      tipoEncontrado = tipo;
+      break;
     }
+  }
 
-    if (!ejercicioEncontrado) return;
+  if (!ejercicioEncontrado) return;
 
-    const frase = FRASES_POR_MOOD[mood] || FRASES_POR_MOOD.default;
+  const frase = FRASES_POR_MOOD[mood] || FRASES_POR_MOOD.default;
 
-    const bubble = document.createElement("div");
-    bubble.className = "bubble oso";
-    bubble.classList.add(`mood-${mood}`); 
-    
-    const div = document.createElement("div");
-    div.innerHTML = `
-        <p style="font-size: 0.9em; margin-bottom: 8px;">${frase}</p>
-        <button class="exercise-suggestion-btn">
-            ✨ ${ejercicioEncontrado.nombre}
-        </button>
-        <p style="font-size: 0.75em; opacity: 0.8; margin-top: 6px; font-style: italic;">
-           "${ejercicioEncontrado.cientifico || 'Técnica recomendada'}"
-        </p>
-    `;
-    
-    const btn = div.querySelector('button');
-    btn.style.cssText = `
-        background: #a6c7b8; 
-        border: none; 
-        padding: 12px; 
-        width: 100%; 
-        border-radius: 12px; 
-        cursor: pointer; 
-        color: #2f4f45; 
-        font-weight: bold;
-        transition: transform 0.2s;
-    `;
-    
-    btn.onmouseover = () => btn.style.transform = "scale(1.02)";
-    btn.onmouseout = () => btn.style.transform = "scale(1)";
-    btn.onclick = () => iniciarEjercicio(tipoEncontrado, ejercicioEncontrado);
+  const bubble = document.createElement("div");
+  bubble.className = `bubble oso mood-${mood}`;
 
-    bubble.appendChild(div);
-    chat.appendChild(bubble);
-    chat.scrollTop = chat.scrollHeight;
+  const div = document.createElement("div");
+  div.innerHTML = `
+    <p style="font-size: 0.9em; margin-bottom: 8px;">${frase}</p>
+    <button class="exercise-suggestion-btn">
+        ✨ ${ejercicioEncontrado.nombre}
+    </button>
+    <p style="font-size: 0.75em; opacity: 0.8; margin-top: 6px; font-style: italic;">
+       "${ejercicioEncontrado.cientifico || 'Técnica recomendada'}"
+    </p>
+  `;
+
+  const btn = div.querySelector('button');
+  btn.style.cssText = `
+    background: #a6c7b8; border: none; padding: 12px; width: 100%;
+    border-radius: 12px; cursor: pointer; color: #2f4f45;
+    font-weight: bold; transition: transform 0.2s;
+  `;
+  btn.onmouseover = () => btn.style.transform = "scale(1.02)";
+  btn.onmouseout = () => btn.style.transform = "scale(1)";
+  btn.onclick = () => iniciarEjercicio(tipoEncontrado, ejercicioEncontrado);
+
+  bubble.appendChild(div);
+  chat.appendChild(bubble);
+  chat.scrollTop = chat.scrollHeight;
 }
 
 // ============================================
 // EXPORTS
 // ============================================
 
-export function getHistorial() {
-    return historialConversacion;
-}
-
-export function resetHistorial() {
-    historialConversacion = [];
-}
+export function getHistorial() { return historialConversacion; }
+export function resetHistorial() { historialConversacion = []; }

@@ -63,10 +63,10 @@ const PREGUNTAS = [
         opciones: [
             "Hablar con alguien",
             "Escuchar música",
+            "Uso tiktok u otra red social",
             "Hacer ejercicio",
             "Respirar / meditar",
             "Escribir",
-            "Distraerme",
             "No estoy seguro/a"
         ]
     },
@@ -394,6 +394,9 @@ async function _enviarOnboarding() {
     }
 
     hideOnboarding();
+
+    const app = document.querySelector('.app');
+    if (app) app.style.display = 'flex';    
 
     const nombre = respuestas[0] || 'vos';
     if (window.agregarMensaje) {

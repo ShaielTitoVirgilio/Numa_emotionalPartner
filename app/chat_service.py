@@ -1,3 +1,4 @@
+'''
 from typing import List, Literal, TypedDict
 from app.llm_client import LLMClient, ChatMessage, Mood
 
@@ -96,3 +97,4 @@ class ChatService:
                 return "low"
 
         return "none"
+    '''

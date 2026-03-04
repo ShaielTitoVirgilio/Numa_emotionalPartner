@@ -6,7 +6,8 @@ import { runGuiado } from './motorGuiado.js';
 // CONSTANTES
 // ============================================
 
-export const TIEMPO_ENFRIAMIENTO = 300000; // 5 minutos
+export const TIEMPO_ENFRIAMIENTO = 10000; // 10 segundos
+// export const TIEMPO_ENFRIAMIENTO = 300000;  5 minutos
 
 // ============================================
 // FUNCIONES PÚBLICAS

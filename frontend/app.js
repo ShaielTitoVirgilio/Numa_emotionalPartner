@@ -1,6 +1,6 @@
 // app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje, inicializarChat } from './modules/chat.js';
 import { 
     irAEjercicios, 
     cerrarMenuEjercicios,
@@ -45,17 +45,16 @@ async function init() {
 
     const user = JSON.parse(savedUser);
 
-    // Verificar si completó el onboarding
     try {
         const res = await fetch(`/profile/${user.user_id}`);
         const profile = await res.json();
 
         if (!profile.onboarding_completo) {
-            // Primera vez → mostrar onboarding
             showOnboarding(user.user_id);
         } else {
-            // Ya completó → ir al chat
-            agregarMensaje(`Bienvenido de nuevo 🐼 ¿Cómo estás hoy?`, "oso");
+            // ✅ Cargar perfil en caché antes de mostrar el chat
+            await inicializarChat();
+            agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
         }
     } catch (e) {
         agregarMensaje("Hola 🐼 ¿Cómo estás hoy?", "oso");
