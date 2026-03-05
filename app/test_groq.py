@@ -15,9 +15,9 @@ start = time.time()
 
 try:
     completion = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="llama-3.3-70b-versatile",
         temperature=0.7,
-        max_tokens=50,
+        max_tokens=400,
         messages=[
             {"role": "user", "content": "Hola"}
         ],

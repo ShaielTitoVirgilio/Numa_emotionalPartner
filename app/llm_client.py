@@ -7,7 +7,14 @@ import json
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
+# 1. Cargamos el entorno e instanciamos el cliente de OpenAI UNA SOLA VEZ a nivel de módulo.
+# Esto permite que la librería mantenga una "Keep-Alive" connection con los servidores de Groq.
 load_dotenv()
+
+_openai_shared_client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1",
+)
 
 Mood = Literal[
     "neutral", "calm", "happy", "excited",
@@ -27,11 +34,8 @@ class LLMRawResponse(TypedDict):
 
 class LLMClient:
     def __init__(self):
-        load_dotenv()
-        self.client = OpenAI(
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url="https://api.groq.com/openai/v1",
-        )
+        # 2. Referenciamos el cliente compartido en lugar de crear uno nuevo.
+        self.client = _openai_shared_client
 
     def generate_response(
         self,
@@ -39,6 +43,7 @@ class LLMClient:
         system_prompt: str,       # ← recibe el prompt dinámico armado por construir_prompt()
     ) -> LLMRawResponse:
 
+        # La llamada ahora reutiliza el pool de conexiones TCP/TLS
         completion = self.client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             temperature=0.7,
@@ -53,6 +58,7 @@ class LLMClient:
         if not raw:
             raise RuntimeError("Empty response from LLM")
 
+        # Intentar extraer JSON si el LLM incluye texto extra
         json_match = re.search(r'\{.*\}', raw, re.DOTALL)
         raw_json = json_match.group(0) if json_match else raw.strip()
 
@@ -66,20 +72,26 @@ class LLMClient:
                 "memory": None,
             }
 
+        # Validaciones de seguridad
         if "message" not in parsed or "mood" not in parsed:
-            raise RuntimeError(f"Malformed LLM response: {parsed}")
+            # Fallback en caso de que el JSON no tenga los campos mínimos
+            parsed = {
+                "message": str(parsed.get("message", raw.strip())),
+                "mood": parsed.get("mood", "neutral"),
+                "suggested_action": parsed.get("suggested_action"),
+                "memory": parsed.get("memory")
+            }
 
         valid_moods = {"neutral", "calm", "happy", "excited", "stressed", "overwhelmed", "sad", "anxious"}
         if parsed.get("mood") not in valid_moods:
             parsed["mood"] = "neutral"
 
-        import re as _re
-        message_clean = _re.sub(r'\[EJERCICIO:\s*\w+\]', '', parsed["message"]).strip()
-
+        # Limpiar tags internos de la respuesta visual
+        message_clean = re.sub(r'\[EJERCICIO:\s*\w+\]', '', parsed["message"]).strip()
 
         return {
             "message": message_clean,   
             "mood": parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
-            "memory": parsed.get("memory"),   # None si no hay nada para recordar
+            "memory": parsed.get("memory"),
         }

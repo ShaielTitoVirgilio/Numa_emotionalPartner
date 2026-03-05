@@ -9,6 +9,8 @@ from app.numa_prompt import construir_prompt
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
+from fastapi.responses import StreamingResponse
+import json
 
 app = FastAPI(
     title="Numa Emotional Partner API",
