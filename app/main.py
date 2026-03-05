@@ -7,22 +7,20 @@ from app.auth_service import register_user, login_user, get_user_profile
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import os
-from fastapi.responses import StreamingResponse
 import json
+import re
 
 app = FastAPI(
     title="Numa Emotional Partner API",
     version="1.0.0"
 )
 
-
 llm = LLMClient()
 
 # ==========================
 # DETECCIÓN DE RIESGO
-# (antes estaba en chat_service.py)
 # ==========================
 
 HIGH_RISK_PHRASES = [
@@ -59,13 +57,6 @@ class ChatRequest(BaseModel):
     conversation: List[Message]
     user_id: Optional[str] = None
     perfil: Optional[Dict[str, Any]] = None
-
-class ChatResponse(BaseModel):
-    message: str
-    mood: str
-    suggested_action: Optional[str] = None
-    risk_level: Optional[str] = None
-    nueva_memoria: Optional[str] = None
 
 class RegisterRequest(BaseModel):
     email: str
@@ -188,8 +179,8 @@ def _guardar_en_db(user_id: str, mensaje_usuario: str, mensaje_numa: str, memori
         from app.supabase_client import supabase
 
         supabase.table("conversations").insert([
-            {"user_id": user_id, "role": "user",     "content": mensaje_usuario},
-            {"user_id": user_id, "role": "assistant", "content": mensaje_numa},
+            {"user_id": user_id, "role": "user",      "content": mensaje_usuario},
+            {"user_id": user_id, "role": "assistant",  "content": mensaje_numa},
         ]).execute()
 
         if memoria:
@@ -205,15 +196,17 @@ def _guardar_en_db(user_id: str, mensaje_usuario: str, mensaje_numa: str, memori
         print(f"⚠️ Error en background task: {e}")
 
 # ==========================
-# CHAT
+# CHAT — streaming
 # ==========================
 
-@app.post("/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+DELIMITER = "---META---"
+
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
     try:
         perfil = request.perfil
 
-        # Fallback: si no vino perfil desde el frontend, buscarlo en DB
+        # Fallback: buscar perfil en DB si no vino del frontend
         if perfil is None and request.user_id:
             try:
                 from app.supabase_client import supabase
@@ -223,44 +216,149 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
             except Exception:
                 perfil = None
 
-        # Extraer memorias de sesión acumuladas en el frontend
         memorias_sesion = []
         if perfil and "_memorias_sesion" in perfil:
             memorias_sesion = perfil.pop("_memorias_sesion", [])
 
-        # Construir prompt dinámico
         system_prompt = construir_prompt(perfil=perfil, memorias=memorias_sesion)
 
-        # ✅ Usar el cliente ya inicializado — no crea conexión nueva
-        result = llm.generate_response(
-            conversation=[m.dict() for m in request.conversation],
-            system_prompt=system_prompt,
-        )
-
-        memoria_detectada = result.get("memory")
-
-        # Detectar riesgo en el último mensaje del usuario
         risk_level = "none"
         if request.conversation:
             risk_level = _detectar_riesgo(request.conversation[-1].content)
 
-        # Guardar en DB en background (no bloquea la respuesta)
-        if request.user_id and request.conversation:
-            background_tasks.add_task(
-                _guardar_en_db,
-                request.user_id,
-                request.conversation[-1].content,
-                result["message"],
-                memoria_detectada,
+        conversation_dicts = [m.dict() for m in request.conversation]
+
+        # Extender el prompt para indicarle al modelo el formato de dos partes
+        streaming_system_prompt = system_prompt + """
+
+---
+
+FORMATO DE RESPUESTA OBLIGATORIO:
+Respondé en DOS partes separadas por "---META---" en su propia línea:
+
+Parte 1: tu mensaje para el usuario (texto plano, directo, sin JSON, sin tags).
+Parte 2: JSON con metadatos.
+
+Ejemplo:
+Che, eso suena pesado. ¿Hace cuánto venís así?
+---META---
+{"mood": "sad", "suggested_action": null, "memory": null}
+
+Ejemplo con ejercicio:
+Pará un segundo. Respirá así: 4 adentro, 4 afuera. La usan militares para calmarse rápido.
+---META---
+{"mood": "stressed", "suggested_action": "respiracion_box", "memory": null}
+
+REGLAS:
+- Parte 1: solo el texto para el usuario. Sin IDs, sin JSON, sin tags.
+- Parte 2: solo el JSON. Sin texto extra.
+- "---META---" debe estar solo en su línea.
+"""
+
+        async def event_generator():
+            stream = llm.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=300,
+                stream=True,
+                messages=[
+                    {"role": "system", "content": streaming_system_prompt},
+                    *conversation_dicts,
+                ],
             )
 
-        return {
-            "message":          result["message"],
-            "mood":             result["mood"],
-            "suggested_action": result.get("suggested_action"),
-            "risk_level":       risk_level,
-            "nueva_memoria":    memoria_detectada,
-        }
+            message_text = ""
+            past_delimiter = False
+            meta_buffer = ""
+            pending = ""
+
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+
+                if past_delimiter:
+                    meta_buffer += delta
+                    continue
+
+                pending += delta
+
+                # ¿Encontramos el delimitador?
+                if DELIMITER in pending:
+                    parts = pending.split(DELIMITER, 1)
+                    clean_part = parts[0].strip()
+                    if clean_part:
+                        message_text += clean_part
+                        yield f"data: {message_text}\n\n"
+                    meta_buffer = parts[1]
+                    past_delimiter = True
+                    pending = ""
+                    continue
+
+                # ¿El pending termina con un prefijo del delimitador? Esperar más.
+                is_prefix = any(
+                    DELIMITER.startswith(pending[len(pending)-i:])
+                    for i in range(1, min(len(DELIMITER), len(pending)) + 1)
+                )
+                if is_prefix:
+                    continue
+
+                # Seguro de enviar
+                if pending:
+                    message_text += pending
+                    yield f"data: {message_text}\n\n"
+                    pending = ""
+
+            # Flush si quedó algo en pending
+            if pending and not past_delimiter:
+                message_text += pending
+                yield f"data: {message_text}\n\n"
+
+            # Parsear metadatos del JSON final
+            mood = "neutral"
+            suggested_action = None
+            nueva_memoria = None
+
+            if meta_buffer.strip():
+                try:
+                    json_match = re.search(r'\{.*\}', meta_buffer.strip(), re.DOTALL)
+                    if json_match:
+                        parsed = json.loads(json_match.group(0))
+                        mood = parsed.get("mood", "neutral")
+                        suggested_action = parsed.get("suggested_action")
+                        nueva_memoria = parsed.get("memory")
+                except Exception as e:
+                    print(f"⚠️ Error parseando meta JSON: {e}")
+
+            # Limpiar tags residuales del mensaje
+            message_text = re.sub(r'\[EJERCICIO:\s*\w+\]', '', message_text).strip()
+
+            # Emitir evento de metadatos al frontend
+            meta_payload = {
+                "mood": mood,
+                "suggested_action": suggested_action,
+                "risk_level": risk_level,
+                "nueva_memoria": nueva_memoria,
+                "full_message": message_text,
+            }
+            yield f"event: meta\ndata: {json.dumps(meta_payload)}\n\n"
+
+            # Guardar en DB sin bloquear la respuesta
+            if request.user_id and request.conversation:
+                background_tasks.add_task(
+                    _guardar_en_db,
+                    request.user_id,
+                    request.conversation[-1].content,
+                    message_text,
+                    nueva_memoria,
+                )
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            }
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

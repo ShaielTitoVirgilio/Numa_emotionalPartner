@@ -2,6 +2,7 @@
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
+
 // ============================================
 // ESTADO Y CONFIGURACIÓN
 // ============================================
@@ -9,18 +10,12 @@ import { TIEMPO_ENFRIAMIENTO } from './utils.js';
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 
-// 🧠 Historial de conversación — limitado a últimos 20 mensajes
 let historialConversacion = [];
 const MAX_HISTORIAL = 20;
 
-// 👤 Perfil cacheado — se carga una vez al inicio, se actualiza si hay memoria nueva
 let perfilCacheado = null;
-
-// ⏱️ Control de Enfriamiento
 let ultimoEjercicioSugeridoTime = 0;
 
-
-// 🐻 Estados del oso según mood
 const MOOD_TO_BEAR_STATE = {
   stressed:    'stressed',
   overwhelmed: 'stressed',
@@ -32,7 +27,6 @@ const MOOD_TO_BEAR_STATE = {
   neutral:     'calm',
 };
 
-// 💬 Frases de introducción para sugerencia de ejercicio
 const FRASES_POR_MOOD = {
   stressed:    "Che, probá esto. Ayuda más de lo que parece:",
   overwhelmed: "Para un segundo. Esto puede acomodarte:",
@@ -41,7 +35,6 @@ const FRASES_POR_MOOD = {
   default:     "Esto podría ayudarte ahora:",
 };
 
-// 🏷️ Etiquetas de mood para el indicador
 const MOOD_LABELS = {
   stressed:    '😤 un poco estresado/a',
   overwhelmed: '😮‍💨 bastante al límite',
@@ -54,7 +47,7 @@ const MOOD_LABELS = {
 };
 
 // ============================================
-// INICIALIZACIÓN — cargar perfil al arrancar
+// INICIALIZACIÓN
 // ============================================
 
 export async function inicializarChat() {
@@ -70,6 +63,136 @@ export async function inicializarChat() {
     }
   } catch (e) {
     console.warn('No se pudo cargar el perfil:', e);
+  }
+}
+
+// ============================================
+// ENVIAR MENSAJE — ahora usa streaming
+// ============================================
+
+export async function enviarMensaje() {
+  const texto = input.value.trim();
+  if (!texto) return;
+
+  agregarMensaje(texto, "user");
+  input.value = "";
+
+  // Activar estado "escuchando" del oso + mostrar typing
+  if (window.setBearState) window.setBearState('listening');
+  mostrarTyping();
+
+  try {
+    const numaUser = localStorage.getItem('numa_user');
+    const userId = numaUser ? JSON.parse(numaUser).user_id : null;
+    const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
+
+    const res = await fetch("/chat", {           // ← mismo endpoint de siempre
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation: [...historialLimitado, { role: "user", content: texto }],
+        user_id: userId,
+        perfil: perfilCacheado,
+      })
+    });
+
+    if (!res.ok) throw new Error("Error HTTP");
+
+    await _procesarStream(res, texto);
+
+  } catch (error) {
+    ocultarTyping();
+    console.error("❌ Error:", error);
+    agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
+    if (window.setBearState) window.setBearState('calm');
+  }
+}
+
+// ============================================
+// PROCESAR STREAM — lee el SSE y va mostrando
+// ============================================
+
+async function _procesarStream(res, textoUsuario) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  // Crear bubble vacía que iremos llenando en tiempo real
+  ocultarTyping();
+  const bubble = document.createElement("div");
+  bubble.className = "bubble oso mood-neutral";
+  chat.appendChild(bubble);
+
+  let sseBuffer = "";
+  let displayText = "";
+  let lastEventWasMeta = false;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    sseBuffer += decoder.decode(value, { stream: true });
+
+    // Procesar líneas completas del SSE
+    const lines = sseBuffer.split("\n");
+    sseBuffer = lines.pop(); // la última línea puede estar incompleta, la guardamos
+
+    for (const line of lines) {
+
+      // Detectar que el próximo "data:" es el evento de metadatos
+      if (line.trim() === "event: meta") {
+        lastEventWasMeta = true;
+        continue;
+      }
+
+      if (!line.startsWith("data: ")) continue;
+
+      const payload = line.slice(6); // quitar "data: "
+      if (!payload.trim()) continue;
+
+      // ── Evento meta: mood, ejercicio, memoria ──
+      if (lastEventWasMeta) {
+        lastEventWasMeta = false;
+        try {
+          const meta = JSON.parse(payload);
+          const mood = meta.mood || "neutral";
+
+          // Aplicar color de mood a la bubble
+          bubble.className = `bubble oso mood-${mood}`;
+
+          // Texto final limpio del backend (por si el stream quedó cortado)
+          if (meta.full_message) {
+            bubble.innerText = meta.full_message;
+            displayText = meta.full_message;
+          }
+
+          // Actualizar oso y mood indicator
+          if (window.setBearState) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
+          actualizarMoodIndicator(mood);
+
+          // Guardar en historial
+          _actualizarHistorial(textoUsuario, displayText);
+
+          // Mostrar botón de ejercicio si aplica
+          _manejarSugerencia(meta, mood);
+
+          // Actualizar memorias de sesión
+          if (meta.nueva_memoria && perfilCacheado) {
+            if (!perfilCacheado._memorias_sesion) perfilCacheado._memorias_sesion = [];
+            perfilCacheado._memorias_sesion.push(meta.nueva_memoria);
+          }
+
+        } catch (e) {
+          console.warn("Error parseando meta:", e);
+        }
+        continue;
+      }
+
+      // ── Texto parcial: ir mostrando mientras el modelo genera ──
+      lastEventWasMeta = false;
+      displayText = payload;
+      bubble.innerText = displayText;
+      chat.scrollTop = chat.scrollHeight;
+    }
   }
 }
 
@@ -97,22 +220,6 @@ export function agregarMensaje(texto, tipo, mood = null) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-export async function enviarMensaje() {
-  const texto = input.value.trim();
-  if (!texto) return;
-
-  agregarMensaje(texto, "user");
-  input.value = "";
-  _prepararEnvio();
-
-  try {
-    const data = await _llamarBackend(texto);
-    _procesarRespuesta(data, texto);
-  } catch (error) {
-    _manejarError(error);
-  }
-}
-
 export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
   agregarMensaje(textoOpcion, "user");
 
@@ -133,72 +240,8 @@ export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
 }
 
 // ============================================
-// FUNCIONES PRIVADAS — ENVÍO
+// FUNCIONES PRIVADAS — HISTORIAL Y SUGERENCIAS
 // ============================================
-
-function _prepararEnvio() {
-  if (window.setBearState) window.setBearState('listening');
-  mostrarTyping();
-}
-
-async function _llamarBackend(texto) {
-  // Limitar historial antes de enviar
-  const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
-
-  const conversationToSend = [
-    ...historialLimitado,
-    { role: "user", content: texto }
-  ];
-
-  const numaUser = localStorage.getItem('numa_user');
-  const userId = numaUser ? JSON.parse(numaUser).user_id : null;
-
-  const res = await fetch("/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      conversation: conversationToSend,
-      user_id: userId,
-      perfil: perfilCacheado,   // ← mandamos el perfil cacheado, backend no lo busca en DB
-    })
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error("❌ ERROR DEL SERVIDOR:", errorText);
-    throw new Error("Error en respuesta HTTP");
-  }
-
-  return await res.json();
-}
-
-function _procesarRespuesta(data, textoUsuario) {
-  console.log("📨 Respuesta completa del backend:", JSON.stringify(data, null, 2));
-  const mood = data.mood || 'neutral';
-  const textoLimpio = _limpiarMensaje(data.message);
-
-  ocultarTyping();
-  agregarMensaje(textoLimpio, "oso", mood);
-
-  if (window.setBearState) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
-  actualizarMoodIndicator(mood);
-
-  _actualizarHistorial(textoUsuario, textoLimpio);
-  _manejarSugerencia(data, mood);
-
-  // Si el backend detectó una memoria nueva, actualizarla en el perfil cacheado
-  // para que los próximos mensajes ya la tengan en cuenta
-  if (data.nueva_memoria && perfilCacheado) {
-    if (!perfilCacheado._memorias_sesion) {
-      perfilCacheado._memorias_sesion = [];
-    }
-    perfilCacheado._memorias_sesion.push(data.nueva_memoria);
-  }
-}
-
-function _limpiarMensaje(mensaje) {
-  return mensaje.replace(/\[EJERCICIO:\s*(\w+)\]/, "").trim();
-}
 
 function _actualizarHistorial(textoUsuario, textoOso) {
   historialConversacion.push({ role: "user", content: textoUsuario });
@@ -206,7 +249,6 @@ function _actualizarHistorial(textoUsuario, textoOso) {
   _trimHistorial();
 }
 
-// Mantener el historial dentro del límite
 function _trimHistorial() {
   if (historialConversacion.length > MAX_HISTORIAL) {
     historialConversacion = historialConversacion.slice(-MAX_HISTORIAL);
@@ -214,43 +256,28 @@ function _trimHistorial() {
 }
 
 function _manejarSugerencia(data, mood) {
-  console.log("🔍 _manejarSugerencia llamada con:", { data, mood });
-  const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
+  // Con el nuevo formato, suggested_action viene directo en el meta
   const ejercicioId = (data.suggested_action && data.suggested_action !== 'none')
-      ? data.suggested_action
-      : data.message.match(regexEjercicio)?.[1] ?? null;
-    console.log("🎯 ejercicioId detectado:", ejercicioId);
-    console.log("📦 suggested_action del backend:", data.suggested_action);
-    console.log("📝 mensaje crudo del backend:", data.message);
-  if (!ejercicioId){
-    console.log("⛔ Sin ejercicio — se corta acá");
-    return;
-  }
+    ? data.suggested_action
+    : null;
 
-  // Si el ejercicio requiere espacio físico y el usuario parece estar ocupado/en trabajo
+  if (!ejercicioId) return;
+
+  // Suprimir ejercicios físicos si el usuario está ocupado/en trabajo
   const ejerciciosFisicos = ['yoga_cuello', 'yoga_ansiedad', 'meditacion_bodyscan', 'meditacion_mindfulness'];
-  const ultimoMensajeUsuario = historialConversacion.filter(m => m.role === 'user').slice(-1)[0]?.content?.toLowerCase() || '';
+  const ultimoMensajeUsuario = historialConversacion
+    .filter(m => m.role === 'user')
+    .slice(-1)[0]?.content?.toLowerCase() || '';
   const contextoCupado = /trabajo|ocupado|cansad|sin tiempo|jefe|reunión|oficina/i.test(ultimoMensajeUsuario);
 
-  if (contextoCupado && ejerciciosFisicos.includes(ejercicioId)) {
-      console.log("Ejercicio físico suprimido por contexto de trabajo/ocupación.");
-      return;
-  }
+  if (contextoCupado && ejerciciosFisicos.includes(ejercicioId)) return;
 
+  // Anti-spam: respetar tiempo de enfriamiento
   const ahora = Date.now();
   if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
-      mostrarBotonSugerencia(ejercicioId, mood);
-      ultimoEjercicioSugeridoTime = ahora;
-  } else {
-      console.log("Sugerencia suprimida por enfriamiento (anti-spam).");
+    mostrarBotonSugerencia(ejercicioId, mood);
+    ultimoEjercicioSugeridoTime = ahora;
   }
-}
-
-function _manejarError(error) {
-  ocultarTyping();
-  console.error("❌ Error:", error);
-  agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
-  if (window.setBearState) window.setBearState('calm');
 }
 
 // ============================================
@@ -327,7 +354,7 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
     font-weight: bold; transition: transform 0.2s;
   `;
   btn.onmouseover = () => btn.style.transform = "scale(1.02)";
-  btn.onmouseout = () => btn.style.transform = "scale(1)";
+  btn.onmouseout  = () => btn.style.transform = "scale(1)";
   btn.onclick = () => iniciarEjercicio(tipoEncontrado, ejercicioEncontrado);
 
   bubble.appendChild(div);
@@ -341,6 +368,7 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
 
 export function getHistorial() { return historialConversacion; }
 export function resetHistorial() { historialConversacion = []; }
+
 export function mostrarProximamente() {
   const tarjeta = document.createElement("div");
   tarjeta.style.cssText = `
