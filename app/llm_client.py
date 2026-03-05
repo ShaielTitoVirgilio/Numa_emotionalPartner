@@ -73,8 +73,12 @@ class LLMClient:
         if parsed.get("mood") not in valid_moods:
             parsed["mood"] = "neutral"
 
+        import re as _re
+        message_clean = _re.sub(r'\[EJERCICIO:\s*\w+\]', '', parsed["message"]).strip()
+
+
         return {
-            "message": parsed["message"],
+            "message": message_clean,   
             "mood": parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
             "memory": parsed.get("memory"),   # None si no hay nada para recordar

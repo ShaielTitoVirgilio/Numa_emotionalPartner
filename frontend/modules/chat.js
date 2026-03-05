@@ -341,3 +341,24 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
 
 export function getHistorial() { return historialConversacion; }
 export function resetHistorial() { historialConversacion = []; }
+export function mostrarProximamente() {
+  const tarjeta = document.createElement("div");
+  tarjeta.style.cssText = `
+    text-align: center;
+    padding: 16px;
+    margin: 12px auto;
+    background: rgba(166, 199, 184, 0.15);
+    border: 1px solid rgba(166, 199, 184, 0.4);
+    border-radius: 16px;
+    font-size: 0.85rem;
+    color: #6b8e7d;
+    max-width: 80%;
+  `;
+  tarjeta.innerHTML = `
+    <span style="font-size: 1.2rem;">🎙️</span><br>
+    <strong>Modo voz</strong><br>
+    <span style="opacity: 0.8;">Muy pronto vas a poder hablar con Numa.</span>
+  `;
+  chat.appendChild(tarjeta);
+  chat.scrollTop = chat.scrollHeight;
+}

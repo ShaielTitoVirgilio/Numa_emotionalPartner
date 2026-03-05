@@ -25,12 +25,10 @@ REGLAS PARA SUGERIR EJERCICIOS:
 - Si el usuario menciona que está en el trabajo, ocupado, cansado del trabajo, o sin tiempo:
   SOLO sugerí ejercicios de respiración (respiracion_box, respiracion_478, respiracion_balance).
   Nunca sugieras yoga o meditación guiada en ese contexto.
-- Para ejercicios de respiración: siempre incluí el [EJERCICIO: id]
-  cuando los mencionás o explicás. No hace falta confirmación —
-  se pueden hacer en cualquier momento y lugar.
+- Para ejercicios de respiración: podés sugerirlos directamente, se pueden hacer en cualquier lugar.
 - Para yoga o meditación: primero preguntá si tiene un momento disponible.
   Ejemplo: "¿Tenés 5 minutos para vos ahora?"
-  Solo incluí el [EJERCICIO: id] si el usuario confirmó que sí.
+  Solo incluí el ID en suggested_action si el usuario confirmó que sí.
 
 EJERCICIOS DISPONIBLES (sugerí uno solo cuando tenga sentido real):
 - respiracion_box: Para pánico, caos mental, necesidad de enfoque inmediato. La usan militares y pilotos.
@@ -41,9 +39,6 @@ EJERCICIOS DISPONIBLES (sugerí uno solo cuando tenga sentido real):
 - yoga_cuello: Para dolor de espalda, muchas horas de PC, tensión cervical.
 - yoga_ansiedad: Para ansiedad, sensación de inestabilidad, necesidad de bajar a tierra.
 - lectura: Para un momento de reflexión, pausa filosófica.
-
-Para sugerir un ejercicio, incluí la etiqueta al FINAL de tu mensaje:
-[EJERCICIO: exercise_id]
 
 MOODS DISPONIBLES:
 - neutral: sin carga emocional clara
@@ -57,16 +52,18 @@ MOODS DISPONIBLES:
 
 FORMATO DE SALIDA OBLIGATORIO (solo JSON válido, sin texto extra):
 {
-  "message": "tu respuesta acá [EJERCICIO: exercise_id]",
+  "message": "tu respuesta acá — texto limpio, sin tags ni IDs de ejercicios",
   "mood": "neutral" | "calm" | "happy" | "excited" | "stressed" | "overwhelmed" | "sad" | "anxious",
+  "suggested_action": "respiracion_box" | "respiracion_478" | "respiracion_balance" | "meditacion_bodyscan" | "meditacion_mindfulness" | "yoga_cuello" | "yoga_ansiedad" | "lectura" | null,
   "memory": string | null
 }
 
-El campo "memory":
-- Usalo SOLO si el usuario reveló algo significativo sobre su vida, situación o forma de ser.
-- Tiene que ser una frase corta y directa. Ej: "Está pasando por una ruptura", "Trabaja de noche y duerme mal", "Le cuesta pedir ayuda".
-- Si no hay nada importante que recordar, poné null.
-- NO guardes saludos, respuestas cortas ni cosas genéricas.
+IMPORTANTE:
+- "message" es solo el texto de tu respuesta. Nunca incluyas IDs ni tags adentro.
+- "suggested_action" es el ID del ejercicio que sugerís, o null si no sugerís ninguno.
+- "memory": usalo SOLO si el usuario reveló algo significativo sobre su vida, situación o forma de ser.
+  Frase corta y directa. Ej: "Está pasando por una ruptura", "Trabaja de noche y duerme mal".
+  Si no hay nada importante, poné null.
 """
 
 
@@ -75,18 +72,10 @@ El campo "memory":
 # ============================================
 
 def construir_prompt(perfil=None, memorias=None):
-    """
-    Arma el system prompt completo:
-    - Prompt base de Numa (siempre)
-    - Contexto del perfil del usuario (si existe)
-    - Memorias de conversaciones anteriores (si existen)
-    """
     secciones = [NUMA_BASE]
 
-    # --- Bloque: perfil del usuario ---
     if perfil:
         lineas = []
-
         if perfil.get("nombre"):
             lineas.append(f"- Se llama {perfil['nombre']}.")
         if perfil.get("pronombres"):
@@ -111,7 +100,6 @@ def construir_prompt(perfil=None, memorias=None):
             bloque += "\n".join(lineas)
             secciones.append(bloque)
 
-    # --- Bloque: memorias de sesiones anteriores ---
     if memorias and len(memorias) > 0:
         bloque = "COSAS QUE YA SABÉS DE ESTE USUARIO (de conversaciones anteriores):\n"
         bloque += "\n".join(f"- {m}" for m in memorias)

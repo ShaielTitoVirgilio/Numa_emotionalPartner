@@ -1,6 +1,6 @@
 // app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje, inicializarChat } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente } from './modules/chat.js';
 import { 
     irAEjercicios, 
     cerrarMenuEjercicios,
@@ -30,7 +30,7 @@ window.nextReading = nextReading;
 window.closeReading = closeReading;
 window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
-
+window.mostrarProximamente = mostrarProximamente;
 // ============================================
 // INICIALIZACIÓN
 // ============================================
