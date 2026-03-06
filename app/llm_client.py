@@ -46,7 +46,7 @@ class LLMClient:
         # La llamada ahora reutiliza el pool de conexiones TCP/TLS
         completion = self.client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            temperature=0.7,
+            temperature=0.6,
             max_tokens=130,
             messages=[
                 {"role": "system", "content": system_prompt},

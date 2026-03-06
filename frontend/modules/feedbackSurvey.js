@@ -21,9 +21,9 @@ export function mostrarSurvey(onSubmit, onSkip) {
     font-family:system-ui, -apple-system, Segoe UI, Roboto;
   `;
   card.innerHTML = `
-    <h3 style="margin:0 0 12px; color:#2f4f45;">Antes de irte, ¿nos contás?</h3>
+    <h3 style="margin:0 0 12px; color:#2f4f45;">¿Puedes tomarte un momento para contestar 5 preguntas?</h3>
     <p style="margin:0 0 12px; color:#6b8e7d; font-size:.95rem;">
-      Son 5 preguntas rápidas. Nos ayuda a mejorar.
+     Nos ayudas a mejorar.
     </p>
 
     <label style="display:block; margin:14px 0 6px; font-weight:600;">1) ¿Qué tan probable es que recomiendes Numa?</label>

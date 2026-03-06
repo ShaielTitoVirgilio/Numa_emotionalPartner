@@ -6,11 +6,13 @@ from typing import List, Literal, Optional, Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
+from app.memory_service import get_recent_memories, MEMORY_WINDOW_DAYS_DEFAULT
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 from fastapi.responses import StreamingResponse
 import json
+
 
 app = FastAPI(
     title="Numa Emotional Partner API",
@@ -246,6 +248,15 @@ def _guardar_en_db(user_id: str, mensaje_usuario: str, mensaje_numa: str, memori
     except Exception as e:
         print(f"⚠️ Error en background task: {e}")
 
+def _desactivar_memorias(ids: List[str]):
+    if not ids:
+        return
+    try:
+        from app.supabase_client import supabase
+        # Desactiva en lote las que pasamos
+        supabase.table("memories").update({"is_active": False}).in_("id", ids).execute()
+    except Exception as e:
+        print(f"⚠️ Error desactivando memorias: {e}")
 # ==========================
 # CHAT
 # ==========================
@@ -265,13 +276,43 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
             except Exception:
                 perfil = None
 
-        # Extraer memorias de sesión acumuladas en el frontend
+        # ==========================
+        # MEMORIAS (sesión + DB): recientes y únicas por tema
+        # ==========================
         memorias_sesion = []
         if perfil and "_memorias_sesion" in perfil:
-            memorias_sesion = perfil.pop("_memorias_sesion", [])
+            memorias_sesion = perfil.pop("_memorias_sesion", []) or []
 
-        # Construir prompt dinámico
-        system_prompt = construir_prompt(perfil=perfil, memorias=memorias_sesion)
+        memorias_vigentes: List[str] = []
+        ids_a_desactivar: List[str] = []
+
+        if request.user_id:
+            try:
+                from app.supabase_client import supabase
+
+                # Traer de DB: activas, últimas N días (21 default), deduplicadas por category
+                m_db, ids_old = get_recent_memories(
+                    supabase=supabase,
+                    user_id=request.user_id,
+                    days=MEMORY_WINDOW_DAYS_DEFAULT,  # 21 días por defecto
+                    max_items=8                       # límite para el prompt (tokens)
+                )
+
+                # Fusionar: primero memorias de sesión (si existen), luego DB
+                memorias_vigentes = (memorias_sesion or []) + m_db
+                ids_a_desactivar = ids_old
+
+            except Exception as e:
+                print(f"⚠️ No se pudieron cargar memorias: {e}")
+                memorias_vigentes = memorias_sesion or []
+
+        # ==========================
+        # Construir prompt dinámico con perfil + memorias vigentes
+        # ==========================
+        system_prompt = construir_prompt(
+            perfil=perfil,
+            memorias=memorias_vigentes
+        )
 
         # ✅ Usar el cliente ya inicializado — no crea conexión nueva
         result = llm.generate_response(
@@ -295,6 +336,10 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
                 result["message"],
                 memoria_detectada,
             )
+
+        # ⚙️ Desactivar duplicadas viejas por category en background
+        if ids_a_desactivar:
+            background_tasks.add_task(_desactivar_memorias, ids_a_desactivar)
 
         return {
             "message":          result["message"],
