@@ -2,12 +2,23 @@
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
+import { mostrarSurvey } from './feedbackSurvey.js';
 // ============================================
 // ESTADO Y CONFIGURACIÓN
 // ============================================
 
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
+
+
+//Constantes para survey
+let sessionStartMs = Date.now();
+let messageCount = 0;
+const SURVEY_MSGS = 50;      // Default N mensajes
+const SURVEY_MINUTES = 15;   // Default 15 min
+const SURVEY_COOLDOWN_H = 48;
+
+
 
 // 🧠 Historial de conversación — limitado a últimos 20 mensajes
 let historialConversacion = [];
@@ -95,6 +106,11 @@ export function agregarMensaje(texto, tipo, mood = null) {
 
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
+
+if (tipo === 'user' || tipo === 'oso') {
+  messageCount++;
+}
+
 }
 
 export async function enviarMensaje() {
@@ -141,6 +157,49 @@ function _prepararEnvio() {
   mostrarTyping();
 }
 
+
+function canShowSurvey() {
+  const last = localStorage.getItem('numa_survey_last_shown');
+  if (last && Date.now() - Number(last) < SURVEY_COOLDOWN_H * 3600 * 1000) return false;
+  return true;
+}
+
+function markSurveyShown() {
+  localStorage.setItem('numa_survey_last_shown', String(Date.now()));
+}
+
+function checkSurveyTrigger() {
+  if (!canShowSurvey()) return;
+  const elapsedMin = (Date.now() - sessionStartMs) / 60000;
+  if (messageCount >= SURVEY_MSGS || elapsedMin >= SURVEY_MINUTES) {
+    // Mostrar
+    mostrarSurvey(async (answers) => {
+      markSurveyShown();
+      try {
+        const numaUser = localStorage.getItem('numa_user');
+        const userId = numaUser ? JSON.parse(numaUser).user_id : null;
+
+        await fetch('/survey', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: userId,
+            session_length_s: Math.round((Date.now() - sessionStartMs) / 1000),
+            message_count: messageCount,
+            answers,
+          })
+        });
+      } catch (e) {
+        console.warn('No se pudo enviar la encuesta:', e);
+      }
+    }, () => {
+      markSurveyShown(); // Si omite, igual respetamos cooldown
+    });
+  }
+}
+
+
+
 async function _llamarBackend(texto) {
   // Limitar historial antes de enviar
   const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
@@ -172,8 +231,10 @@ async function _llamarBackend(texto) {
   return await res.json();
 }
 
+
+
 function _procesarRespuesta(data, textoUsuario) {
-  console.log("📨 Respuesta completa del backend:", JSON.stringify(data, null, 2));
+ 
   const mood = data.mood || 'neutral';
   const textoLimpio = _limpiarMensaje(data.message);
 
@@ -194,6 +255,7 @@ function _procesarRespuesta(data, textoUsuario) {
     }
     perfilCacheado._memorias_sesion.push(data.nueva_memoria);
   }
+  checkSurveyTrigger();
 }
 
 function _limpiarMensaje(mensaje) {
@@ -362,3 +424,5 @@ export function mostrarProximamente() {
   chat.appendChild(tarjeta);
   chat.scrollTop = chat.scrollHeight;
 }
+
+setInterval(checkSurveyTrigger, 60 * 1000);

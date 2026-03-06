@@ -180,8 +180,50 @@ def onboarding_endpoint(request: OnboardingRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 # ==========================
+# BACKGROUND SURVEY
+# ==========================
+
+class SurveyAnswers(BaseModel):
+    nps: int
+    utilidad: Optional[str] = None
+    opinion: Optional[str] = None
+    features: Optional[str] = None
+    fallas: Optional[str] = None
+
+class SurveyRequest(BaseModel):
+    user_id: Optional[str] = None
+    session_length_s: int
+    message_count: int
+    answers: SurveyAnswers
+
+@app.post("/survey")
+def survey_endpoint(req: SurveyRequest):
+    try:
+        # Si tenés Supabase:
+        from app.supabase_client import supabase
+        supabase.table("surveys").insert({
+            "user_id": req.user_id,
+            "session_length_s": req.session_length_s,
+            "message_count": req.message_count,
+            "nps": req.answers.nps,
+            "utilidad": req.answers.utilidad,
+            "opinion": req.answers.opinion,
+            "features": req.answers.features,
+            "fallas": req.answers.fallas,
+        }).execute()
+        return {"ok": True}
+    except Exception as e:
+        # Fallback (rama sin BD): no rompas la UX
+        print("Survey error/disabled:", e, req.model_dump())
+        return {"ok": True}
+
+
+
+
+# ==========================
 # BACKGROUND TASKS
 # ==========================
+
 
 def _guardar_en_db(user_id: str, mensaje_usuario: str, mensaje_numa: str, memoria: Optional[str]):
     try:
