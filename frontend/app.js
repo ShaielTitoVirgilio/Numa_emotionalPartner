@@ -1,6 +1,6 @@
 // app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente} from './modules/chat.js';
 import { 
     irAEjercicios, 
     cerrarMenuEjercicios,
@@ -13,6 +13,7 @@ import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
+import { mostrarAvisoTester } from './modules/utils.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -36,29 +37,29 @@ window.mostrarProximamente = mostrarProximamente;
 // ============================================
 
 async function init() {
-    const savedUser = localStorage.getItem('numa_user');
+  const savedUser = localStorage.getItem('numa_user');
+  if (!savedUser) {
+    showAuthScreen();
+    return;
+  }
 
-    if (!savedUser) {
-        showAuthScreen();
-        return;
+  const user = JSON.parse(savedUser);
+  
+  try {
+    const res = await fetch(`/profile/${user.user_id}`);
+    const profile = await res.json();
+
+    if (!profile.onboarding_completo) {
+      showOnboarding(user.user_id);
+    } else {
+      await inicializarChat();
+      agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
+
+      // Aquí mostrás el cartel
+      mostrarAvisoTester();
     }
-
-    const user = JSON.parse(savedUser);
-
-    try {
-        const res = await fetch(`/profile/${user.user_id}`);
-        const profile = await res.json();
-
-        if (!profile.onboarding_completo) {
-            showOnboarding(user.user_id);
-        } else {
-            // ✅ Cargar perfil en caché antes de mostrar el chat
-            await inicializarChat();
-            agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
-        }
-    } catch (e) {
-        agregarMensaje("Hola 🐼 ¿Cómo estás hoy?", "oso");
-    }
+  } catch (e) {
+    agregarMensaje("Hola 🐼 ¿Cómo estás hoy?", "oso");
+  }
 }
-
 init();
