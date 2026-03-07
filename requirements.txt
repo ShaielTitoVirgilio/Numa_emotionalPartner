@@ -2,4 +2,6 @@ fastapi
 uvicorn
 python-dotenv
 requests
-groq
+openai
+supabase
+slowapi
