@@ -12,6 +12,11 @@ from fastapi.responses import FileResponse
 import os
 from fastapi.responses import StreamingResponse
 import json
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from starlette.requests import Request
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 app = FastAPI(
@@ -260,18 +265,18 @@ def _desactivar_memorias(ids: List[str]):
 # ==========================
 # CHAT
 # ==========================
-
 @app.post("/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+@limiter.limit("18/minute")
+def chat_endpoint(request: Request, body: ChatRequest, background_tasks: BackgroundTasks):
     try:
-        perfil = request.perfil
+        perfil = body.perfil
 
         # Fallback: si no vino perfil desde el frontend, buscarlo en DB
-        if perfil is None and request.user_id:
+        if perfil is None and body.user_id:
             try:
                 from app.supabase_client import supabase
                 perfil_res = supabase.table("users_profiles") \
-                    .select("*").eq("id", request.user_id).single().execute()
+                    .select("*").eq("id", body.user_id).single().execute()
                 perfil = perfil_res.data
             except Exception:
                 perfil = None
@@ -286,19 +291,17 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
         memorias_vigentes: List[str] = []
         ids_a_desactivar: List[str] = []
 
-        if request.user_id:
+        if body.user_id:
             try:
                 from app.supabase_client import supabase
 
-                # Traer de DB: activas, últimas N días (21 default), deduplicadas por category
                 m_db, ids_old = get_recent_memories(
                     supabase=supabase,
-                    user_id=request.user_id,
-                    days=MEMORY_WINDOW_DAYS_DEFAULT,  # 21 días por defecto
-                    max_items=8                       # límite para el prompt (tokens)
+                    user_id=body.user_id,
+                    days=MEMORY_WINDOW_DAYS_DEFAULT,
+                    max_items=8
                 )
 
-                # Fusionar: primero memorias de sesión (si existen), luego DB
                 memorias_vigentes = (memorias_sesion or []) + m_db
                 ids_a_desactivar = ids_old
 
@@ -314,9 +317,8 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
             memorias=memorias_vigentes
         )
 
-        # ✅ Usar el cliente ya inicializado — no crea conexión nueva
         result = llm.generate_response(
-            conversation=[m.dict() for m in request.conversation],
+            conversation=[m.dict() for m in body.conversation],
             system_prompt=system_prompt,
         )
 
@@ -324,20 +326,20 @@ def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
 
         # Detectar riesgo en el último mensaje del usuario
         risk_level = "none"
-        if request.conversation:
-            risk_level = _detectar_riesgo(request.conversation[-1].content)
+        if body.conversation:
+            risk_level = _detectar_riesgo(body.conversation[-1].content)
 
         # Guardar en DB en background (no bloquea la respuesta)
-        if request.user_id and request.conversation:
+        if body.user_id and body.conversation:
             background_tasks.add_task(
                 _guardar_en_db,
-                request.user_id,
-                request.conversation[-1].content,
+                body.user_id,
+                body.conversation[-1].content,
                 result["message"],
                 memoria_detectada,
             )
 
-        # ⚙️ Desactivar duplicadas viejas por category en background
+        # Desactivar duplicadas viejas por category en background
         if ids_a_desactivar:
             background_tasks.add_task(_desactivar_memorias, ids_a_desactivar)
 
