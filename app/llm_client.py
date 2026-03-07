@@ -7,8 +7,6 @@ import json
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
-# 1. Cargamos el entorno e instanciamos el cliente de OpenAI UNA SOLA VEZ a nivel de módulo.
-# Esto permite que la librería mantenga una "Keep-Alive" connection con los servidores de Groq.
 load_dotenv()
 
 _openai_shared_client = OpenAI(
@@ -34,64 +32,117 @@ class LLMRawResponse(TypedDict):
 
 class LLMClient:
     def __init__(self):
-        # 2. Referenciamos el cliente compartido en lugar de crear uno nuevo.
         self.client = _openai_shared_client
 
     def generate_response(
         self,
         conversation: List[ChatMessage],
-        system_prompt: str,       # ← recibe el prompt dinámico armado por construir_prompt()
+        system_prompt: str,
     ) -> LLMRawResponse:
 
-        # La llamada ahora reutiliza el pool de conexiones TCP/TLS
         completion = self.client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            temperature=0.5,
-            max_tokens=130,
+            temperature=0.7,
+            max_tokens=600,  # subido de 400 para que el JSON no se corte
             messages=[
                 {"role": "system", "content": system_prompt},
                 *conversation,
             ],
         )
 
-        raw = completion.choices[0].message.content
-        if not raw:
-            raise RuntimeError("Empty response from LLM")
+        raw = completion.choices[0].message.content or ""
 
-        # Intentar extraer JSON si el LLM incluye texto extra
-        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-        raw_json = json_match.group(0) if json_match else raw.strip()
+        # ─────────────────────────────────────────────────────────────
+        # PASO 1: intentar parsear el raw completo como JSON puro
+        # ─────────────────────────────────────────────────────────────
+        parsed = None
 
         try:
-            parsed = json.loads(raw_json)
+            parsed = json.loads(raw.strip())
         except json.JSONDecodeError:
+            pass
+
+        # ─────────────────────────────────────────────────────────────
+        # PASO 2: buscar el último { en el texto y parsear desde ahí
+        # Usamos rfind para encontrar el bloque JSON aunque haya texto
+        # libre antes. Si el JSON está truncado, intentamos repararlo.
+        # ─────────────────────────────────────────────────────────────
+        if parsed is None:
+            last_brace = raw.rfind("{")
+            if last_brace != -1:
+                json_candidate = raw[last_brace:]
+                json_candidate = _reparar_json_truncado(json_candidate)
+                try:
+                    candidate = json.loads(json_candidate)
+                    if "message" in candidate and "mood" in candidate:
+                        parsed = candidate
+                except json.JSONDecodeError:
+                    pass
+
+        # ─────────────────────────────────────────────────────────────
+        # PASO 3: fallback total
+        # El texto antes del primer { es la respuesta real del modelo
+        # ─────────────────────────────────────────────────────────────
+        if parsed is None:
+            pre_json = raw.split("{")[0].strip()
             parsed = {
-                "message": raw.strip(),
+                "message": pre_json if pre_json else raw.strip(),
                 "mood": "neutral",
                 "suggested_action": None,
                 "memory": None,
             }
 
-        # Validaciones de seguridad
-        if "message" not in parsed or "mood" not in parsed:
-            # Fallback en caso de que el JSON no tenga los campos mínimos
-            parsed = {
-                "message": str(parsed.get("message", raw.strip())),
-                "mood": parsed.get("mood", "neutral"),
-                "suggested_action": parsed.get("suggested_action"),
-                "memory": parsed.get("memory")
-            }
-
+        # ─────────────────────────────────────────────────────────────
+        # VALIDACIONES
+        # ─────────────────────────────────────────────────────────────
         valid_moods = {"neutral", "calm", "happy", "excited", "stressed", "overwhelmed", "sad", "anxious"}
         if parsed.get("mood") not in valid_moods:
             parsed["mood"] = "neutral"
 
-        # Limpiar tags internos de la respuesta visual
-        message_clean = re.sub(r'\[EJERCICIO:\s*\w+\]', '', parsed["message"]).strip()
+        message_clean = re.sub(r'\[EJERCICIO:\s*\w+\]', '', str(parsed.get("message", ""))).strip()
+        # Eliminar cualquier JSON residual pegado al final del mensaje
+        message_clean = re.sub(r'\s*\{[\s\S]*', '', message_clean).strip()
 
         return {
-            "message": message_clean,   
+            "message": message_clean,
             "mood": parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
             "memory": parsed.get("memory"),
         }
+
+
+def _reparar_json_truncado(texto: str) -> str:
+    """
+    Cierra un JSON que fue cortado por el límite de tokens.
+    Cuenta comillas y llaves abiertas y las cierra.
+    """
+    try:
+        json.loads(texto)
+        return texto  # ya es válido
+    except json.JSONDecodeError:
+        pass
+
+    reparado = texto.rstrip()
+
+    # Detectar si hay un string abierto (comillas impares no escapadas)
+    in_string = False
+    escaped = False
+    for ch in reparado:
+        if escaped:
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+
+    if in_string:
+        reparado += '"'
+
+    # Cerrar llaves pendientes
+    open_braces = reparado.count("{") - reparado.count("}")
+    if open_braces > 0:
+        reparado += "}" * open_braces
+
+    return reparado
