@@ -1,5 +1,6 @@
 // modules/auth.js
 
+import { mostrarAvisoTesterCada } from './utils.js';
 // ============================================
 // ESTADO
 // ============================================
@@ -165,7 +166,7 @@ async function _submitLogin() {
         localStorage.setItem('numa_user', JSON.stringify(data));
 
         hideAuthScreen();
-
+        mostrarAvisoTesterCada();
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
     }

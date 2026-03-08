@@ -1,4 +1,5 @@
 // modules/onboarding.js
+import { mostrarAvisoTesterCada } from './utils.js';
 
 // ============================================
 // PREGUNTAS
@@ -405,6 +406,7 @@ async function _enviarOnboarding() {
             "oso"
         );
     }
+    mostrarAvisoTesterCada();
 
 } catch (e) {
     console.error('Error completo:', e);
