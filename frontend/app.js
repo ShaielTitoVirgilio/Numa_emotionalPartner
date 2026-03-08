@@ -13,7 +13,7 @@ import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
-import { mostrarAvisoTester } from './modules/utils.js';
+import { mostrarAvisoTesterCada } from './modules/utils.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -56,7 +56,7 @@ async function init() {
       agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
 
       // Aquí mostrás el cartel
-      mostrarAvisoTester();
+      mostrarAvisoTesterCada();
     }
   } catch (e) {
     agregarMensaje("Hola 🐼 ¿Cómo estás hoy?", "oso");
