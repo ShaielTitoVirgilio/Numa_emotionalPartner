@@ -11,40 +11,319 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Numa" />
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+
+  <style>
+    /* ============================================
+       TABS — Chat / Mi estado
+       ============================================ */
+
+    .tab-bar {
+      width: 100%;
+      display: flex;
+      background: #dceee7;
+      border-radius: 20px;
+      padding: 4px;
+      gap: 4px;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 8px;
+      border: none;
+      border-radius: 16px;
+      background: transparent;
+      color: #6b8e7d;
+      font-size: 0.92rem;
+      font-family: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+
+    .tab-btn.active {
+      background: white;
+      color: #2f4f45;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    .tab-btn .tab-icon {
+      font-size: 1rem;
+    }
+
+    /* Badge "Próximamente" */
+    .tab-badge {
+      font-size: 0.6rem;
+      background: #b7d3c6;
+      color: #2f4f45;
+      padding: 2px 6px;
+      border-radius: 20px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      margin-left: 2px;
+    }
+
+    /* Vistas */
+    .tab-view {
+      display: none;
+      width: 100%;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .tab-view.active {
+      display: flex;
+    }
+
+    /* ============================================
+       DASHBOARD — Próximamente
+       ============================================ */
+
+    .dashboard-coming-soon {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+      gap: 20px;
+      animation: fadeInUp 0.4s ease-out;
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .dashboard-icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #b7d3c6, #8fb5a3);
+      border-radius: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.4rem;
+      box-shadow: 0 8px 24px rgba(143, 181, 163, 0.35);
+    }
+
+    .dashboard-title {
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: #2f4f45;
+      text-align: center;
+      margin: 0;
+    }
+
+    .dashboard-subtitle {
+      font-size: 0.98rem;
+      color: #6b8e7d;
+      text-align: center;
+      line-height: 1.6;
+      max-width: 280px;
+      margin: 0;
+    }
+
+    /* Preview cards — placeholders de lo que vendrá */
+    .dashboard-preview {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .preview-card {
+      width: 100%;
+      background: white;
+      border-radius: 16px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Efecto blur sobre las cards — simula que el contenido está "tapado" */
+    .preview-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.65);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+      border-radius: 16px;
+    }
+
+    .preview-card-icon {
+      font-size: 1.6rem;
+      flex-shrink: 0;
+    }
+
+    .preview-card-text {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .preview-card-label {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #2f4f45;
+    }
+
+    .preview-card-sub {
+      font-size: 0.75rem;
+      color: #8fb5a3;
+    }
+
+    /* Barras de gráfico simuladas */
+    .mock-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      height: 28px;
+    }
+
+    .mock-bar {
+      width: 8px;
+      border-radius: 4px;
+      background: #b7d3c6;
+    }
+
+    .dashboard-note {
+      font-size: 0.8rem;
+      color: #a8c8b8;
+      text-align: center;
+      margin-top: 4px;
+      font-style: italic;
+    }
+  </style>
 </head>
 
 <body>
 
 <div class="app">
 
-  <div class="bear-container" id="bear-container"></div>
-
-  
-  <div id="mood-indicator"></div>
-
-  <div class="chat" id="chat"></div>
-
-  <div class="input-container">
-    <input
-      id="input"
-      placeholder="¿Cómo te sentís ahora?"
-      autocomplete="off"
-      onkeypress="if(event.key === 'Enter') enviarMensaje()"
-    />
-    <button class="btn-enviar" onclick="enviarMensaje()">Enviar</button>
-  </div>
-
-  <div class="nav-buttons">
-    <button class="nav-btn" onclick="irAEjercicios()">
-        <span>🧘</span> Ejercicios
+  <!-- ============================================
+       TAB BAR — Chat / Mi estado
+       ============================================ -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
+      <span class="tab-icon">💬</span> Chat
     </button>
-    <button class="nav-btn" onclick="mostrarProximamente()">
-        <span>🎤</span> Voz
-    </button>
-    <button class="nav-btn" onclick="logout()">
-        <span>🚪</span> Salir
+    <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
+      <span class="tab-icon">📊</span> Mi estado
+      <span class="tab-badge">Pronto</span>
     </button>
   </div>
+
+  <!-- ============================================
+       VISTA: CHAT (todo lo que ya existía)
+       ============================================ -->
+  <div class="tab-view active" id="view-chat">
+
+    <div class="bear-container" id="bear-container"></div>
+
+    <div id="mood-indicator"></div>
+
+    <div class="chat" id="chat"></div>
+
+    <div class="input-container">
+      <input
+        id="input"
+        placeholder="¿Cómo te sentís ahora?"
+        autocomplete="off"
+        onkeypress="if(event.key === 'Enter') enviarMensaje()"
+      />
+      <button class="btn-enviar" onclick="enviarMensaje()">Enviar</button>
+    </div>
+
+    <div class="nav-buttons">
+      <button class="nav-btn" onclick="irAEjercicios()">
+          <span>🧘</span> Ejercicios
+      </button>
+      <button class="nav-btn" onclick="mostrarProximamente()">
+          <span>🎤</span> Voz
+      </button>
+      <button class="nav-btn" onclick="logout()">
+          <span>🚪</span> Salir
+      </button>
+    </div>
+
+  </div>
+
+  <!-- ============================================
+       VISTA: DASHBOARD — Próximamente
+       ============================================ -->
+  <div class="tab-view" id="view-dashboard">
+    <div class="dashboard-coming-soon">
+
+      <div class="dashboard-icon">📊</div>
+
+      <h2 class="dashboard-title">Tu estado emocional</h2>
+
+      <p class="dashboard-subtitle">
+        Pronto vas a poder ver cómo te fuiste sintiendo a lo largo del tiempo, patrones de tus conversaciones con Numa y momentos donde te fue mas dificil.
+      </p>
+
+      <!-- Cards preview borrosas -->
+      <div class="dashboard-preview">
+
+        <div class="preview-card">
+          <span class="preview-card-icon">🌈</span>
+          <div class="preview-card-text">
+            <span class="preview-card-label">Estado de ánimo esta semana</span>
+            <span class="preview-card-sub">Cómo te sentiste día a día</span>
+          </div>
+          <div class="mock-bars" style="margin-left:auto">
+            <div class="mock-bar" style="height:14px"></div>
+            <div class="mock-bar" style="height:22px; background:#7db89e"></div>
+            <div class="mock-bar" style="height:10px"></div>
+            <div class="mock-bar" style="height:20px; background:#a6c7b8"></div>
+            <div class="mock-bar" style="height:26px; background:#7db89e"></div>
+            <div class="mock-bar" style="height:16px"></div>
+            <div class="mock-bar" style="height:12px"></div>
+          </div>
+        </div>
+
+        <div class="preview-card">
+          <span class="preview-card-icon">🔁</span>
+          <div class="preview-card-text">
+            <span class="preview-card-label">Patrones detectados</span>
+            <span class="preview-card-sub">Conexiones entre lo que sentís y lo que hacés</span>
+          </div>
+        </div>
+
+        <div class="preview-card">
+          <span class="preview-card-icon">🧘</span>
+          <div class="preview-card-text">
+            <span class="preview-card-label">Ejercicios que más te ayudaron</span>
+            <span class="preview-card-sub">Basado en tu feedback post-ejercicio</span>
+          </div>
+        </div>
+
+      </div>
+
+      <p class="dashboard-note">Mientras tanto, Numa ya está aprendiendo sobre vos</p>
+
+    </div>
+  </div>
+
+  <!-- ============================================
+       OVERLAYS Y PANELES (sin cambios)
+       ============================================ -->
 
   <div id="prep-screen" class="prep-screen hidden">
     <div class="loader-circle"></div>
@@ -66,38 +345,27 @@
   <div class="breathing hidden" id="overlay-respiracion">
     <button class="close-btn" onclick="detenerRespiracion()">✕</button>
     <h3 id="resp-titulo" style="margin-bottom:20px; color:#4a6a5e; font-size: 1.4rem;"></h3>
-    
     <div class="circle" id="resp-circle"></div>
-    
     <p id="resp-text-instruccion" style="margin-top:30px; font-size:1.5rem; font-weight: bold;">Preparate...</p>
     <p id="resp-subtext" style="font-size:0.9rem; opacity:0.7; margin-top:10px;"></p>
   </div>
 
   <div class="meditation hidden" id="overlay-guiado">
     <button class="close-btn" onclick="detenerGuiado()">✕</button>
-    
     <h3 id="guiado-titulo" style="margin-bottom: 30px;">Ejercicio</h3>
-    
     <div id="guiado-contenido" style="display: flex; flex-direction: column; align-items: center;">
       <h2 id="guiado-paso-principal" style="color:#6b8e7d; font-size:1.6rem; margin-bottom:15px; text-align: center;"></h2>
-      
       <div id="numa-animacion-container">
         <video id="numa-video-pose"
-         autoplay
-         loop
-         muted
-         playsinline
+         autoplay loop muted playsinline
          style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; border: 4px solid #f0f0f0; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
             <source id="numa-video-source" src="">
         </video>
-    </div>
-    
-    <div class="progress-container" style="width: 80%; height: 8px; background: #eee; border-radius: 10px; margin: 20px auto; overflow: hidden;">
+      </div>
+      <div class="progress-container" style="width: 80%; height: 8px; background: #eee; border-radius: 10px; margin: 20px auto; overflow: hidden;">
         <div id="guiado-progress" class="progress-bar" style="width: 0%; height: 100%; background: #a6c7b8; transition: width 1s linear;"></div>
-    </div>
-      
+      </div>
       <p id="guiado-instruccion" style="font-size:1.1rem; line-height:1.6; max-width: 80%; text-align: center;"></p>
-      
       <div id="guiado-timer" class="meditation-timer hidden" style="margin-top: 20px;"></div>
     </div>
   </div>
@@ -116,14 +384,26 @@
   <div class="meditation hidden" id="meditation"><button class="close-btn" onclick="closeMeditation()">✕</button><h3>Meditación</h3><p id="meditation-text">...</p><div class="meditation-timer" id="meditation-timer">3:00</div></div>
   <div class="yoga hidden" id="yoga"><button class="close-btn" onclick="closeYoga()">✕</button><h3>Estiramiento</h3><div id="yoga-content"><p>Postura:</p><h2 id="yoga-pose">Inicio</h2><p id="yoga-instruction">...</p></div></div>
 
-
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
 <script src="/static/bear3d.js"></script>
 <script type="module" src="/static/app.js"></script>
+
 <script>
+  // ============================================
+  // LÓGICA DE PESTAÑAS
+  // ============================================
+  function switchMainTab(tab) {
+    // Botones
+    document.getElementById('tab-chat-btn').classList.toggle('active', tab === 'chat');
+    document.getElementById('tab-dashboard-btn').classList.toggle('active', tab === 'dashboard');
+
+    // Vistas
+    document.getElementById('view-chat').classList.toggle('active', tab === 'chat');
+    document.getElementById('view-dashboard').classList.toggle('active', tab === 'dashboard');
+  }
+
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js');
   }

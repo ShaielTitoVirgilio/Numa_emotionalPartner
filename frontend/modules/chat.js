@@ -222,11 +222,16 @@ async function _llamarBackend(texto) {
     })
   });
 
-  if (!res.ok) {
+  if (res.status === 401) {
+    localStorage.removeItem('numa_user');
+    showAuthScreen();
+    throw new Error("Sesión expirada");
+}
+
+if (!res.ok) {
     const errorText = await res.text();
-    console.error("❌ ERROR DEL SERVIDOR:", errorText);
     throw new Error("Error en respuesta HTTP");
-  }
+}
 
   return await res.json();
 }
