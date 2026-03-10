@@ -1,5 +1,5 @@
 from app.supabase_client import supabase
-
+import time
 
 def register_user(email: str, password: str, nombre: str):
     # Crear usuario en Supabase Auth
@@ -12,6 +12,8 @@ def register_user(email: str, password: str, nombre: str):
     if not user:
         raise Exception("Error al crear el usuario")
 
+
+    time.sleep(0.5) 
     # Crear perfil en users_profiles
     supabase.table("users_profiles").insert({
         "id": user.id,
