@@ -70,18 +70,14 @@ def construir_prompt(perfil=None, memorias=None):
             lineas.append(f"- Se llama {perfil['nombre']}.")
         if perfil.get("pronombres"):
             lineas.append(f"- Sus pronombres son: {perfil['pronombres']}.")
-        if perfil.get("edad"):
-            lineas.append(f"- Tiene {perfil['edad']} años.")
+        if perfil.get("etapa_vida"):
+            lineas.append(f"- Etapa de vida actual: {perfil['etapa_vida']}.")
+        if perfil.get("que_le_pesa"):
+            lineas.append(f"- Lo que más le pesa ahora: {perfil['que_le_pesa']}.")
         if perfil.get("como_reacciona"):
             lineas.append(f"- Cuando está mal, tiende a: {perfil['como_reacciona']}.")
-        if perfil.get("que_lo_calma"):
-            lineas.append(f"- Lo que le suele ayudar: {perfil['que_lo_calma']}.")
-        if perfil.get("tono_preferido"):
-            lineas.append(f"- Su estilo de comunicación: {perfil['tono_preferido']}.")
         if perfil.get("prefiere_respuestas"):
-            lineas.append(f"- Prefiere respuestas: {perfil['prefiere_respuestas']}.")
-        if perfil.get("momento_vida"):
-            lineas.append(f"- Sobre su vida ahora: {perfil['momento_vida']}.")
+            lineas.append(f"- Prefiere que Numa responda: {perfil['prefiere_respuestas']}.")
         if perfil.get("preferencias_extra"):
             lineas.append(f"- Quiere que tengas en cuenta: {perfil['preferencias_extra']}.")
 

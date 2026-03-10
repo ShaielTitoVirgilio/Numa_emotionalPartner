@@ -14,84 +14,64 @@ const PREGUNTAS = [
     },
     {
         numero: 2,
-        pregunta: "¿Qué edad tenés?",
+        pregunta: "¿Con qué pronombres te sentís más cómodo/a?",
         tipo: "opcion_unica",
-        opciones: ["Menos de 18", "18–24", "25–34", "35–44", "45+"]
+        opciones: ["Él", "Ella", "Prefiero que no use pronombres", "Otro"],
+        otroIndex: 3  // índice de la opción "Otro"
     },
     {
         numero: 3,
-        pregunta: "¿Con qué pronombres te sentís más cómodo/a?",
+        pregunta: "¿En qué etapa de vida estás ahora?",
         tipo: "opcion_unica",
-        opciones: ["Él", "Ella", "Prefiero que no use pronombres", "Otro"]
+        opciones: [
+            "Estudiando",
+            "Trabajando",
+            "Estudiando y trabajando",
+            "Buscando trabajo o dirección",
+            "Otra etapa"
+        ],
+        otroIndex: 4
     },
     {
         numero: 4,
-        pregunta: "Cuando hablás de algo que te preocupa, preferís que:",
+        pregunta: "¿Qué es lo que más te pesa últimamente?",
         tipo: "opcion_unica",
         opciones: [
-            "Solo te escuchen",
-            "Te hagan preguntas suaves",
-            "Te den consejos concretos",
-            "Un equilibrio entre escuchar y aconsejar"
+            "El rendimiento (estudio o trabajo)",
+            "Las relaciones con otros",
+            "No saber bien hacia dónde voy",
+            "El cuerpo o la salud",
+            "Nada en particular por ahora"
         ]
     },
     {
         numero: 5,
-        pregunta: "¿Sos más de guardarte lo que sentís o de expresarlo?",
-        tipo: "opcion_unica",
-        opciones: [
-            "Me lo guardo casi todo",
-            "Depende del momento",
-            "Lo expreso bastante"
-        ]
-    },
-    {
-        numero: 6,
         pregunta: "Cuando estás mal, ¿qué suele pasar?",
         tipo: "opcion_unica",
         opciones: [
-            "Me pongo ansioso/a",
-            "Me apago / me quedo en silencio",
-            "Me enojo",
-            "Me distraigo con cosas",
+            "Me pongo ansioso/a o me acelero",
+            "Me apago y me quedo en silencio",
+            "Me enojo o me frustro",
+            "Me distraigo con el teléfono o redes",
             "Me cuesta identificar qué siento"
         ]
     },
     {
-        numero: 7,
-        pregunta: "¿Qué cosas suelen ayudarte a sentirte mejor?",
-        tipo: "opcion_multiple",
-        opciones: [
-            "Hablar con alguien",
-            "Escuchar música",
-            "Uso tiktok u otra red social",
-            "Hacer ejercicio",
-            "Respirar / meditar",
-            "Escribir",
-            "No estoy seguro/a"
-        ]
-    },
-    {
-        numero: 8,
-        pregunta: "¿Preferís respuestas…?",
+        numero: 6,
+        pregunta: "¿Cómo preferís que Numa responda?",
         tipo: "opcion_unica",
         opciones: [
-            "Cortas y directas",
-            "Un poco desarrolladas",
-            "Profundas y reflexivas"
+            "Corto y directo, sin rodeos",
+            "Con calma, que me acompañe",
+            "Que me haga preguntas para entender mejor",
+            "Que mezcle escucha con algo concreto"
         ]
     },
     {
-        numero: 9,
-        pregunta: "¿Cómo describirías este momento de tu vida en pocas palabras?",
-        tipo: "texto",
-        placeholder: "Podés escribir lo que quieras..."
-    },
-    {
-        numero: 10,
-        pregunta: "¿Hay algo que te gustaría que Numa tenga en cuenta cuando hable con vos?",
+        numero: 7,
+        pregunta: "¿Hay algo que querés que Numa sepa antes de empezar?",
         tipo: "textarea",
-        placeholder: "Ej: que no me juzgue, que sea directo, que me motive..."
+        placeholder: "Ej: estoy pasando un momento difícil, no me gustan los consejos genéricos, prefiero que sea directo..."
     }
 ];
 
@@ -236,11 +216,17 @@ function _renderInput(pregunta) {
                 <button 
                     class="onboarding-opcion" 
                     data-index="${i}"
-                    onclick="seleccionarOpcion(this)"
+                    onclick="seleccionarOpcion(this, ${pregunta.otroIndex !== undefined ? pregunta.otroIndex : -1})"
                 >
                     ${op}
                 </button>
             `).join('')}
+            <textarea
+                id="otro-textarea"
+                class="auth-input onboarding-textarea"
+                placeholder="Contame un poco más..."
+                style="display:none; margin-top: 4px; min-height: 80px;"
+            ></textarea>
         </div>`;
     }
 
@@ -307,7 +293,14 @@ function _obtenerRespuesta() {
 
     if (pregunta.tipo === 'opcion_unica') {
         const selected = document.querySelector('.onboarding-opcion.selected');
-        return selected ? selected.textContent.trim() : '';
+        if (!selected) return '';
+    
+        const textarea = document.querySelector('#otro-textarea');
+        const hayTextoLibre = textarea && textarea.style.display !== 'none' && textarea.value.trim();
+    
+        return hayTextoLibre
+            ? textarea.value.trim()       // si escribió algo, guardamos eso directamente
+            : selected.textContent.trim();
     }
 
     if (pregunta.tipo === 'opcion_multiple') {
@@ -439,9 +432,18 @@ function _mostrarToast(mensaje) {
 
 window.onboardingNext = _next;
 window.onboardingBack = _back;
-window.seleccionarOpcion = (btn) => {
-    document.querySelectorAll('.onboarding-opcion').forEach(b => b.classList.remove('selected'));
+window.seleccionarOpcion = (btn, otroIndex) => {
+    const contenedor = btn.closest('.onboarding-opciones');
+    contenedor.querySelectorAll('.onboarding-opcion').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
+
+    const textarea = contenedor.querySelector('#otro-textarea');
+    const esOtro = Number(btn.dataset.index) === otroIndex && otroIndex !== -1;
+
+    if (textarea) {
+        textarea.style.display = esOtro ? 'block' : 'none';
+        if (!esOtro) textarea.value = '';
+    }
 };
 window.seleccionarOpcionMultiple = (btn) => {
     btn.classList.toggle('selected');

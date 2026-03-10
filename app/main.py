@@ -165,14 +165,12 @@ def onboarding_endpoint(request: OnboardingRequest):
         perfil_update = {
             "onboarding_completo": True,
             "nombre":              resp.get(1, ""),
-            "edad":                resp.get(2),
-            "pronombres":          resp.get(3),
-            "tono_preferido":      resp.get(5),
-            "como_reacciona":      resp.get(6),
-            "que_lo_calma":        resp.get(7),
-            "prefiere_respuestas": resp.get(8),
-            "momento_vida":        resp.get(9),
-            "preferencias_extra":  resp.get(10),
+            "pronombres":          resp.get(2),
+            "etapa_vida":          resp.get(3),
+            "que_le_pesa":         resp.get(4),
+            "como_reacciona":      resp.get(5),
+            "prefiere_respuestas": resp.get(6),
+            "preferencias_extra":  resp.get(7),
         }
         perfil_update = {k: v for k, v in perfil_update.items() if v is not None}
 
