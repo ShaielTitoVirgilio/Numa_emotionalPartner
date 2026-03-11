@@ -14,6 +14,7 @@ import { showReading, nextReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
+import { initFeedbackTab } from './modules/feedbackTab.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -32,6 +33,7 @@ window.closeReading = closeReading;
 window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
 window.mostrarProximamente = mostrarProximamente;
+window.initFeedbackTab = initFeedbackTab;
 // ============================================
 // INICIALIZACIÓN
 // ============================================

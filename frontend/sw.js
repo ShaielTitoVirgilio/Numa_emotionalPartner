@@ -14,6 +14,7 @@ const ASSETS = [
   '/static/modules/feedbackPost.js',
   '/static/modules/lectura.js',
   '/static/modules/utils.js',
+  '/static/modules/feedbackTab.js',
 ];
 
 // Instalación — cachear assets estáticos

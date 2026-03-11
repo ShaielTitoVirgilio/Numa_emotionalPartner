@@ -219,15 +219,18 @@
   <!-- ============================================
        TAB BAR — Chat / Mi estado
        ============================================ -->
-  <div class="tab-bar">
-    <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
-      <span class="tab-icon">💬</span> Chat
-    </button>
-    <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
-      <span class="tab-icon">📊</span> Mi estado
-      <span class="tab-badge">Pronto</span>
-    </button>
-  </div>
+       <div class="tab-bar">
+        <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
+          <span class="tab-icon">💬</span> Chat
+        </button>
+        <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
+          <span class="tab-icon">📊</span> Mi estado
+          <span class="tab-badge">Pronto</span>
+        </button>
+        <button class="tab-btn" id="tab-feedback-btn" onclick="switchMainTab('feedback')">
+          <span class="tab-icon">💬</span> Feedback
+        </button>
+      </div>
 
   <!-- ============================================
        VISTA: CHAT (todo lo que ya existía)
@@ -262,6 +265,9 @@
       </button>
     </div>
 
+  </div>
+  <div class="tab-view" id="view-feedback">
+    <!-- Se renderiza dinámicamente por feedbackTab.js -->
   </div>
 
   <!-- ============================================
@@ -398,10 +404,17 @@
     // Botones
     document.getElementById('tab-chat-btn').classList.toggle('active', tab === 'chat');
     document.getElementById('tab-dashboard-btn').classList.toggle('active', tab === 'dashboard');
+    document.getElementById('tab-feedback-btn').classList.toggle('active', tab === 'feedback');
 
     // Vistas
     document.getElementById('view-chat').classList.toggle('active', tab === 'chat');
     document.getElementById('view-dashboard').classList.toggle('active', tab === 'dashboard');
+    document.getElementById('view-feedback').classList.toggle('active', tab === 'feedback');
+
+    // Inicializar la pestaña de feedback al abrirla por primera vez
+    if (tab === 'feedback' && window.initFeedbackTab) {
+      window.initFeedbackTab();
+    }
   }
 
   if ('serviceWorker' in navigator) {
