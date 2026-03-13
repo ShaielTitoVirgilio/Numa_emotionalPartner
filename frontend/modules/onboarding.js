@@ -21,16 +21,17 @@ const PREGUNTAS = [
     },
     {
         numero: 3,
-        pregunta: "¿En qué etapa de vida estás ahora?",
-        tipo: "opcion_unica",
+        pregunta: "¿Cómo está tu vida ahora mismo?",
+        tipo: "opcion_multiple",
         opciones: [
             "Estudiando",
             "Trabajando",
-            "Estudiando y trabajando",
-            "Buscando trabajo o dirección",
+            "Buscando trabajo",
+            "Con familia o pareja",
+            "Viviendo solo/a",
             "Otra etapa"
         ],
-        otroIndex: 4
+        otroIndex: 5
     },
     {
         numero: 4,
@@ -41,19 +42,21 @@ const PREGUNTAS = [
             "Las relaciones con otros",
             "No saber bien hacia dónde voy",
             "El cuerpo o la salud",
-            "Nada en particular por ahora"
-        ]
+            "Nada en particular por ahora",
+            "Otro"
+        ],
+        otroIndex: 5
     },
     {
         numero: 5,
-        pregunta: "Cuando estás mal, ¿qué suele pasar?",
+        pregunta: "En momentos de estrés o tensión, ¿qué te pasa habitualmente?",
         tipo: "opcion_unica",
         opciones: [
-            "Me pongo ansioso/a o me acelero",
-            "Me apago y me quedo en silencio",
-            "Me enojo o me frustro",
-            "Me distraigo con el teléfono o redes",
-            "Me cuesta identificar qué siento"
+            "Me acelero o me pongo ansioso/a",
+            "Me cierro y me quedo callado/a",
+            "Me enojo o me frustro fácilmente",
+            "Busco distracción (teléfono, series, etc.)",
+            "Me cuesta darme cuenta de lo que siento"
         ]
     },
     {
