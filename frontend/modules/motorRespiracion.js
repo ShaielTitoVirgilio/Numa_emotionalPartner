@@ -30,7 +30,10 @@ function reproducirSonidoFase(fase, duracionSegundos) {
   // Detener cualquier audio anterior
   _detenerAudios();
 
-  if (fase === 'retener' || fase === 'esperar') return; // silencio en pausa
+  if (fase === 'retener' || fase === 'esperar') {
+    tonoSostener(duracionSegundos);
+    return;
+  }
 
   const audio = fase === 'inhalar' ? audioInhalar : audioExhalar;
 
@@ -57,6 +60,51 @@ function _detenerAudios() {
   audioExhalar.loop = false;
   audioExhalar.pause();
   audioExhalar.currentTime = 0;
+
+  // Detener tono de sostener si estaba sonando
+  if (_tonoOsc) {
+    try { _tonoOsc.stop(); } catch (_) {}
+    _tonoOsc = null;
+  }
+}
+
+// Tono suave de cuenco tibetano para "Sostené" y "Pausa"
+let _tonoCtx = null;
+let _tonoOsc = null;
+
+function tonoSostener(duracionSegundos) {
+  // Crear contexto si no existe
+  if (!_tonoCtx) {
+    _tonoCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_tonoCtx.state === 'suspended') _tonoCtx.resume();
+
+  // Cancelar tono anterior si hubiera uno
+  if (_tonoOsc) {
+    try { _tonoOsc.stop(); } catch (_) {}
+    _tonoOsc = null;
+  }
+
+  const ctx = _tonoCtx;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = 'sine';
+  osc.frequency.value = 432; // frecuencia relajante
+
+  const now = ctx.currentTime;
+  // Sube suave al inicio, se mantiene, baja suave al final
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.01, now + 0.8);
+  gain.gain.setValueAtTime(0.01, now + duracionSegundos - 1);
+  gain.gain.linearRampToValueAtTime(0, now + duracionSegundos);
+
+  osc.start(now);
+  osc.stop(now + duracionSegundos);
+  _tonoOsc = osc;
 }
 
 // ============================================
