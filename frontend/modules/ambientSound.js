@@ -22,7 +22,7 @@ const AUDIO_FILES = {
 
 const STORAGE_KEY = "numa_ambient_sound";
 const DEFAULT_SOUND = "lluvia";
-const VOLUME = 0.18;
+const VOLUME = 0.13;
 
 // ============================================
 // ESTADO INTERNO
@@ -211,7 +211,191 @@ function _inyectarEstilosSonido() {
   const style = document.createElement("style");
   style.id = "ambient-sound-styles";
   style.textContent = `
-    /* estilos iguales a los tuyos */
+  /* ============================================
+     OVERLAY FULLSCREEN
+  ============================================ */
+  #ambient-sound-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .as-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(47, 79, 69, 0.25);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+
+  /* ============================================
+     SHEET DESDE ABAJO
+  ============================================ */
+  .as-sheet {
+    position: relative;
+    width: 100%;
+    max-width: 430px;
+
+    background: linear-gradient(160deg, #eaf4ef 0%, #f6fbf8 100%);
+    border-radius: 24px 24px 0 0;
+
+    padding: 24px 20px 32px;
+
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+
+    box-shadow: 0 -8px 40px rgba(47, 79, 69, 0.15);
+  }
+
+  .as-sheet--visible {
+    transform: translateY(0);
+  }
+
+  /* ============================================
+     HEADER
+  ============================================ */
+  .as-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    margin-bottom: 20px;
+  }
+
+  .as-title {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #2f4f45;
+  }
+
+  .as-subtitle {
+    font-size: 0.82rem;
+    color: #8fb5a3;
+    margin-top: 2px;
+  }
+
+  .as-close {
+    position: absolute;
+    top: 0;
+    right: 0;
+
+    background: rgba(183, 211, 198, 0.5);
+    border: none;
+
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+
+    font-size: 1rem;
+    color: #4a6a5e;
+    cursor: pointer;
+  }
+
+  /* ============================================
+     LISTA DE SONIDOS
+  ============================================ */
+  .as-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .as-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 14px 16px;
+    border-radius: 16px;
+
+    background: white;
+    border: 2px solid transparent;
+
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .as-item:hover {
+    border-color: #b7d3c6;
+    background: #f0f8f4;
+  }
+
+  .as-item--active {
+    border-color: #7db89e;
+    background: #eaf4ef;
+  }
+
+  .as-icon {
+    font-size: 1.6rem;
+    line-height: 1;
+  }
+
+  .as-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    text-align: left;
+  }
+
+  .as-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #2f4f45;
+  }
+
+  .as-desc {
+    font-size: 0.78rem;
+    color: #8fb5a3;
+  }
+
+  .as-check {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #5a9e85;
+  }
+
+  .as-note {
+    text-align: center;
+    font-size: 0.78rem;
+    color: #a8c8b8;
+    margin-top: 16px;
+    font-style: italic;
+  }
+
+  /* ============================================
+     BOTÓN DEL MENÚ DE EJERCICIOS
+  ============================================ */
+  .btn-ambient-sound {
+    width: 100%;
+    max-width: 340px;
+
+    margin-bottom: 12px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 12px 16px;
+    border-radius: 16px;
+
+    background: rgba(255,255,255,0.85);
+    border: 1.5px solid #b7d3c6;
+
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #4a6a5e;
+
+    cursor: pointer;
+  }
   `;
   document.head.appendChild(style);
 }
