@@ -7,9 +7,9 @@ import { detenerSonidoAmbiente } from './ambientSound.js';
 // ESTADO INTERNO
 // ============================================
 
-let guiadoTimer = null;
+let guiadoTimer    = null;
 let guiadoInterval = null;
-let pasoIndex = 0;
+let pasoIndex      = 0;
 let datosEjercicioActual = null;
 let _onFeedbackRespuesta = null;
 
@@ -28,20 +28,20 @@ export function runGuiado(tipo, data) {
     if (!overlay) return;
 
     overlay.classList.remove("hidden");
-    
+
     document.getElementById("guiado-titulo").innerText = data.nombre;
-    const principal = document.getElementById("guiado-paso-principal");
+    const principal   = document.getElementById("guiado-paso-principal");
     const instruccion = document.getElementById("guiado-instruccion");
     const timerDisplay = document.getElementById("guiado-timer");
     const videoElement = document.getElementById("numa-video-pose");
-    
+
     timerDisplay.classList.add("hidden");
-    principal.innerText = "";
+    principal.innerText   = "";
     instruccion.innerText = "";
     if (videoElement) videoElement.style.display = "none";
-    
-    pasoIndex = 0; 
-    datosEjercicioActual = data; 
+
+    pasoIndex = 0;
+    datosEjercicioActual = data;
 
     const progressBar = document.getElementById("guiado-progress");
     if (progressBar) {
@@ -50,9 +50,8 @@ export function runGuiado(tipo, data) {
     }
 
     if (data.pasos && Array.isArray(data.pasos)) {
-        mostrarPaso(); 
-    } 
-    else if (data.duracion) {
+        mostrarPaso();
+    } else if (data.duracion) {
         runTimerSimple(data.duracion);
     }
 }
@@ -64,9 +63,8 @@ export function detenerGuiado() {
     document.getElementById("overlay-guiado").classList.add("hidden");
     clearTimeout(guiadoTimer);
     clearInterval(guiadoInterval);
-    guiadoTimer = null;
+    guiadoTimer    = null;
     guiadoInterval = null;
-    // 🎵 Detener sonido de fondo
     detenerSonidoAmbiente();
 }
 
@@ -76,23 +74,26 @@ export function detenerGuiado() {
 export function finalizarEjercicio() {
     clearInterval(guiadoInterval);
     clearTimeout(guiadoTimer);
+    guiadoTimer    = null;
+    guiadoInterval = null;
 
-    const principal = document.getElementById("guiado-paso-principal");
+    const principal   = document.getElementById("guiado-paso-principal");
     const instruccion = document.getElementById("guiado-instruccion");
-    
-    if (principal) principal.innerText = "¡Excelente!";
+
+    if (principal)   principal.innerText   = "¡Excelente!";
     if (instruccion) instruccion.innerText = "Terminaste. Bien hecho.";
 
     const video = document.getElementById("numa-video-pose");
     if (video) video.style.display = "none";
 
+    // Detener sonido AQUI, antes del timeout, con referencia todavía válida
+    detenerSonidoAmbiente();
+
     setTimeout(() => {
         const nombreEjercicio = datosEjercicioActual?.nombre || "el ejercicio";
 
-        // 🎵 Detener sonido de fondo (fade out antes del feedback)
-        detenerSonidoAmbiente();
-
-        detenerGuiado();
+        // Ocultar overlay SIN llamar detenerGuiado (que volvería a llamar detenerSonidoAmbiente)
+        document.getElementById("overlay-guiado").classList.add("hidden");
 
         mostrarFeedback(nombreEjercicio, (valor, textoOpcion) => {
             if (_onFeedbackRespuesta) {
@@ -100,7 +101,6 @@ export function finalizarEjercicio() {
                 _onFeedbackRespuesta(textoOpcion, respuestaNuma, valor);
             }
         });
-
     }, 2500);
 }
 
@@ -116,26 +116,26 @@ async function mostrarPaso() {
         return;
     }
 
-    const paso = data.pasos[pasoIndex];
+    const paso         = data.pasos[pasoIndex];
     const videoElement = document.getElementById("numa-video-pose");
     const sourceElement = document.getElementById("numa-video-source");
-    const principal = document.getElementById("guiado-paso-principal");
-    const instruccion = document.getElementById("guiado-instruccion");
-    const progressBar = document.getElementById("guiado-progress");
+    const principal    = document.getElementById("guiado-paso-principal");
+    const instruccion  = document.getElementById("guiado-instruccion");
+    const progressBar  = document.getElementById("guiado-progress");
 
-    principal.innerText = paso.pose || "Paso " + (pasoIndex + 1);
+    principal.innerText   = paso.pose || "Paso " + (pasoIndex + 1);
     instruccion.innerText = paso.guia || paso;
 
     if (paso.animacion) {
         videoElement.style.display = "block";
         videoElement.pause();
-        sourceElement.src = paso.animacion;
-        sourceElement.type = paso.animacion.toLowerCase().endsWith('.mov') 
-            ? 'video/quicktime' 
+        sourceElement.src  = paso.animacion;
+        sourceElement.type = paso.animacion.toLowerCase().endsWith('.mov')
+            ? 'video/quicktime'
             : 'video/mp4';
         videoElement.load();
         videoElement.oncanplay = async () => {
-            try { await videoElement.play(); } 
+            try { await videoElement.play(); }
             catch (e) { console.log("Play diferido"); }
             videoElement.oncanplay = null;
         };
@@ -159,21 +159,21 @@ async function mostrarPaso() {
 function runTimerSimple(duracion) {
     const timerDisplay = document.getElementById("guiado-timer");
     timerDisplay.classList.remove("hidden");
-    
+
     let tiempoRestante = duracion;
-    
+
     function actualizarTimer() {
-        const minutos = Math.floor(tiempoRestante / 60);
+        const minutos  = Math.floor(tiempoRestante / 60);
         const segundos = tiempoRestante % 60;
         timerDisplay.innerText = `${minutos}:${segundos.toString().padStart(2, '0')}`;
-        
+
         if (tiempoRestante <= 0) {
             finalizarEjercicio();
             return;
         }
         tiempoRestante--;
     }
-    
+
     actualizarTimer();
     guiadoInterval = setInterval(actualizarTimer, 1000);
 }

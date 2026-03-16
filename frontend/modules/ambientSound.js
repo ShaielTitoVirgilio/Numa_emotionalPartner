@@ -23,7 +23,7 @@ const AUDIO_FILES = {
 
 const STORAGE_KEY   = "numa_ambient_sound";
 const DEFAULT_SOUND = "lluvia";
-const VOLUME        = 0.14; // Volumen suave de fondo
+const VOLUME        = 0.18; // Volumen suave de fondo
 
 // ============================================
 // ESTADO INTERNO
@@ -68,12 +68,13 @@ export function iniciarSonidoAmbiente(id = null) {
 }
 
 export function detenerSonidoAmbiente() {
-  if (!_audio || !_isPlaying) return;
+  // Chequeamos solo _audio — puede haber audio huerfano si se llama dos veces seguidas
+  if (!_audio) return;
 
   const audioRef = _audio;
-  _audio = null;
-  _currentId = null;
-  _isPlaying = false;
+  _audio        = null;
+  _currentId    = null;
+  _isPlaying    = false;
   clearInterval(_fadeInterval);
 
   _fadeOut(audioRef, 1500);

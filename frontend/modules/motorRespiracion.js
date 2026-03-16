@@ -1,7 +1,7 @@
 // modules/motorRespiracion.js
 
 import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
-import { detenerSonidoAmbiente } from './ambientSound.js';  // ← NUEVO
+import { detenerSonidoAmbiente } from './ambientSound.js';
 
 // ============================================
 // ESTADO INTERNO
@@ -9,60 +9,66 @@ import { detenerSonidoAmbiente } from './ambientSound.js';  // ← NUEVO
 
 let intervalRespiracion = null;
 let _onFeedbackRespuesta = null;
-let audioTimeout = null;
 let finalizarTimeout = null;
 
 // ============================================
 // AUDIO — archivos reales
 // ============================================
 
-const audioInhalar = new Audio('/static/assets/inhale.mp3');
-const audioExhalar = new Audio('/static/assets/exhale.mp3');
-
-audioInhalar.preload = 'auto';
-audioExhalar.preload = 'auto';
+// Creamos los Audio al momento de usar para evitar problemas en mobile
+let _audioActivo = null;
+let _audioTimeout = null;
+let _tonoCtx = null;
+let _tonoOsc = null;
 
 function reproducirSonidoFase(fase, duracionSegundos) {
-  _detenerAudios();
+  // 1. Detener lo que estaba sonando
+  _pararAudioActivo();
 
   if (fase === 'retener' || fase === 'esperar') {
     tonoSostener(duracionSegundos);
     return;
   }
 
-  const audio = fase === 'inhalar' ? audioInhalar : audioExhalar;
+  // 2. Crear instancia nueva cada vez (más confiable en mobile/iOS)
+  const src = fase === 'inhalar'
+    ? '/static/assets/inhale.mp3'
+    : '/static/assets/exhale.mp3';
 
+  const audio = new Audio(src);
   audio.loop = true;
-  audio.currentTime = 0;
-  audio.play().catch(() => {});
+  _audioActivo = audio;
 
-  audioTimeout = setTimeout(() => {
+  // En iOS necesitamos intentar el play después de un tick
+  setTimeout(() => {
+    audio.play().catch(() => {});
+  }, 0);
+
+  // Cortar al terminar la fase
+  _audioTimeout = setTimeout(() => {
     audio.loop = false;
     audio.pause();
-    audio.currentTime = 0;
+    audio.src = "";
+    if (_audioActivo === audio) _audioActivo = null;
   }, duracionSegundos * 1000);
 }
 
-function _detenerAudios() {
-  clearTimeout(audioTimeout);
-  audioTimeout = null;
+function _pararAudioActivo() {
+  clearTimeout(_audioTimeout);
+  _audioTimeout = null;
 
-  audioInhalar.loop = false;
-  audioInhalar.pause();
-  audioInhalar.currentTime = 0;
-
-  audioExhalar.loop = false;
-  audioExhalar.pause();
-  audioExhalar.currentTime = 0;
+  if (_audioActivo) {
+    _audioActivo.loop = false;
+    _audioActivo.pause();
+    _audioActivo.src = "";
+    _audioActivo = null;
+  }
 
   if (_tonoOsc) {
     try { _tonoOsc.stop(); } catch (_) {}
     _tonoOsc = null;
   }
 }
-
-let _tonoCtx = null;
-let _tonoOsc = null;
 
 function tonoSostener(duracionSegundos) {
   if (!_tonoCtx) {
@@ -88,7 +94,7 @@ function tonoSostener(duracionSegundos) {
   const now = ctx.currentTime;
   gain.gain.setValueAtTime(0, now);
   gain.gain.linearRampToValueAtTime(0.01, now + 0.8);
-  gain.gain.setValueAtTime(0.01, now + duracionSegundos - 1);
+  gain.gain.setValueAtTime(0.01, now + Math.max(duracionSegundos - 1, 0.1));
   gain.gain.linearRampToValueAtTime(0, now + duracionSegundos);
 
   osc.start(now);
@@ -105,17 +111,17 @@ export function setFeedbackCallback(fn) {
 }
 
 export function runRespiracion(data) {
-  const overlay = document.getElementById("overlay-respiracion");
-  const titulo = document.getElementById("resp-titulo");
+  const overlay    = document.getElementById("overlay-respiracion");
+  const titulo     = document.getElementById("resp-titulo");
   const instruccion = document.getElementById("resp-text-instruccion");
-  const circulo = document.getElementById("resp-circle");
-  const subtext = document.getElementById("resp-subtext");
+  const circulo    = document.getElementById("resp-circle");
+  const subtext    = document.getElementById("resp-subtext");
 
   if (!overlay) return;
 
   overlay.classList.remove("hidden");
-  titulo.innerText = data.nombre;
-  subtext.innerText = data.instruccion || "";
+  titulo.innerText   = data.nombre;
+  subtext.innerText  = data.instruccion || "";
 
   const { inhalar, retener, exhalar, esperar } = data.patron;
 
@@ -123,41 +129,45 @@ export function runRespiracion(data) {
   const tRetener = retener * 1000;
   const tExhalar = exhalar * 1000;
   const tEsperar = esperar * 1000;
-
   const cicloTotal = tInhalar + tRetener + tExhalar + tEsperar;
 
   function ciclo() {
     if (overlay.classList.contains("hidden")) return;
 
+    // 1. INHALAR
     instruccion.innerText = "Inhalá";
     circulo.style.transition = `transform ${inhalar}s ease-in-out, background-color ${inhalar}s`;
     circulo.style.transform = "scale(1.5)";
     circulo.style.backgroundColor = "rgba(143, 181, 163, 0.8)";
     reproducirSonidoFase('inhalar', inhalar);
 
-    setTimeout(() => {
-      if (retener > 0) {
+    // 2. RETENER
+    if (retener > 0) {
+      setTimeout(() => {
+        if (overlay.classList.contains("hidden")) return;
         instruccion.innerText = "Sostené";
         reproducirSonidoFase('retener', retener);
-      }
+      }, tInhalar);
+    }
 
+    // 3. EXHALAR
+    setTimeout(() => {
+      if (overlay.classList.contains("hidden")) return;
+      instruccion.innerText = "Exhalá";
+      circulo.style.transition = `transform ${exhalar}s ease-in-out, background-color ${exhalar}s`;
+      circulo.style.transform = "scale(1)";
+      circulo.style.backgroundColor = "rgba(183, 211, 198, 0.6)";
+      reproducirSonidoFase('exhalar', exhalar);
+    }, tInhalar + tRetener);
+
+    // 4. ESPERAR
+    if (esperar > 0) {
       setTimeout(() => {
-        instruccion.innerText = "Exhalá";
-        circulo.style.transition = `transform ${exhalar}s ease-in-out, background-color ${exhalar}s`;
-        circulo.style.transform = "scale(1)";
-        circulo.style.backgroundColor = "rgba(183, 211, 198, 0.6)";
-        reproducirSonidoFase('exhalar', exhalar);
-
-        setTimeout(() => {
-          if (esperar > 0) {
-            instruccion.innerText = "Pausa";
-            reproducirSonidoFase('esperar', esperar);
-          }
-        }, tExhalar);
-
-      }, tRetener);
-
-    }, tInhalar);
+        if (overlay.classList.contains("hidden")) return;
+        instruccion.innerText = "Pausa";
+        reproducirSonidoFase('esperar', esperar);
+      }, tInhalar + tRetener + tExhalar);
+    }
   }
 
   ciclo();
@@ -174,27 +184,28 @@ export function detenerRespiracion() {
   intervalRespiracion = null;
   clearTimeout(finalizarTimeout);
   finalizarTimeout = null;
-  _detenerAudios();
-  detenerSonidoAmbiente();  // ← NUEVO: apagar sonido de fondo al cerrar con ✕
+  _pararAudioActivo();
+  detenerSonidoAmbiente();
 }
 
 // ============================================
-// FUNCIONES PRIVADAS
+// PRIVADO
 // ============================================
 
 function finalizarRespiracion(nombreEjercicio) {
   clearInterval(intervalRespiracion);
   intervalRespiracion = null;
-  _detenerAudios();
-  detenerSonidoAmbiente();  // ← NUEVO: apagar sonido de fondo al terminar el minuto
+  clearTimeout(finalizarTimeout);
+  finalizarTimeout = null;
+  _pararAudioActivo();
 
-  const titulo = document.getElementById("resp-titulo");
+  const titulo      = document.getElementById("resp-titulo");
   const instruccion = document.getElementById("resp-text-instruccion");
-  const circulo = document.getElementById("resp-circle");
+  const circulo     = document.getElementById("resp-circle");
 
-  if (titulo) titulo.innerText = "¡Excelente!";
+  if (titulo)      titulo.innerText     = "¡Excelente!";
   if (instruccion) instruccion.innerText = "Terminaste. Bien hecho.";
-  if (circulo) circulo.style.display = "none";
+  if (circulo)     circulo.style.display = "none";
 
   setTimeout(() => {
     detenerRespiracion();
