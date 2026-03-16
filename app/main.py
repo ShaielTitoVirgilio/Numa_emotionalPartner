@@ -1,6 +1,6 @@
 # app/main.py
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile
@@ -13,6 +13,7 @@ import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from starlette.requests import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.crisis_detector import detectar_crisis, log_crisis_event
 
 limiter = Limiter(key_func=get_remote_address)
@@ -112,6 +113,18 @@ class FeedbackRequest(BaseModel):
 # ==========================
 # ROUTES ESTÁTICAS
 # ==========================
+
+class NoCacheJSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.endswith(".js") or path.endswith(".css"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+app.add_middleware(NoCacheJSMiddleware)
 
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
