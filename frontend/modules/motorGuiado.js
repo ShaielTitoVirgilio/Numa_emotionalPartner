@@ -1,6 +1,7 @@
 // modules/motorGuiado.js
 
 import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+import { detenerSonidoAmbiente } from './ambientSound.js';
 
 // ============================================
 // ESTADO INTERNO
@@ -18,17 +19,10 @@ const TIEMPO_POR_PASO = 15; // segundos
 // FUNCIONES PÚBLICAS
 // ============================================
 
-/**
- * Configura el callback para cuando el usuario responde el feedback.
- * Debe ser llamado desde app.js antes de runGuiado.
- */
 export function setFeedbackCallback(fn) {
   _onFeedbackRespuesta = fn;
 }
 
-/**
- * Ejecuta ejercicios guiados (meditación/yoga)
- */
 export function runGuiado(tipo, data) {
     const overlay = document.getElementById("overlay-guiado");
     if (!overlay) return;
@@ -72,6 +66,8 @@ export function detenerGuiado() {
     clearInterval(guiadoInterval);
     guiadoTimer = null;
     guiadoInterval = null;
+    // 🎵 Detener sonido de fondo
+    detenerSonidoAmbiente();
 }
 
 /**
@@ -92,6 +88,10 @@ export function finalizarEjercicio() {
 
     setTimeout(() => {
         const nombreEjercicio = datosEjercicioActual?.nombre || "el ejercicio";
+
+        // 🎵 Detener sonido de fondo (fade out antes del feedback)
+        detenerSonidoAmbiente();
+
         detenerGuiado();
 
         mostrarFeedback(nombreEjercicio, (valor, textoOpcion) => {

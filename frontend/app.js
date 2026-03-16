@@ -15,6 +15,7 @@ import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.j
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
 import { initFeedbackTab } from './modules/feedbackTab.js';
+import { mostrarSelectorSonido } from './modules/ambientSound.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -34,6 +35,8 @@ window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
 window.mostrarProximamente = mostrarProximamente;
 window.initFeedbackTab = initFeedbackTab;
+window.mostrarSelectorSonido = mostrarSelectorSonido;
+
 // ============================================
 // INICIALIZACIÓN
 // ============================================
@@ -56,8 +59,6 @@ async function init() {
     } else {
       await inicializarChat();
       agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
-
-      // Aquí mostrás el cartel
       mostrarAvisoTesterCada();
     }
   } catch (e) {

@@ -1,12 +1,13 @@
 // modules/utils.js
 import { runRespiracion } from './motorRespiracion.js';
 import { runGuiado } from './motorGuiado.js';
+import { iniciarSonidoAmbiente, detenerSonidoAmbiente } from './ambientSound.js';
 
 // ============================================
 // CONSTANTES
 // ============================================
 
-export const TIEMPO_ENFRIAMIENTO = 200000; //  5 minutos
+export const TIEMPO_ENFRIAMIENTO = 200000; // ~3 min
 
 
 // ============================================
@@ -14,8 +15,8 @@ export const TIEMPO_ENFRIAMIENTO = 200000; //  5 minutos
 // ============================================
 
 /**
- * Función dispatcher que inicia el ejercicio correcto
- * Muestra pantalla de preparación antes de comenzar
+ * Función dispatcher que inicia el ejercicio correcto.
+ * Arranca el sonido de fondo automáticamente.
  */
 export function iniciarEjercicio(tipo, data) {
     const prep = document.getElementById("prep-screen");
@@ -32,17 +33,37 @@ export function iniciarEjercicio(tipo, data) {
     // Esperar 3 segundos antes de empezar
     setTimeout(() => {
         prep.classList.add("hidden");
-        
-        // Dispatcher: decidir qué motor usar
+ 
+        // 🎵 Sonido de fondo solo en meditacion, yoga y lectura
+        const conSonido = ["meditacion", "yoga", "lectura"];
+        if (conSonido.includes(tipo)) {
+            iniciarSonidoAmbiente();
+        }
+ 
         if (tipo === "respiracion") {
             runRespiracion(data);
         } 
         else if (tipo === "meditacion" || tipo === "yoga") {
             runGuiado(tipo, data);
         }
+        else if (tipo === "lectura") {
+            if (window.showReading) window.showReading();
+        }
     }, 3000);
 }
-// utils.js
+
+/**
+ * Detiene el sonido de fondo (llamado cuando el ejercicio termina o se cierra)
+ * Los motores (motorRespiracion, motorGuiado) llaman esto al finalizar/detener.
+ */
+export function pararSonidoAmbiente() {
+    detenerSonidoAmbiente();
+}
+
+// ============================================
+// AVISO TESTER
+// ============================================
+
 export function mostrarAvisoTesterCada() {
   const modal = document.createElement("div");
   modal.id = "tester-modal";
@@ -78,6 +99,7 @@ export function mostrarAvisoTesterCada() {
     modal.remove();
   };
 }
+
 /**
  * Obtiene un ejercicio del catálogo por ID
  */

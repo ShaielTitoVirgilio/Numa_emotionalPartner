@@ -1,6 +1,7 @@
 // modules/motorRespiracion.js
 
 import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+import { detenerSonidoAmbiente } from './ambientSound.js';  // ← NUEVO
 
 // ============================================
 // ESTADO INTERNO
@@ -9,7 +10,7 @@ import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
 let intervalRespiracion = null;
 let _onFeedbackRespuesta = null;
 let audioTimeout = null;
-let finalizarTimeout = null; // timeout del minuto completo
+let finalizarTimeout = null;
 
 // ============================================
 // AUDIO — archivos reales
@@ -21,13 +22,7 @@ const audioExhalar = new Audio('/static/assets/exhale.mp3');
 audioInhalar.preload = 'auto';
 audioExhalar.preload = 'auto';
 
-/**
- * Reproduce el audio de la fase durante exactamente N segundos.
- * Si el archivo es más corto que la fase, lo loopea.
- * Si es más largo, lo corta.
- */
 function reproducirSonidoFase(fase, duracionSegundos) {
-  // Detener cualquier audio anterior
   _detenerAudios();
 
   if (fase === 'retener' || fase === 'esperar') {
@@ -37,11 +32,10 @@ function reproducirSonidoFase(fase, duracionSegundos) {
 
   const audio = fase === 'inhalar' ? audioInhalar : audioExhalar;
 
-  audio.loop = true; // loopea si el archivo es más corto que la fase
+  audio.loop = true;
   audio.currentTime = 0;
-  audio.play().catch(() => {}); // silencia error si el browser bloquea
+  audio.play().catch(() => {});
 
-  // Cortar exactamente cuando termina la fase
   audioTimeout = setTimeout(() => {
     audio.loop = false;
     audio.pause();
@@ -61,25 +55,21 @@ function _detenerAudios() {
   audioExhalar.pause();
   audioExhalar.currentTime = 0;
 
-  // Detener tono de sostener si estaba sonando
   if (_tonoOsc) {
     try { _tonoOsc.stop(); } catch (_) {}
     _tonoOsc = null;
   }
 }
 
-// Tono suave de cuenco tibetano para "Sostené" y "Pausa"
 let _tonoCtx = null;
 let _tonoOsc = null;
 
 function tonoSostener(duracionSegundos) {
-  // Crear contexto si no existe
   if (!_tonoCtx) {
     _tonoCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
   if (_tonoCtx.state === 'suspended') _tonoCtx.resume();
 
-  // Cancelar tono anterior si hubiera uno
   if (_tonoOsc) {
     try { _tonoOsc.stop(); } catch (_) {}
     _tonoOsc = null;
@@ -93,10 +83,9 @@ function tonoSostener(duracionSegundos) {
   gain.connect(ctx.destination);
 
   osc.type = 'sine';
-  osc.frequency.value = 432; // frecuencia relajante
+  osc.frequency.value = 432;
 
   const now = ctx.currentTime;
-  // Sube suave al inicio, se mantiene, baja suave al final
   gain.gain.setValueAtTime(0, now);
   gain.gain.linearRampToValueAtTime(0.01, now + 0.8);
   gain.gain.setValueAtTime(0.01, now + duracionSegundos - 1);
@@ -140,7 +129,6 @@ export function runRespiracion(data) {
   function ciclo() {
     if (overlay.classList.contains("hidden")) return;
 
-    // 1. INHALAR
     instruccion.innerText = "Inhalá";
     circulo.style.transition = `transform ${inhalar}s ease-in-out, background-color ${inhalar}s`;
     circulo.style.transform = "scale(1.5)";
@@ -148,14 +136,12 @@ export function runRespiracion(data) {
     reproducirSonidoFase('inhalar', inhalar);
 
     setTimeout(() => {
-      // 2. RETENER
       if (retener > 0) {
         instruccion.innerText = "Sostené";
         reproducirSonidoFase('retener', retener);
       }
 
       setTimeout(() => {
-        // 3. EXHALAR
         instruccion.innerText = "Exhalá";
         circulo.style.transition = `transform ${exhalar}s ease-in-out, background-color ${exhalar}s`;
         circulo.style.transform = "scale(1)";
@@ -163,7 +149,6 @@ export function runRespiracion(data) {
         reproducirSonidoFase('exhalar', exhalar);
 
         setTimeout(() => {
-          // 4. ESPERAR
           if (esperar > 0) {
             instruccion.innerText = "Pausa";
             reproducirSonidoFase('esperar', esperar);
@@ -190,6 +175,7 @@ export function detenerRespiracion() {
   clearTimeout(finalizarTimeout);
   finalizarTimeout = null;
   _detenerAudios();
+  detenerSonidoAmbiente();  // ← NUEVO: apagar sonido de fondo al cerrar con ✕
 }
 
 // ============================================
@@ -200,6 +186,7 @@ function finalizarRespiracion(nombreEjercicio) {
   clearInterval(intervalRespiracion);
   intervalRespiracion = null;
   _detenerAudios();
+  detenerSonidoAmbiente();  // ← NUEVO: apagar sonido de fondo al terminar el minuto
 
   const titulo = document.getElementById("resp-titulo");
   const instruccion = document.getElementById("resp-text-instruccion");

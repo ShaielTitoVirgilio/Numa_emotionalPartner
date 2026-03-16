@@ -1,4 +1,4 @@
-const CACHE_NAME = 'numa-v1';
+const CACHE_NAME = 'numa-v2';
 const ASSETS = [
   '/',
   '/static/styles.css',
@@ -15,6 +15,7 @@ const ASSETS = [
   '/static/modules/lectura.js',
   '/static/modules/utils.js',
   '/static/modules/feedbackTab.js',
+  '/static/modules/ambientSound.js',
 ];
 
 // Instalación — cachear assets estáticos
@@ -37,7 +38,6 @@ self.addEventListener('activate', event => {
 
 // Fetch — red primero, cache como fallback
 self.addEventListener('fetch', event => {
-  // Las llamadas a la API siempre van a la red
   if (event.request.url.includes('/chat') ||
       event.request.url.includes('/login') ||
       event.request.url.includes('/register') ||

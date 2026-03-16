@@ -1,5 +1,5 @@
 // modules/lectura.js
-
+import { detenerSonidoAmbiente } from './ambientSound.js';
 // ============================================
 // DATOS DE LECTURAS
 // ============================================
@@ -31,6 +31,7 @@ export function showReading() {
  */
 export function closeReading() {
     document.getElementById("reading").classList.add("hidden");
+    detenerSonidoAmbiente();  
 }
 
 /**
