@@ -401,7 +401,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
 # ADMIN
 # ==========================
 
-ADMIN_KEY = "numa-admin-2024"  # ← cambialo por algo tuyo
+ADMIN_KEY = "sape4pikey007"  # ← cambialo por algo tuyo
 
 @app.get("/admin/feedback")
 def admin_feedback(

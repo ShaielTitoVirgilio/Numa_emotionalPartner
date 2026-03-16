@@ -1,4 +1,4 @@
-const CACHE_NAME = 'numa-v4';
+const CACHE_NAME = 'numa-v5';
 const ASSETS = [
   '/',
   '/static/styles.css',
