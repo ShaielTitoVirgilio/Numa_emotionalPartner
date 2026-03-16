@@ -23,7 +23,7 @@ const AUDIO_FILES = {
 
 const STORAGE_KEY   = "numa_ambient_sound";
 const DEFAULT_SOUND = "lluvia";
-const VOLUME        = 0.18; // Volumen suave de fondo
+const VOLUME        = 0.14; // Volumen suave de fondo
 
 // ============================================
 // ESTADO INTERNO
