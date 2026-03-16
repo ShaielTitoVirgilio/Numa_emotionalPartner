@@ -58,11 +58,11 @@ async function init() {
       showOnboarding(user.user_id);
     } else {
       await inicializarChat();
-      agregarMensaje(`Bienvenido de vuelta 🐼 ¿Cómo estás hoy?`, "oso");
+      agregarMensaje(`Bienvenido ${user.name} 🐼 Me alegra tenerte de vuelta`, "oso");
       mostrarAvisoTesterCada();
     }
   } catch (e) {
-    agregarMensaje("Hola 🐼 ¿Cómo estás hoy?", "oso");
+    agregarMensaje("Hola 🐼 ¿Cómo estás?", "oso");
   }
 }
 init();
