@@ -13,7 +13,6 @@ export const SONIDOS_AMBIENTE = [
   { id: "ninguno", label: "🔇 Sin sonido",    desc: "Solo silencio" },
 ];
 
-// Mapeo id → archivo en /static/assets/
 const AUDIO_FILES = {
   lluvia: "/static/assets/rain_loop.mp3",
   olas:   "/static/assets/wave_loop.mp3",
@@ -23,16 +22,24 @@ const AUDIO_FILES = {
 
 const STORAGE_KEY   = "numa_ambient_sound";
 const DEFAULT_SOUND = "lluvia";
-const VOLUME        = 0.18; // Volumen suave de fondo
+const VOLUME        = 0.18;
 
 // ============================================
 // ESTADO INTERNO
 // ============================================
 
-let _audio       = null;  // HTMLAudioElement activo
+let _audio       = null;
 let _currentId   = null;
 let _isPlaying   = false;
 let _fadeInterval = null;
+// FIX: flag para evitar que un fade-out viejo reactive audio
+let _stopGeneration = 0;
+
+// ============================================
+// INYECTAR ESTILOS AL CARGAR EL MÓDULO
+// (antes era solo al abrir el panel — por eso el botón salía sin estilo)
+// ============================================
+_inyectarEstilosSonido();
 
 // ============================================
 // FUNCIONES PÚBLICAS
@@ -49,44 +56,52 @@ export function guardarPreferenciaSonido(id) {
 export function iniciarSonidoAmbiente(id = null) {
   const sonidoId = id || getSonidoGuardado();
   if (sonidoId === "ninguno") return;
+  // Ya está sonando el mismo → no hacer nada
   if (_isPlaying && _currentId === sonidoId) return;
 
-  detenerSonidoAmbiente();
+  // Detener lo anterior de forma inmediata (sin fade, para evitar overlap)
+  _detenerInmediato();
 
   const src = AUDIO_FILES[sonidoId];
   if (!src) return;
 
-  _audio = new Audio(src);
-  _audio.loop = true;
-  _audio.volume = 0;
-  _audio.play().catch(() => {});
+  const audio = new Audio(src);
+  audio.loop   = true;
+  audio.volume = 0;
 
-  _fadeIn(2000);
-
+  _audio     = audio;
   _currentId = sonidoId;
   _isPlaying = true;
+
+  audio.play().catch(() => {});
+  _fadeIn(2000);
 }
 
 export function detenerSonidoAmbiente() {
-  // Chequeamos solo _audio — puede haber audio huerfano si se llama dos veces seguidas
   if (!_audio) return;
 
   const audioRef = _audio;
-  _audio        = null;
-  _currentId    = null;
-  _isPlaying    = false;
-  clearInterval(_fadeInterval);
+  const gen      = ++_stopGeneration; // generación actual
 
-  _fadeOut(audioRef, 1500);
+  _audio     = null;
+  _currentId = null;
+  _isPlaying = false;
+  clearInterval(_fadeInterval);
+  _fadeInterval = null;
+
+  // Fade-out usando la generación para que no interfiera con el siguiente audio
+  _fadeOut(audioRef, 1500, gen);
 }
 
 export function cambiarSonido(id) {
   guardarPreferenciaSonido(id);
-  // Notificar a menuEjercicios para que actualice el label en tiempo real
   window.dispatchEvent(new CustomEvent("numa:soundChanged", { detail: { id } }));
+
   if (_isPlaying) {
+    // FIX: detener inmediato + esperar solo el fade-out antes de arrancar el nuevo
     detenerSonidoAmbiente();
     if (id !== "ninguno") {
+      // 1700ms = duración del fade-out (1500ms) + pequeño margen
       setTimeout(() => iniciarSonidoAmbiente(id), 1700);
     }
   }
@@ -125,7 +140,6 @@ export function mostrarSelectorSonido() {
     </div>
   `;
 
-  _inyectarEstilosSonido();
   document.body.appendChild(panel);
 
   requestAnimationFrame(() => panel.querySelector('.as-sheet').classList.add('as-sheet--visible'));
@@ -156,8 +170,22 @@ export function mostrarSelectorSonido() {
 }
 
 // ============================================
-// HELPERS DE FADE
+// HELPERS INTERNOS
 // ============================================
+
+/** Detiene el audio SIN fade (para cambios inmediatos) */
+function _detenerInmediato() {
+  clearInterval(_fadeInterval);
+  _fadeInterval = null;
+  if (_audio) {
+    _audio.pause();
+    _audio.src = "";
+    _audio     = null;
+  }
+  _currentId = null;
+  _isPlaying = false;
+  _stopGeneration++; // invalida cualquier fade-out pendiente
+}
 
 function _fadeIn(durationMs) {
   clearInterval(_fadeInterval);
@@ -174,12 +202,19 @@ function _fadeIn(durationMs) {
   }, stepTime);
 }
 
-function _fadeOut(audioRef, durationMs) {
+/** Fade-out sobre una referencia específica.
+ *  `gen` evita que un fade-out viejo interfiera con el audio nuevo. */
+function _fadeOut(audioRef, durationMs, gen) {
   const steps    = 20;
   const stepTime = durationMs / steps;
-  const stepVol  = audioRef.volume / steps;
+  const stepVol  = (audioRef.volume || VOLUME) / steps;
 
   const interval = setInterval(() => {
+    // Si ya arrancó un nuevo ciclo de audio, cancelar este fade-out
+    if (gen !== _stopGeneration) {
+      clearInterval(interval);
+      return;
+    }
     audioRef.volume = Math.max(0, audioRef.volume - stepVol);
     if (audioRef.volume <= 0) {
       clearInterval(interval);
@@ -190,7 +225,8 @@ function _fadeOut(audioRef, durationMs) {
 }
 
 // ============================================
-// ESTILOS DEL PANEL
+// ESTILOS DEL PANEL + BOTÓN
+// (movido a función que se llama al importar el módulo)
 // ============================================
 
 function _inyectarEstilosSonido() {

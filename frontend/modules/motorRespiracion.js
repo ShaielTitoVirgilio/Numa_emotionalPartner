@@ -12,77 +12,108 @@ let _onFeedbackRespuesta = null;
 let finalizarTimeout = null;
 
 // ============================================
-// AUDIO — archivos reales
+// AUDIO
+// FIX: usamos AudioContext para TODOS los sonidos de fase.
+// new Audio() dentro de setTimeout es bloqueado por iOS/Android
+// porque ya no está en el mismo tick del evento del usuario.
+// AudioContext creado en el primer click del usuario queda
+// "desbloqueado" y puede reproducir audio en cualquier momento.
 // ============================================
 
-// Creamos los Audio al momento de usar para evitar problemas en mobile
-let _audioActivo = null;
-let _audioTimeout = null;
 let _tonoCtx = null;
-let _tonoOsc = null;
+let _fuenteActiva = null;   // AudioBufferSourceNode o OscillatorNode activo
+let _gainActivo   = null;
+let _audioTimeout = null;
 
-function reproducirSonidoFase(fase, duracionSegundos) {
-  // 1. Detener lo que estaba sonando
-  _pararAudioActivo();
+// Cache de buffers decodificados para no releer el archivo en cada fase
+const _bufferCache = {};
 
-  if (fase === 'retener' || fase === 'esperar') {
-    tonoSostener(duracionSegundos);
-    return;
+/** Desbloquear AudioContext en el primer gesto del usuario */
+function _getCtx() {
+  if (!_tonoCtx) {
+    _tonoCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
+  if (_tonoCtx.state === 'suspended') _tonoCtx.resume();
+  return _tonoCtx;
+}
 
-  // 2. Crear instancia nueva cada vez (más confiable en mobile/iOS)
-  const src = fase === 'inhalar'
-    ? '/static/assets/inhale.mp3'
-    : '/static/assets/exhale.mp3';
+/** Carga y cachea un archivo de audio como AudioBuffer */
+async function _cargarBuffer(src) {
+  if (_bufferCache[src]) return _bufferCache[src];
+  try {
+    const res  = await fetch(src);
+    const arr  = await res.arrayBuffer();
+    const ctx  = _getCtx();
+    const buf  = await ctx.decodeAudioData(arr);
+    _bufferCache[src] = buf;
+    return buf;
+  } catch (e) {
+    console.warn('No se pudo cargar audio:', src, e);
+    return null;
+  }
+}
 
-  const audio = new Audio(src);
-  audio.loop = true;
-  _audioActivo = audio;
-
-  // En iOS necesitamos intentar el play después de un tick
-  setTimeout(() => {
-    audio.play().catch(() => {});
-  }, 0);
-
-  // Cortar al terminar la fase
-  _audioTimeout = setTimeout(() => {
-    audio.loop = false;
-    audio.pause();
-    audio.src = "";
-    if (_audioActivo === audio) _audioActivo = null;
-  }, duracionSegundos * 1000);
+/** Precarga inhale y exhale al arrancar para que estén listos */
+async function _precargarAudios() {
+  await _cargarBuffer('/static/assets/inhale.mp3');
+  await _cargarBuffer('/static/assets/exhale.mp3');
 }
 
 function _pararAudioActivo() {
   clearTimeout(_audioTimeout);
   _audioTimeout = null;
 
-  if (_audioActivo) {
-    _audioActivo.loop = false;
-    _audioActivo.pause();
-    _audioActivo.src = "";
-    _audioActivo = null;
+  if (_fuenteActiva) {
+    try { _fuenteActiva.stop(); } catch (_) {}
+    _fuenteActiva = null;
   }
-
-  if (_tonoOsc) {
-    try { _tonoOsc.stop(); } catch (_) {}
-    _tonoOsc = null;
-  }
+  _gainActivo = null;
 }
 
-function tonoSostener(duracionSegundos) {
-  if (!_tonoCtx) {
-    _tonoCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (_tonoCtx.state === 'suspended') _tonoCtx.resume();
+async function reproducirSonidoFase(fase, duracionSegundos) {
+  _pararAudioActivo();
 
-  if (_tonoOsc) {
-    try { _tonoOsc.stop(); } catch (_) {}
-    _tonoOsc = null;
+  const ctx = _getCtx();
+
+  if (fase === 'retener' || fase === 'esperar') {
+    _tonoSostener(ctx, duracionSegundos);
+    return;
   }
 
-  const ctx = _tonoCtx;
-  const osc = ctx.createOscillator();
+  const src = fase === 'inhalar'
+    ? '/static/assets/inhale.mp3'
+    : '/static/assets/exhale.mp3';
+
+  const buffer = await _cargarBuffer(src);
+  if (!buffer) return;
+
+  // Volver a chequear que no se haya cancelado mientras cargaba
+  if (fase === 'inhalar' && !intervalRespiracion && !finalizarTimeout) return;
+
+  const source = ctx.createBufferSource();
+  const gain   = ctx.createGain();
+
+  source.buffer = buffer;
+  source.loop   = true;
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  gain.gain.value = 0.8;
+
+  source.start(0);
+  _fuenteActiva = source;
+  _gainActivo   = gain;
+
+  // Parar al terminar la fase
+  _audioTimeout = setTimeout(() => {
+    if (_fuenteActiva === source) {
+      try { source.stop(); } catch (_) {}
+      _fuenteActiva = null;
+    }
+  }, duracionSegundos * 1000);
+}
+
+function _tonoSostener(ctx, duracionSegundos) {
+  const osc  = ctx.createOscillator();
   const gain = ctx.createGain();
 
   osc.connect(gain);
@@ -99,7 +130,8 @@ function tonoSostener(duracionSegundos) {
 
   osc.start(now);
   osc.stop(now + duracionSegundos);
-  _tonoOsc = osc;
+  _fuenteActiva = osc;
+  _gainActivo   = gain;
 }
 
 // ============================================
@@ -111,25 +143,30 @@ export function setFeedbackCallback(fn) {
 }
 
 export function runRespiracion(data) {
-  const overlay    = document.getElementById("overlay-respiracion");
-  const titulo     = document.getElementById("resp-titulo");
+  const overlay     = document.getElementById("overlay-respiracion");
+  const titulo      = document.getElementById("resp-titulo");
   const instruccion = document.getElementById("resp-text-instruccion");
-  const circulo    = document.getElementById("resp-circle");
-  const subtext    = document.getElementById("resp-subtext");
+  const circulo     = document.getElementById("resp-circle");
+  const subtext     = document.getElementById("resp-subtext");
 
   if (!overlay) return;
 
   overlay.classList.remove("hidden");
-  titulo.innerText   = data.nombre;
-  subtext.innerText  = data.instruccion || "";
+  titulo.innerText  = data.nombre;
+  subtext.innerText = data.instruccion || "";
 
   const { inhalar, retener, exhalar, esperar } = data.patron;
 
-  const tInhalar = inhalar * 1000;
-  const tRetener = retener * 1000;
-  const tExhalar = exhalar * 1000;
-  const tEsperar = esperar * 1000;
+  const tInhalar  = inhalar * 1000;
+  const tRetener  = retener * 1000;
+  const tExhalar  = exhalar * 1000;
+  const tEsperar  = esperar * 1000;
   const cicloTotal = tInhalar + tRetener + tExhalar + tEsperar;
+
+  // Precargar audios en el mismo tick del gesto del usuario
+  // (esto desbloquea el AudioContext en iOS)
+  _getCtx();
+  _precargarAudios();
 
   function ciclo() {
     if (overlay.classList.contains("hidden")) return;
@@ -203,7 +240,7 @@ function finalizarRespiracion(nombreEjercicio) {
   const instruccion = document.getElementById("resp-text-instruccion");
   const circulo     = document.getElementById("resp-circle");
 
-  if (titulo)      titulo.innerText     = "¡Excelente!";
+  if (titulo)      titulo.innerText      = "¡Excelente!";
   if (instruccion) instruccion.innerText = "Terminaste. Bien hecho.";
   if (circulo)     circulo.style.display = "none";
 
