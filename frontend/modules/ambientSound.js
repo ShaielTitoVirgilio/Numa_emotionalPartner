@@ -94,17 +94,14 @@ export function detenerSonidoAmbiente() {
 }
 
 export function cambiarSonido(id) {
-  guardarPreferenciaSonido(id);
-  window.dispatchEvent(new CustomEvent("numa:soundChanged", { detail: { id } }));
+    guardarPreferenciaSonido(id);
+    window.dispatchEvent(new CustomEvent("numa:soundChanged", { detail: { id } }));
 
-  if (_isPlaying) {
-    // FIX: detener inmediato + esperar solo el fade-out antes de arrancar el nuevo
+
     detenerSonidoAmbiente();
     if (id !== "ninguno") {
-      // 1700ms = duración del fade-out (1500ms) + pequeño margen
-      setTimeout(() => iniciarSonidoAmbiente(id), 1700);
+        setTimeout(() => iniciarSonidoAmbiente(id), 200); // pequeño margen
     }
-  }
 }
 
 export function mostrarSelectorSonido() {
@@ -135,7 +132,7 @@ export function mostrarSelectorSonido() {
             <span class="as-check">${s.id === actual ? '✓' : ''}</span>
           </button>
         `).join('')}
-      </div>
+      </div>]
       <p class="as-note">Se activa al iniciar meditación, yoga y lectura</p>
     </div>
   `;
