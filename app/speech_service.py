@@ -29,3 +29,7 @@ def speech_to_text(audio_bytes: bytes, filename: str) -> str:
 
     res.raise_for_status()
     return res.json()["text"]
+
+def speech_to_text(audio_bytes: bytes, filename: str) -> str:
+    print(f"ELEVEN_API_KEY presente: {bool(ELEVEN_API_KEY)}")
+    print(f"KEY empieza con: {ELEVEN_API_KEY[:8] if ELEVEN_API_KEY else 'NONE'}")
