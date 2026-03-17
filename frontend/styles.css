@@ -1009,3 +1009,25 @@
        height: 180px;
      }
    }
+
+   .mic-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 6px;
+  margin-right: 6px;
+  transition: transform 0.2s ease;
+}
+
+.mic-btn.active {
+  color: #d85c5c;
+  animation: mic-pulse 1.2s infinite;
+}
+
+@keyframes mic-pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+

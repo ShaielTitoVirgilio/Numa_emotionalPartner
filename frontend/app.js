@@ -16,6 +16,9 @@ import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
 import { initFeedbackTab } from './modules/feedbackTab.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
+import { toggleMic } from "./modules/chat.js";
+
+
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -36,6 +39,7 @@ window.showOnboarding = showOnboarding;
 window.mostrarProximamente = mostrarProximamente;
 window.initFeedbackTab = initFeedbackTab;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
+window.toggleMic = toggleMic;
 
 // ============================================
 // INICIALIZACIÓN
@@ -58,7 +62,7 @@ async function init() {
       showOnboarding(user.user_id);
     } else {
       await inicializarChat();
-      agregarMensaje(`Bienvenido ${user.name} 🐼 Me alegra tenerte de vuelta`, "oso");
+      agregarMensaje(`Bienvenido ${user.name} 🐼 Me alegra que estes aqui de vuelta`, "oso");
       mostrarAvisoTesterCada();
     }
   } catch (e) {

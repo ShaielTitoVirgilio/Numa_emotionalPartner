@@ -1,6 +1,6 @@
 # app/main.py
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile
@@ -15,6 +15,9 @@ from slowapi.util import get_remote_address
 from starlette.requests import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.crisis_detector import detectar_crisis, log_crisis_event
+from app.speech_service import speech_to_text
+
+
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -305,6 +308,13 @@ def _desactivar_memorias(ids: List[str]):
 # ==========================
 # CHAT
 # ==========================
+@app.post("/speech-to-text")
+async def stt_endpoint(file: UploadFile = File(...)):
+    audio_bytes = await file.read()
+    text = speech_to_text(audio_bytes, file.filename)
+    return {"text": text}
+
+
 
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit("18/minute")

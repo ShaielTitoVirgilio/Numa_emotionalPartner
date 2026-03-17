@@ -10,6 +10,10 @@ import { mostrarSurvey } from './feedbackSurvey.js';
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
 
 //Constantes para survey
 let sessionStartMs = Date.now();
@@ -402,6 +406,8 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
   chat.scrollTop = chat.scrollHeight;
 }
 
+
+
 // ============================================
 // EXPORTS
 // ============================================
@@ -428,6 +434,80 @@ export function mostrarProximamente() {
   `;
   chat.appendChild(tarjeta);
   chat.scrollTop = chat.scrollHeight;
+}
+
+export async function toggleMic() {
+  const micBtn = document.getElementById("mic-btn");
+
+  if (!isRecording) {
+    // ───────────────
+    // ▶️ EMPIEZA A GRABAR
+    // ───────────────
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.start();
+    isRecording = true;
+
+    // ✅ UI: prender mic
+    micBtn?.classList.add("active");
+
+    // ✅ Oso escucha
+    window.setBearState?.("listening");
+
+  } else {
+    // ───────────────
+    // ⏹️ TERMINA DE GRABAR
+    // ───────────────
+    mediaRecorder.stop();
+    isRecording = false;
+
+    // ✅ UI: apagar mic
+    micBtn?.classList.remove("active");
+
+    // ✅ Oso piensa
+    window.setBearState?.("thinking");
+
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(audioChunks, { type: "audio/webm" });
+      await procesarAudio(blob);
+    };
+  }
+}
+
+
+
+async function procesarAudio(blob) {
+  const formData = new FormData();
+  formData.append("file", blob, "voz.webm");
+
+  try {
+    const res = await fetch("/speech-to-text", {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = await res.json();
+    const texto = data.text?.trim();
+
+    // 🐼 vuelve a estado normal
+    window.setBearState?.("calm");
+
+    if (texto) {
+      // ✅ Mensaje normal con indicio de voz
+      input.value = texto; 
+      enviarMensaje(); 
+    }
+  } catch (e) {
+    console.error("Error STT:", e);
+    window.setBearState?.("calm");
+  }
 }
 
 setInterval(checkSurveyTrigger, 60 * 1000);
