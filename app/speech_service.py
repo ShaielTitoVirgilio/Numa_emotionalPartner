@@ -17,7 +17,7 @@ def speech_to_text(audio_bytes: bytes, filename: str) -> str:
     with open(temp_path, "rb") as audio_file:
         transcript = client.audio.transcriptions.create(
             file=audio_file,
-            model="whisper-large-v3",
+            model="whisper-large-v3-turbo",
             language="es",
         )
 
