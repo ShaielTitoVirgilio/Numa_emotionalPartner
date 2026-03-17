@@ -309,10 +309,14 @@ def _desactivar_memorias(ids: List[str]):
 # CHAT
 # ==========================
 @app.post("/speech-to-text")
-async def stt_endpoint(file: UploadFile = File(...)):
-    audio_bytes = await file.read()
-    text = speech_to_text(audio_bytes, file.filename)
-    return {"text": text}
+async def speech_to_text_endpoint(file: UploadFile = File(...)):
+    try:
+        audio_bytes = await file.read()
+        text = speech_to_text(audio_bytes, file.filename)
+        return {"text": text}
+    except Exception as e:
+        print("❌ STT ERROR:", e)
+        raise HTTPException(status_code=500, detail="speech-to-text failed")
 
 
 

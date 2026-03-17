@@ -49,7 +49,7 @@ const MOOD_TO_BEAR_STATE = {
 
 // 💬 Frases de introducción para sugerencia de ejercicio
 const FRASES_POR_MOOD = {
-  stressed:    "Che, probá esto. Ayuda más de lo que parece:",
+  stressed:    "Podes probar esto. Ayuda más de lo que parece:",
   overwhelmed: "Para un segundo. Esto puede acomodarte:",
   sad:         "No tenés que hacer nada grande. Esto es suave:",
   anxious:     "Para bajar un cambio:",
@@ -493,6 +493,12 @@ async function procesarAudio(blob) {
       body: formData,
     });
 
+    // ✅ ESTE BLOQUE VA ACÁ
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt);
+    }
+
     const data = await res.json();
     const texto = data.text?.trim();
 
@@ -500,14 +506,14 @@ async function procesarAudio(blob) {
     window.setBearState?.("calm");
 
     if (texto) {
-      // ✅ Mensaje normal con indicio de voz
-      input.value = texto; 
-      enviarMensaje(); 
+      input.value = texto;
+      enviarMensaje();
     }
   } catch (e) {
     console.error("Error STT:", e);
     window.setBearState?.("calm");
   }
 }
+
 
 setInterval(checkSurveyTrigger, 60 * 1000);
