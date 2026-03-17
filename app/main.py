@@ -316,8 +316,10 @@ async def speech_to_text_endpoint(file: UploadFile = File(...)):
         return {"text": text}
     except Exception as e:
         print("❌ STT ERROR:", e)
-        raise HTTPException(status_code=500, detail="speech-to-text failed")
-
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de transcripción no disponible"
+        )
 
 
 @app.post("/chat", response_model=ChatResponse)
