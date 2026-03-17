@@ -311,9 +311,24 @@ def _desactivar_memorias(ids: List[str]):
 @app.post("/speech-to-text")
 async def speech_to_text_endpoint(file: UploadFile = File(...)):
     try:
+        # 1️⃣ Leer el audio primero
         audio_bytes = await file.read()
+
+        # 2️⃣ Validar tamaño mínimo
+        if len(audio_bytes) < 5000:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio demasiado corto"
+            )
+
+        # 3️⃣ Transcribir
         text = speech_to_text(audio_bytes, file.filename)
         return {"text": text}
+
+    except HTTPException:
+        # 4️⃣ Re-lanzar errores controlados (NO convertirlos en 503)
+        raise
+
     except Exception as e:
         print("❌ STT ERROR:", e)
         raise HTTPException(

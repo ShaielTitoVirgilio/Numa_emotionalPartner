@@ -34,6 +34,24 @@ let perfilCacheado = null;
 // ⏱️ Control de Enfriamiento
 let ultimoEjercicioSugeridoTime = 0;
 
+//Microfono
+
+let recordingTimeout = null;
+const MAX_RECORDING_MS = 25_000; // 25 segundos
+
+let sttErrorCount = 0;
+const MAX_STT_ERRORS = 3;
+let micDisabled = false;
+
+
+let audioContext = null;
+let analyserNode = null;
+let silenceStartTime = null;
+
+const SILENCE_THRESHOLD = 0.015; // volumen RMS
+const MAX_SILENCE_MS = 3000;     // 3 segundos
+let silenceCheckInterval = null;
+
 
 // 🐻 Estados del oso según mood
 const MOOD_TO_BEAR_STATE = {
@@ -439,11 +457,17 @@ export function mostrarProximamente() {
 export async function toggleMic() {
   const micBtn = document.getElementById("mic-btn");
 
+  if (micDisabled) {
+    mostrarAvisoMic(
+      "🎙️ El micrófono está desactivado por ahora. Podés escribirle a Numa."
+    );
+    return;
+  }
+
   if (!isRecording) {
-    // ───────────────
     // ▶️ EMPIEZA A GRABAR
-    // ───────────────
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    startSilenceDetection(stream);
 
     mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
     audioChunks = [];
@@ -452,36 +476,106 @@ export async function toggleMic() {
       if (e.data.size > 0) audioChunks.push(e.data);
     };
 
-    mediaRecorder.start();
-    isRecording = true;
-
-    // ✅ UI: prender mic
-    micBtn?.classList.add("active");
-
-    // ✅ Oso escucha
-    window.setBearState?.("listening");
-
-  } else {
-    // ───────────────
-    // ⏹️ TERMINA DE GRABAR
-    // ───────────────
-    mediaRecorder.stop();
-    isRecording = false;
-
-    // ✅ UI: apagar mic
-    micBtn?.classList.remove("active");
-
-    // ✅ Oso piensa
-    window.setBearState?.("thinking");
-
     mediaRecorder.onstop = async () => {
+      cleanupSilenceDetection();
+      clearTimeout(recordingTimeout);
       const blob = new Blob(audioChunks, { type: "audio/webm" });
       await procesarAudio(blob);
     };
+
+    mediaRecorder.start();
+    isRecording = true;
+
+    activarMicUI();
+
+    // ⏱️ Corte automático por tiempo
+    recordingTimeout = setTimeout(() => {
+      if (isRecording) {
+        detenerGrabacionPorLimite();
+      }
+    }, MAX_RECORDING_MS);
+
+  } else {
+    // ⏹️ DETIENE GRABACIÓN
+    mediaRecorder.stop();
+    isRecording = false;
+    desactivarMicUI();
+    cleanupSilenceDetection();
   }
 }
 
+function startSilenceDetection(stream) {
+  audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
 
+  analyserNode = audioContext.createAnalyser();
+  analyserNode.fftSize = 2048;
+
+  source.connect(analyserNode);
+
+  const dataArray = new Float32Array(analyserNode.fftSize);
+
+  silenceStartTime = null;
+
+  silenceCheckInterval = setInterval(() => {
+    analyserNode.getFloatTimeDomainData(dataArray);
+
+    // Calcular RMS (volumen real)
+    let sumSquares = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      sumSquares += dataArray[i] * dataArray[i];
+    }
+    const rms = Math.sqrt(sumSquares / dataArray.length);
+
+    if (rms < SILENCE_THRESHOLD) {
+      // Empezó o sigue el silencio
+      if (!silenceStartTime) {
+        silenceStartTime = Date.now();
+      } else if (Date.now() - silenceStartTime >= MAX_SILENCE_MS) {
+        console.log("🔇 Silencio detectado, cortando grabación");
+        detenerGrabacionPorSilencio();
+      }
+    } else {
+      // Hay voz → reset
+      silenceStartTime = null;
+    }
+
+  }, 200); // chequea 5 veces por segundo
+}
+
+function detenerGrabacionPorSilencio() {
+  if (!isRecording) return;
+
+  try {
+    mediaRecorder.stop();
+  } catch { /* noop */ }
+
+  isRecording = false;
+  mostrarAvisoMic("🔇 No detecté voz, corto la grabación");
+  cleanupSilenceDetection();
+  desactivarMicUI();
+}
+
+function detenerGrabacionPorLimite() {
+  try {
+    mediaRecorder.stop();
+  } catch { /* noop */ }
+
+  isRecording = false;
+  mostrarAvisoMic("⏱️ Límite de tiempo alcanzado");
+  desactivarMicUI();
+}
+
+function cleanupSilenceDetection() {
+  clearInterval(silenceCheckInterval);
+  silenceCheckInterval = null;
+  silenceStartTime = null;
+
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+}
 
 async function procesarAudio(blob) {
   const formData = new FormData();
@@ -511,9 +605,48 @@ async function procesarAudio(blob) {
     }
   } catch (e) {
     console.error("Error STT:", e);
+    sttErrorCount++;
+
+    if (sttErrorCount >= MAX_STT_ERRORS) {
+      micDisabled = true;
+      deshabilitarMic();
+    }
+
     window.setBearState?.("calm");
   }
 }
 
-
 setInterval(checkSurveyTrigger, 60 * 1000);
+
+function mostrarAvisoMic(texto) {
+  const toast = document.getElementById("mic-toast");
+  if (!toast) return;
+  toast.textContent = texto;
+  toast.classList.remove("hidden");
+}
+
+function ocultarAvisoMic() {
+  document.getElementById("mic-toast")?.classList.add("hidden");
+}
+
+function activarMicUI() {
+  const micBtn = document.getElementById("mic-btn");
+  micBtn.classList.add("recording");
+  mostrarAvisoMic("🎧 Numa te está escuchando…");
+}
+
+function desactivarMicUI() {
+  const micBtn = document.getElementById("mic-btn");
+  micBtn.classList.remove("recording");
+  ocultarAvisoMic();
+}
+
+function deshabilitarMic() {
+  const micBtn = document.getElementById("mic-btn");
+  micBtn.classList.add("disabled");
+  micBtn.disabled = true;
+
+  mostrarAvisoMic(
+    "🎙️ El micrófono está desactivado por ahora. Podés escribirle a Numa."
+  );
+}
