@@ -88,6 +88,20 @@ export function mostrarAvisoTesterCada() {
         En el lanzamiento oficial, vas a tener
         <strong>acceso gratis</strong> como agradecimiento 💚
       </p>
+
+      <div style="
+        background: #eaf5f0; border: 2px solid #7db89e;
+        border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;
+      ">
+        <p style="font-size: 1rem; font-weight: 800; color: #2f4f45; margin: 0 0 6px;">
+          🎙️ ¡NUEVA FEATURE!
+        </p>
+        <p style="font-size: .95rem; color: #3a6b5a; margin: 0; line-height: 1.4;">
+          Ahora podés <strong>hablarle por micrófono a Numa</strong>.<br>
+          ¡Probalo y contanos qué te parece! 💬
+        </p>
+      </div>
+
       <button id="tester-ok" style="
         padding: 12px 20px; border:none; border-radius:12px;
         background:#7db89e; color:white; cursor:pointer; font-weight:700;

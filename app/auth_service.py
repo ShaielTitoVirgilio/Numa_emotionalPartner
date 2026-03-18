@@ -1,5 +1,6 @@
-from app.supabase_client import supabase
-import time
+from app.core.db import supabase
+from app.core.retry import with_retry
+
 
 def register_user(email: str, password: str, nombre: str):
     response = supabase.auth.sign_up({
@@ -11,24 +12,15 @@ def register_user(email: str, password: str, nombre: str):
     if not user:
         raise Exception("Error al crear el usuario")
 
-    # Reintentar el insert con backoff por si el usuario aún no propagó en auth.users
-    import time
-    max_intentos = 5
-    for intento in range(max_intentos):
-        try:
-            supabase.table("users_profiles").upsert({
-                "id": user.id,
-                "nombre": nombre,
-                "onboarding_completo": False,
-            }).execute()
-            break  # éxito, salir del loop
-        except Exception as e:
-            if intento < max_intentos - 1:
-                time.sleep(0.8 * (intento + 1))  # 0.8s, 1.6s, 2.4s...
-            else:
-                raise e  # si falló 5 veces, lanzar el error
+    # Reintentar con backoff por si el usuario aún no propagó en auth.users
+    with_retry(lambda: supabase.table("users_profiles").upsert({
+        "id": user.id,
+        "nombre": nombre,
+        "onboarding_completo": False,
+    }).execute())
 
     return user
+
 
 def login_user(email: str, password: str):
     response = supabase.auth.sign_in_with_password({

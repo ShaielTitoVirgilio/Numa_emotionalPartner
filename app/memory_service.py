@@ -2,10 +2,11 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict, Any
+from app.core.db import supabase  
 
 # Parámetros por defecto (podés ajustarlos)
-MEMORY_WINDOW_DAYS_DEFAULT = 12
-MAX_MEMORIES_DEFAULT = 8
+MEMORY_WINDOW_DAYS_DEFAULT = 30
+MAX_MEMORIES_DEFAULT = 20
 
 def _iso_utc(dt: datetime) -> str:
     # ISO8601 con tz para comparación en Supabase
@@ -14,7 +15,7 @@ def _iso_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 def get_recent_memories(
-    supabase,
+    
     user_id: str,
     days: int = MEMORY_WINDOW_DAYS_DEFAULT,
     max_items: int = MAX_MEMORIES_DEFAULT,
