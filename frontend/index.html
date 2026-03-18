@@ -186,6 +186,33 @@
       margin-top: 4px;
       font-style: italic;
     }
+
+    /* ============================================
+       OVERLAYS DE EJERCICIO — respiración y guiado
+       ============================================ */
+    .overlay-ejercicio {
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      background: #eaf4ef;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+      gap: 8px;
+      overflow-y: auto;
+    }
+    .overlay-ejercicio.hidden {
+      display: none;
+    }
+    .overlay-ejercicio h2 {
+      color: #2f4f45;
+      font-size: 1.3rem;
+      font-weight: 800;
+      text-align: center;
+      margin: 0 0 4px;
+    }
   </style>
 </head>
 
@@ -315,24 +342,193 @@
        OVERLAYS Y MODALES
        ============================================ -->
 
+  <!-- Pantalla de preparación antes del ejercicio -->
   <div id="prep-screen" class="prep-screen hidden">
     <div class="loader-circle"></div>
     <h2 id="prep-text">Preparando tu espacio...</h2>
   </div>
 
+  <!-- Menú principal de ejercicios -->
   <div class="ejercicios-panel hidden" id="ejercicios-menu">
     <button class="close-btn" onclick="cerrarMenuEjercicios()">✕</button>
     <h2>¿Qué necesitás hoy?</h2>
     <div id="lista-categorias"></div>
   </div>
 
+  <!-- Submenú de detalle de ejercicio -->
   <div class="ejercicios-panel hidden" id="submenu-detalle">
     <button class="close-btn" onclick="volverAMenuPrincipal()">←</button>
     <h2 id="titulo-submenu">Categoría</h2>
     <div id="lista-ejercicios-detalle"></div>
   </div>
 
-</div>
+  <!-- ============================================
+       OVERLAY — RESPIRACIÓN
+       ✅ AGREGADO: faltaba en el HTML original
+       ============================================ -->
+  <div id="overlay-respiracion" class="overlay-ejercicio hidden">
+    <button class="close-btn" onclick="detenerRespiracion()">✕</button>
+
+    <h2 id="resp-titulo">Respiración</h2>
+
+    <p id="resp-text-instruccion" style="
+      color: #4a6a5e;
+      font-size: 0.95rem;
+      text-align: center;
+      margin: 0 0 16px;
+      max-width: 280px;
+      line-height: 1.5;
+    "></p>
+
+    <!-- Círculo animado de respiración -->
+    <div id="resp-circle" style="
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      background: rgba(183, 211, 198, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 4s ease-in-out, background-color 4s;
+      margin: 12px auto;
+      box-shadow: 0 0 0 16px rgba(183, 211, 198, 0.15);
+    "></div>
+
+    <!-- Texto de fase: Inhalá / Sostené / Exhalá / Pausa -->
+    <p id="resp-instruccion" style="
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #2f4f45;
+      text-align: center;
+      margin: 8px 0 0;
+      min-height: 2rem;
+    "></p>
+
+    <!-- Texto descriptivo del patrón -->
+    <p id="resp-subtext" style="
+      color: #6b8e7d;
+      font-size: 0.82rem;
+      font-style: italic;
+      text-align: center;
+      max-width: 260px;
+      margin: 8px auto 0;
+      line-height: 1.5;
+    "></p>
+  </div>
+
+  <!-- ============================================
+       OVERLAY — GUIADO (meditación / yoga)
+       ✅ AGREGADO: faltaba en el HTML original
+       ============================================ -->
+  <div id="overlay-guiado" class="overlay-ejercicio hidden">
+    <button class="close-btn" onclick="detenerGuiado()">✕</button>
+
+    <h2 id="guiado-titulo">Ejercicio</h2>
+
+    <!-- Timer — solo visible en meditación con duracion fija -->
+    <div id="guiado-timer" class="hidden" style="
+      font-size: 2.8rem;
+      font-weight: 800;
+      color: #2f4f45;
+      text-align: center;
+      margin: 8px 0;
+      letter-spacing: 0.02em;
+    ">0:00</div>
+
+    <!-- Video de pose — solo visible en yoga -->
+    <video
+      id="numa-video-pose"
+      autoplay
+      loop
+      muted
+      playsinline
+      style="
+        display: none;
+        width: 100%;
+        max-width: 300px;
+        border-radius: 16px;
+        margin: 8px auto;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      "
+    >
+      <source id="numa-video-source" src="" type="video/mp4" />
+    </video>
+
+    <!-- Nombre del paso actual -->
+    <p id="guiado-paso-principal" style="
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #2f4f45;
+      text-align: center;
+      margin: 12px 0 6px;
+      min-height: 1.6rem;
+    "></p>
+
+    <!-- Instrucción del paso -->
+    <p id="guiado-instruccion" style="
+      font-size: 0.95rem;
+      color: #4a6a5e;
+      text-align: center;
+      line-height: 1.6;
+      max-width: 290px;
+      margin: 0 auto;
+      min-height: 3rem;
+    "></p>
+
+    <!-- Barra de progreso del paso actual -->
+    <div style="
+      width: 100%;
+      max-width: 300px;
+      height: 4px;
+      background: rgba(183, 211, 198, 0.35);
+      border-radius: 4px;
+      margin: 24px auto 0;
+      overflow: hidden;
+    ">
+      <div id="guiado-progress" style="
+        height: 100%;
+        width: 0%;
+        background: #7db89e;
+        border-radius: 4px;
+        transition: none;
+      "></div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       LECTURA
+       ============================================ -->
+  <div id="reading" class="overlay-ejercicio hidden">
+    <button class="close-btn" onclick="closeReading()">✕</button>
+    <p class="quote" style="
+      font-size: 1.15rem;
+      color: #2f4f45;
+      text-align: center;
+      font-style: italic;
+      line-height: 1.7;
+      max-width: 300px;
+      margin: 0 auto 12px;
+    "></p>
+    <p class="author" style="
+      font-size: 0.85rem;
+      color: #8fb5a3;
+      text-align: center;
+      font-weight: 600;
+    "></p>
+    <button onclick="nextReading()" style="
+      margin-top: 24px;
+      padding: 12px 28px;
+      background: #b7d3c6;
+      border: none;
+      border-radius: 20px;
+      color: #2f4f45;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+    ">Siguiente →</button>
+  </div>
+
+</div><!-- /.app -->
 
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -357,15 +553,14 @@
     }
   }
 
-
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/sw.js');
   }
 </script>
 
-  <div id="mic-toast" class="mic-toast hidden">
-    🎧 Numa te está escuchando…
-  </div>
+<div id="mic-toast" class="mic-toast hidden">
+  🎧 Numa te está escuchando…
+</div>
 
 </body>
 </html>
