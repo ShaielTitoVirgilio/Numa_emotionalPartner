@@ -112,8 +112,10 @@
      gap: 12px;
      margin-bottom: 8px;
      /* Scroll suave */
-     scroll-behavior: smooth;
-     -webkit-overflow-scrolling: touch;
+     
+     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+
    }
    
    .chat::-webkit-scrollbar {
@@ -998,12 +1000,16 @@
      }
    
      .app {
-       min-height: min(100vh, 820px);
+       min-height: min(00dvh, 820px);
        max-height: 900px;
        border-radius: 32px;
        margin: auto;
+       display: flex;
+        flex-direction: column;
      }
    
+
+
      .bear-container {
        width: 180px;
        height: 180px;
