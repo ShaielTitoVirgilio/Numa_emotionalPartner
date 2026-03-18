@@ -1,6 +1,6 @@
 # app/main.py
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File, Header
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile
@@ -17,6 +17,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.crisis_detector import detectar_crisis, log_crisis_event
 from app.speech_service import speech_to_text
 
+
+ADMIN_KEY = os.getenv("ADMIN_KEY")
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -445,7 +447,6 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
 # ADMIN
 # ==========================
 
-ADMIN_KEY = "sape4pikey007"  # ← cambialo por algo tuyo
 
 @app.get("/admin/feedback")
 def admin_feedback(
@@ -494,7 +495,7 @@ def admin_feedback_audio(feedback_id: str, x_admin_key: Optional[str] = None):
 def admin_crisis(
     limit: int = 50,
     solo_pendientes: bool = True,
-    x_admin_key: Optional[str] = None,
+    x_admin_key: Optional[str] = Header(None),
 ):
     if x_admin_key != ADMIN_KEY:
         raise HTTPException(status_code=401, detail="No autorizado")
