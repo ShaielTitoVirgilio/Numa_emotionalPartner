@@ -18,8 +18,6 @@ import { initFeedbackTab } from './modules/feedbackTab.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 
-
-
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
 // ============================================
@@ -40,6 +38,59 @@ window.mostrarProximamente = mostrarProximamente;
 window.initFeedbackTab = initFeedbackTab;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
+
+
+
+
+// ============================================
+// NOTIFICACIONES PUSH
+// ============================================
+
+function urlB64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function suscribirANotificaciones(userId) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+  try {
+    const permiso = await Notification.requestPermission();
+    if (permiso !== 'granted') return;
+
+    const registro = await navigator.serviceWorker.ready;
+
+    // TODO: REEMPLAZA ESTO CON TU VAPID PUBLIC KEY
+    const vapidPublicKey = "BNAHZjDGp79UzaP_sfHU2cA7kLwKdKPmlj1Q-20HvO6wWsfg3PqXXASqlWTirck3-Eol47e1PCPp734Y65XoxVg=";
+
+    const applicationServerKey = urlB64ToUint8Array(vapidPublicKey);
+
+    const suscripcion = await registro.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: applicationServerKey
+    });
+
+    const user = JSON.parse(localStorage.getItem('numa_user'));
+
+    await fetch('/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        subscription_data: suscripcion
+      })
+    });
+    console.log("Suscripción a notificaciones exitosa.");
+  } catch (e) {
+    console.error('Error suscribiendo a notificaciones:', e);
+  }
+}
 
 // ============================================
 // INICIALIZACIÓN
@@ -62,8 +113,11 @@ async function init() {
       showOnboarding(user.user_id);
     } else {
       await inicializarChat();
-      agregarMensaje(`Bienvenido ${user.name} 🐼 Me alegra que estes aqui de vuelta`, "oso");
+      agregarMensaje(`Bienvenido ${user.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, "oso");
       mostrarAvisoTesterCada();
+      
+      // Intentar pedir permisos de notificación 5 segundos después de entrar
+      setTimeout(() => suscribirANotificaciones(user.user_id), 5000);
     }
   } catch (e) {
     agregarMensaje("Hola 🐼 ¿Cómo estás?", "oso");

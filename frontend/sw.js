@@ -53,17 +53,15 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = event.request.url;
 
-  // 1. Rutas de API → dejar pasar sin tocar
   if (url.includes('/chat') ||
       url.includes('/login') ||
       url.includes('/register') ||
       url.includes('/profile') ||
-      url.includes('/onboarding')) {
+      url.includes('/onboarding') ||
+      url.includes('/subscribe')) { // Añadido /subscribe
     return;
   }
 
-  // 2. JS, CSS, HTML y raíz → SIEMPRE de la red, nunca desde caché
-  //    Así los testers siempre bajan el código más nuevo automáticamente
   if (url.endsWith('.js') ||
       url.endsWith('.css') ||
       url.endsWith('.html') ||
@@ -75,8 +73,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 3. Assets de audio/video/imagen → caché primero, red como fallback
-  //    Archivos pesados que no cambian; conviene cachearlos para carga rápida
   if (url.includes('/static/assets/')) {
     event.respondWith(
       caches.match(event.request).then(cached => {
@@ -91,7 +87,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 4. Todo lo demás → red primero, caché como fallback offline
   event.respondWith(
     fetch(event.request)
       .then(response => {
@@ -100,5 +95,45 @@ self.addEventListener('fetch', event => {
         return response;
       })
       .catch(() => caches.match(event.request))
+  );
+});
+
+// ── Push Notifications ──────────────────────
+self.addEventListener('push', function(event) {
+  const data = event.data ? event.data.json() : {
+    title: "Numa 🐼",
+    body: "Hola, ¿querés contarme cómo te está yendo estos días?"
+  };
+
+  const opciones = {
+    body: data.body,
+    icon: '/static/icons/icon-192.png', // Usa el ícono que ya tienes
+    badge: '/static/icons/icon-192.png',
+    vibrate: [200, 100, 200],
+    data: { url: '/' } // A dónde ir al hacer click
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, opciones)
+  );
+});
+
+// ── Click en la Notificación ────────────────
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window' }).then(windowClients => {
+      // Si ya hay una pestaña abierta de Numa, la pone en foco
+      for (var i = 0; i < windowClients.length; i++) {
+        var client = windowClients[i];
+        if (client.url === '/' && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // Si no, abre una nueva
+      if (clients.openWindow) {
+        return clients.openWindow('/');
+      }
+    })
   );
 });

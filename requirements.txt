@@ -6,3 +6,4 @@ openai
 supabase
 slowapi
 python-multipart
+pywebpush
