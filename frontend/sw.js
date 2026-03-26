@@ -6,7 +6,7 @@
 //   API       → siempre de la red, sin interceptar
 // ============================================
 
-const CACHE_NAME = 'numa-v77';
+const CACHE_NAME = 'numa-v5.12';
 
 // Solo cacheamos assets pesados que no cambian seguido
 const ASSETS_CACHEABLES = [
