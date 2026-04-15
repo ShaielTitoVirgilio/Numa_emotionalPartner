@@ -36,7 +36,7 @@ const PREGUNTAS = [
     {
         numero: 4,
         pregunta: "¿Qué es lo que más te pesa últimamente?",
-        tipo: "opcion_unica",
+        tipo: "opcion_multiple",
         opciones: [
             "El rendimiento (estudio o trabajo)",
             "Las relaciones con otros",
@@ -50,7 +50,7 @@ const PREGUNTAS = [
     {
         numero: 5,
         pregunta: "En momentos de estrés o tensión, ¿qué te pasa habitualmente?",
-        tipo: "opcion_unica",
+        tipo: "opcion_multiple",
         opciones: [
             "Me acelero o me pongo ansioso/a",
             "Me cierro y me quedo callado/a",
@@ -236,14 +236,20 @@ function _renderInput(pregunta) {
     if (pregunta.tipo === 'opcion_multiple') {
         return `<div class="onboarding-opciones">
             ${pregunta.opciones.map((op, i) => `
-                <button 
-                    class="onboarding-opcion" 
+                <button
+                    class="onboarding-opcion"
                     data-index="${i}"
-                    onclick="seleccionarOpcionMultiple(this)"
+                    onclick="seleccionarOpcionMultiple(this, ${pregunta.otroIndex !== undefined ? pregunta.otroIndex : -1})"
                 >
                     ${op}
                 </button>
             `).join('')}
+            <textarea
+                id="otro-textarea"
+                class="auth-input onboarding-textarea"
+                placeholder="Contame un poco más..."
+                style="display:none; margin-top: 4px; min-height: 80px;"
+            ></textarea>
         </div>
         <p style="font-size:0.8rem; color:#8fb5a3; text-align:center; margin-top:8px;">
             Podés elegir varias opciones
@@ -308,7 +314,19 @@ function _obtenerRespuesta() {
 
     if (pregunta.tipo === 'opcion_multiple') {
         const selected = document.querySelectorAll('.onboarding-opcion.selected');
-        return Array.from(selected).map(el => el.textContent.trim());
+        const values = Array.from(selected).map(el => el.textContent.trim());
+
+        if (pregunta.otroIndex !== undefined) {
+            const textarea = document.querySelector('#otro-textarea');
+            const otroText = textarea && textarea.style.display !== 'none' && textarea.value.trim();
+            if (otroText) {
+                const otroLabel = pregunta.opciones[pregunta.otroIndex];
+                const idx = values.indexOf(otroLabel);
+                if (idx !== -1) values[idx] = otroText;
+            }
+        }
+
+        return values;
     }
 
     return '';
@@ -448,6 +466,18 @@ window.seleccionarOpcion = (btn, otroIndex) => {
         if (!esOtro) textarea.value = '';
     }
 };
-window.seleccionarOpcionMultiple = (btn) => {
+window.seleccionarOpcionMultiple = (btn, otroIndex = -1) => {
     btn.classList.toggle('selected');
+
+    if (otroIndex !== -1) {
+        const contenedor = btn.closest('.onboarding-opciones');
+        const textarea = contenedor.querySelector('#otro-textarea');
+        const esOtro = Number(btn.dataset.index) === otroIndex;
+
+        if (esOtro && textarea) {
+            const seleccionado = btn.classList.contains('selected');
+            textarea.style.display = seleccionado ? 'block' : 'none';
+            if (!seleccionado) textarea.value = '';
+        }
+    }
 };

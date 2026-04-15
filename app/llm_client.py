@@ -28,6 +28,7 @@ class LLMRawResponse(TypedDict):
     mood: Mood
     suggested_action: Optional[str]
     memory: Optional[str]
+    memory_category: Optional[str]
 
 
 class LLMClient:
@@ -103,11 +104,16 @@ class LLMClient:
         # Eliminar cualquier JSON residual pegado al final del mensaje
         message_clean = re.sub(r'\s*\{[\s\S]*', '', message_clean).strip()
 
+        valid_categories = {"trabajo", "relaciones", "salud", "identidad", "emocional", "otro"}
+        raw_category = parsed.get("memory_category")
+        memory_category = raw_category if raw_category in valid_categories else "otro" if raw_category else None
+
         return {
             "message": message_clean,
             "mood": parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
             "memory": parsed.get("memory"),
+            "memory_category": memory_category,
         }
 
 

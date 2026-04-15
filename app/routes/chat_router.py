@@ -5,7 +5,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
-from app.memory_service import get_recent_memories, MEMORY_WINDOW_DAYS_DEFAULT
+from app.memory_service import get_recent_memories, get_topic_patterns, detectar_evento_proximo, MEMORY_WINDOW_DAYS_DEFAULT
 from app.crisis_detector import detectar_crisis
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
@@ -95,13 +95,14 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
 
         memorias_vigentes: List[str] = []
         ids_a_desactivar: List[str] = []
+        patrones: List[dict] = []
 
         if body.user_id:
             try:
                 m_db, ids_old = get_recent_memories(
                     user_id=body.user_id,
                     days=MEMORY_WINDOW_DAYS_DEFAULT,
-                    max_items=8
+                    max_items=12
                 )
                 memorias_vigentes = (memorias_sesion or []) + m_db
                 ids_a_desactivar = ids_old
@@ -109,7 +110,19 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 print(f"⚠️ No se pudieron cargar memorias: {e}")
                 memorias_vigentes = memorias_sesion or []
 
-        system_prompt = construir_prompt(perfil=perfil, memorias=memorias_vigentes)
+            try:
+                patrones = get_topic_patterns(user_id=body.user_id)
+            except Exception as e:
+                print(f"⚠️ No se pudieron cargar patrones: {e}")
+
+        es_inicio_sesion = len(body.conversation) == 1
+
+        system_prompt = construir_prompt(
+            perfil=perfil,
+            memorias=memorias_vigentes,
+            patrones=patrones,
+            es_inicio_sesion=es_inicio_sesion,
+        )
 
         result = llm.generate_response(
             conversation=[m.dict() for m in body.conversation],
@@ -117,6 +130,10 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         )
 
         memoria_detectada = result.get("memory")
+
+        # Respaldo: si el LLM no guardó memoria, intentar detectar evento próximo
+        if not memoria_detectada:
+            memoria_detectada = detectar_evento_proximo(ultimo_mensaje)
 
         risk_level = "none"
         if body.conversation:
@@ -130,6 +147,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 body.conversation[-1].content,
                 result["message"],
                 memoria_detectada,
+                result.get("memory_category"),
             )
             if ids_a_desactivar:
                 background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
