@@ -16,6 +16,57 @@ let _onFeedbackRespuesta = null;
 const TIEMPO_POR_PASO_DEFAULT = 20; // segundos (override con data.tiempoPorPaso)
 
 // ============================================
+// AUDIO — PIP DE CAMBIO DE PASO
+// Oscillator suave, sin archivos externos.
+// AudioContext se crea la primera vez (lazy)
+// para respetar la política de autoplay de iOS.
+// ============================================
+
+let _pipCtx = null;
+
+function _getCtx() {
+    if (!_pipCtx) {
+        const AC = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+        _pipCtx = new AC();
+    }
+    if (_pipCtx.state === 'suspended') _pipCtx.resume();
+    return _pipCtx;
+}
+
+/**
+ * Toca un "pip" suave — dos tonos breves encadenados (ding ding)
+ * para que suene más a campana que a alarma.
+ */
+function reproducirPip() {
+    try {
+        const ctx  = _getCtx();
+        const now  = ctx.currentTime;
+
+        // Frecuencias: fundamental + quinta (calma, no estrés)
+        [528, 660].forEach((freq, i) => {
+            const osc  = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+
+            const t0 = now + i * 0.13; // segundo pip 130ms después del primero
+            gain.gain.setValueAtTime(0,    t0);
+            gain.gain.linearRampToValueAtTime(0.12, t0 + 0.02);  // ataque rápido
+            gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.22); // decay suave
+
+            osc.start(t0);
+            osc.stop(t0 + 0.25);
+        });
+    } catch (_) {
+        // Silencio si el contexto de audio no está disponible
+    }
+}
+
+// ============================================
 // FUNCIONES PÚBLICAS
 // ============================================
 
@@ -122,6 +173,9 @@ async function mostrarPaso() {
     const principal    = document.getElementById("guiado-paso-principal");
     const instruccion  = document.getElementById("guiado-instruccion");
     const progressBar  = document.getElementById("guiado-progress");
+
+    // Pip de cambio de paso (no en el primero — el usuario acaba de empezar)
+    if (pasoIndex > 0) reproducirPip();
 
     principal.innerText   = paso.pose || "Paso " + (pasoIndex + 1);
     instruccion.innerText = paso.guia || paso;

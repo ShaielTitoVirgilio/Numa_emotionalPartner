@@ -124,12 +124,18 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 print(f"⚠️ No se pudieron cargar patrones: {e}")
 
         es_inicio_sesion = len(body.conversation) == 1
+        num_interacciones = len(body.conversation)
+
+        # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
+        es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
 
         system_prompt = construir_prompt(
             perfil=perfil,
             memorias=memorias_vigentes,
             patrones=patrones,
             es_inicio_sesion=es_inicio_sesion,
+            num_interacciones=num_interacciones,
+            es_primera_vez=es_primera_vez,
         )
 
         result = llm.generate_response(
