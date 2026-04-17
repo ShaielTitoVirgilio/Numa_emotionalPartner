@@ -10,11 +10,12 @@ import {
 } from './modules/menuEjercicios.js';
 import { detenerRespiracion } from './modules/motorRespiracion.js';
 import { detenerGuiado } from './modules/motorGuiado.js';
-import { showReading, nextReading, closeReading } from './modules/lectura.js';
+import { showReading, nextReading, prevReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
 import { initFeedbackTab } from './modules/feedbackTab.js';
+import { initDashboard } from './modules/dashboard.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 
@@ -31,11 +32,13 @@ window.detenerRespiracion = detenerRespiracion;
 window.detenerGuiado = detenerGuiado;
 window.showReading = showReading;
 window.nextReading = nextReading;
+window.prevReading = prevReading;
 window.closeReading = closeReading;
 window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
 window.mostrarProximamente = mostrarProximamente;
 window.initFeedbackTab = initFeedbackTab;
+window.initDashboard = initDashboard;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
 

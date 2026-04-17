@@ -4,10 +4,18 @@ from app.core.db import supabase
 
 class ConversationRepository:
 
-    def save(self, user_id: str, user_msg: str, assistant_msg: str, memoria: Optional[str], memory_category: Optional[str] = None) -> None:
+    def save(
+        self,
+        user_id: str,
+        user_msg: str,
+        assistant_msg: str,
+        memoria: Optional[str],
+        memory_category: Optional[str] = None,
+        mood: Optional[str] = None,
+    ) -> None:
         supabase.table("conversations").insert([
             {"user_id": user_id, "role": "user",      "content": user_msg},
-            {"user_id": user_id, "role": "assistant",  "content": assistant_msg},
+            {"user_id": user_id, "role": "assistant", "content": assistant_msg, "mood": mood},
         ]).execute()
 
         if memoria:

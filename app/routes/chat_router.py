@@ -5,7 +5,14 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
-from app.memory_service import get_recent_memories, get_topic_patterns, detectar_evento_proximo, MEMORY_WINDOW_DAYS_DEFAULT
+from app.memory_service import (
+    get_recent_memories,
+    get_topic_patterns_cached,
+    invalidate_patterns_cache,
+    deactivate_event_memories,
+    detectar_evento_proximo,
+    MEMORY_WINDOW_DAYS_DEFAULT,
+)
 from app.crisis_detector import detectar_crisis
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
@@ -111,7 +118,8 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 memorias_vigentes = memorias_sesion or []
 
             try:
-                patrones = get_topic_patterns(user_id=body.user_id)
+                patrones = get_topic_patterns_cached(user_id=body.user_id)
+                print(f"🔍 Patrones detectados: {patrones}")
             except Exception as e:
                 print(f"⚠️ No se pudieron cargar patrones: {e}")
 
@@ -140,6 +148,11 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             crisis_riesgo = detectar_crisis(body.conversation[-1].content)
             risk_level = crisis_riesgo["log_level"] if crisis_riesgo["detected"] else "none"
 
+        # El usuario ya respondió al primer mensaje de Numa (que preguntó por el evento)
+        # → desactivar memorias de eventos para que no vuelvan a aparecer
+        if body.user_id and len(body.conversation) == 3:
+            background_tasks.add_task(deactivate_event_memories, body.user_id)
+
         if body.user_id and body.conversation:
             background_tasks.add_task(
                 conversation_repo.save,
@@ -148,9 +161,13 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 result["message"],
                 memoria_detectada,
                 result.get("memory_category"),
+                result.get("mood"),
             )
             if ids_a_desactivar:
                 background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
+            # Si se guardó una memoria nueva, los patrones pueden haber cambiado
+            if memoria_detectada:
+                invalidate_patterns_cache(body.user_id)
 
         return {
             "message":          result["message"],

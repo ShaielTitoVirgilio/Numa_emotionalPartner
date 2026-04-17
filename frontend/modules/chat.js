@@ -3,6 +3,7 @@ import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
 import { mostrarSurvey } from './feedbackSurvey.js';
+import { verificarCheckinDiario } from './checkin.js';
 // ============================================
 // ESTADO Y CONFIGURACIÓN
 // ============================================
@@ -283,6 +284,7 @@ function _procesarRespuesta(data, textoUsuario) {
     perfilCacheado._memorias_sesion.push(data.nueva_memoria);
   }
   checkSurveyTrigger();
+  verificarCheckinDiario();
 }
 
 function _limpiarMensaje(mensaje) {

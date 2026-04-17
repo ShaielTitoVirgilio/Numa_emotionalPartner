@@ -18,6 +18,8 @@ from app.routes.auth_router import router as auth_router
 from app.routes.chat_router import router as chat_router
 from app.routes.onboarding_router import router as onboarding_router
 from app.routes.feedback_router import router as feedback_router
+from app.routes.checkin_router import router as checkin_router
+from app.routes.dashboard_router import router as dashboard_router
 from app.supabase_client import supabase
 
 # ==========================
@@ -135,3 +137,5 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(onboarding_router)
 app.include_router(feedback_router)
+app.include_router(checkin_router)
+app.include_router(dashboard_router)

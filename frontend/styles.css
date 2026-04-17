@@ -339,51 +339,39 @@
      position: fixed;
      top: 0; left: 0;
      width: 100%; height: 100%;
-     background: linear-gradient(#eaf4ef, #f6fbf8);
-     padding: 24px 20px;
+     background: linear-gradient(170deg, #eaf4ef 0%, #f4faf7 60%, #f8fbf9 100%);
+     padding: 28px 20px 32px;
      display: flex;
      flex-direction: column;
      align-items: center;
-     gap: 14px;
+     gap: 12px;
      z-index: 100;
      overflow-y: auto;
      -webkit-overflow-scrolling: touch;
    }
-   
+
    .ejercicios-panel h2 {
-     color: #4a6a5e;
-     margin-top: 24px;
-     margin-bottom: 8px;
-     font-size: 1.6rem;
+     color: #2f4f45;
+     margin-top: 28px;
+     margin-bottom: 4px;
+     font-size: 1.5rem;
      font-weight: 800;
+     text-align: center;
    }
-   
+
    .ejercicios-panel .close-btn {
      position: absolute;
      top: 20px;
      right: 20px;
    }
-   
-   .exercise-btn {
-     width: 100%;
-     max-width: 340px;
-     padding: 20px 18px;
-     font-size: 1.1rem;
-     font-family: inherit;
-     font-weight: 700;
-     border: none;
-     border-radius: 20px;
-     background: #b7d3c6;
-     color: #2f4f45;
-     cursor: pointer;
-     transition: all 0.25s ease;
-     text-align: left;
-   }
-   
-   .exercise-btn:hover {
-     transform: translateY(-3px);
-     background: #a6c7b8;
-     box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+
+   /* Subtítulo del panel principal */
+   .ejercicios-panel .panel-subtitle {
+     font-size: 0.85rem;
+     color: #8fb5a3;
+     text-align: center;
+     margin-top: -4px;
+     margin-bottom: 6px;
    }
    
    /* ============================================
@@ -1074,4 +1062,273 @@
 
 .hidden {
   display: none;
+}
+
+/* ============================================
+   CHECK-IN DIARIO
+   ============================================ */
+
+.checkin-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 32px;
+  z-index: 9000;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.checkin-overlay.visible {
+  opacity: 1;
+}
+
+.checkin-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 24px 28px 20px;
+  width: min(360px, 90vw);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  transform: translateY(24px);
+  transition: transform 0.4s cubic-bezier(0.34, 1.2, 0.64, 1);
+  text-align: center;
+}
+
+.checkin-overlay.visible .checkin-card {
+  transform: translateY(0);
+}
+
+.checkin-pregunta {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #2f4f45;
+  margin: 0 0 20px;
+}
+
+.checkin-opciones {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.checkin-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: #f4f9f7;
+  border: 2px solid transparent;
+  border-radius: 14px;
+  padding: 12px 6px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.checkin-btn:hover {
+  background: #e4f2ec;
+  transform: translateY(-2px);
+}
+
+.checkin-btn.seleccionado {
+  background: #d4eddf;
+  border-color: #7db89e;
+}
+
+.checkin-emoji {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.checkin-label {
+  font-size: 0.72rem;
+  color: #5a7a70;
+  font-weight: 500;
+}
+
+/* ============================================
+   DASHBOARD — Mi estado
+   ============================================ */
+
+#view-dashboard {
+  overflow: hidden;
+}
+
+.db-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px 16px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.db-header {
+  padding: 4px 4px 0;
+}
+
+.db-titulo {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #2f4f45;
+  margin: 0 0 2px;
+}
+
+.db-subtitulo {
+  font-size: 0.82rem;
+  color: #8fb5a3;
+  margin: 0;
+}
+
+/* Cards */
+.db-card {
+  background: #fff;
+  border-radius: 18px;
+  padding: 18px 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+
+.db-card-titulo {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #8fb5a3;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 14px;
+}
+
+/* Resumen */
+.db-resumen {
+  background: linear-gradient(135deg, #2f4f45 0%, #4a7a6a 100%);
+}
+
+.db-resumen-texto {
+  font-size: 0.95rem;
+  color: #e8f5f0;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Gráfica semanal */
+.db-grafica-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#db-grafica {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+}
+
+.db-mood-leyenda {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 4px 0;
+  font-size: 0.72rem;
+  color: #8fb5a3;
+}
+
+/* Check-ins grid */
+.db-ci-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+}
+
+.db-ci-dot {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  background: #f0f8f4;
+}
+
+.db-ci-vacio {
+  background: #eef3f1;
+}
+
+.db-ci-v1 { background: #fde8e8; }
+.db-ci-v2 { background: #fef5e4; }
+.db-ci-v3 { background: #e4f5eb; }
+.db-ci-v4 { background: #d4eddf; }
+
+/* Patrones */
+.db-patrones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.db-patron-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f4f9f7;
+  border: 1.5px solid #d4e5df;
+  border-radius: 20px;
+  padding: 6px 12px;
+}
+
+.db-patron-topic {
+  font-size: 0.85rem;
+  color: #2f4f45;
+  font-weight: 500;
+}
+
+.db-patron-count {
+  font-size: 0.72rem;
+  color: #7db89e;
+  font-weight: 600;
+}
+
+.db-patron-detalle {
+  font-size: 0.8rem;
+  color: #8fb5a3;
+  font-style: italic;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Estados: loading / error / vacío */
+.db-estado-centro {
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+}
+
+.db-estado-texto {
+  font-size: 0.9rem;
+  color: #8fb5a3;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.db-loader {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #d4e5df;
+  border-top-color: #7db89e;
+  border-radius: 50%;
+  animation: dbSpin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes dbSpin {
+  to { transform: rotate(360deg); }
+}
+
+.db-empty {
+  font-size: 0.82rem;
+  color: #8fb5a3;
+  text-align: center;
+  margin: 8px 0 0;
+  line-height: 1.5;
 }

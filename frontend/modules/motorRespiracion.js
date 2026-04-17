@@ -142,18 +142,30 @@ export function setFeedbackCallback(fn) {
   _onFeedbackRespuesta = fn;
 }
 
+function formatPatron({ inhalar, retener, exhalar, esperar }) {
+  const partes = [];
+  if (inhalar) partes.push(`↑ ${inhalar}s`);
+  if (retener) partes.push(`· ${retener}s`);
+  if (exhalar) partes.push(`↓ ${exhalar}s`);
+  if (esperar) partes.push(`· ${esperar}s`);
+  return partes.join('  ');
+}
+
 export function runRespiracion(data) {
-  const overlay     = document.getElementById("overlay-respiracion");
-  const titulo      = document.getElementById("resp-titulo");
-  const instruccion = document.getElementById("resp-text-instruccion");
-  const circulo     = document.getElementById("resp-circle");
-  const subtext     = document.getElementById("resp-subtext");
+  const overlay      = document.getElementById("overlay-respiracion");
+  const titulo       = document.getElementById("resp-titulo");
+  const patronInfo   = document.getElementById("resp-text-instruccion");
+  const faseDisplay  = document.getElementById("resp-instruccion");
+  const circulo      = document.getElementById("resp-circle");
+  const subtext      = document.getElementById("resp-subtext");
 
   if (!overlay) return;
 
   overlay.classList.remove("hidden");
-  titulo.innerText  = data.nombre;
-  subtext.innerText = data.instruccion || "";
+  titulo.innerText      = data.nombre;
+  patronInfo.innerText  = formatPatron(data.patron);
+  subtext.innerText     = data.instruccion || "";
+  if (faseDisplay) faseDisplay.innerText = "";
 
   const { inhalar, retener, exhalar, esperar } = data.patron;
 
@@ -168,11 +180,15 @@ export function runRespiracion(data) {
   _getCtx();
   _precargarAudios();
 
+  function setFase(texto) {
+    if (faseDisplay) faseDisplay.innerText = texto;
+  }
+
   function ciclo() {
     if (overlay.classList.contains("hidden")) return;
 
     // 1. INHALAR
-    instruccion.innerText = "Inhalá";
+    setFase("Inhalá");
     circulo.style.transition = `transform ${inhalar}s ease-in-out, background-color ${inhalar}s`;
     circulo.style.transform = "scale(1.5)";
     circulo.style.backgroundColor = "rgba(143, 181, 163, 0.8)";
@@ -182,7 +198,7 @@ export function runRespiracion(data) {
     if (retener > 0) {
       setTimeout(() => {
         if (overlay.classList.contains("hidden")) return;
-        instruccion.innerText = "Sostené";
+        setFase("Sostené");
         reproducirSonidoFase('retener', retener);
       }, tInhalar);
     }
@@ -190,7 +206,7 @@ export function runRespiracion(data) {
     // 3. EXHALAR
     setTimeout(() => {
       if (overlay.classList.contains("hidden")) return;
-      instruccion.innerText = "Exhalá";
+      setFase("Exhalá");
       circulo.style.transition = `transform ${exhalar}s ease-in-out, background-color ${exhalar}s`;
       circulo.style.transform = "scale(1)";
       circulo.style.backgroundColor = "rgba(183, 211, 198, 0.6)";
@@ -201,7 +217,7 @@ export function runRespiracion(data) {
     if (esperar > 0) {
       setTimeout(() => {
         if (overlay.classList.contains("hidden")) return;
-        instruccion.innerText = "Pausa";
+        setFase("Pausa");
         reproducirSonidoFase('esperar', esperar);
       }, tInhalar + tRetener + tExhalar);
     }

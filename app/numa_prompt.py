@@ -362,11 +362,16 @@ Excepciones — NO uses la memoria si:
     if patrones and len(patrones) > 0:
         bloque = "PATRONES QUE NOTASTE EN ESTA PERSONA (último mes):\n"
         for p in patrones:
-            bloque += f"- Ha mencionado el tema '{p['topic']}' {p['count']} veces\n"
+            linea = f"- {p['topic']} ({p['count']} veces)"
+            if p.get("ultimo_contenido"):
+                linea += f" — lo más reciente: '{p['ultimo_contenido']}'"
+            bloque += linea + "\n"
         bloque += (
-            "\nSi el tema de la conversación actual coincide con un patrón, podés nombrarlo de forma natural. "
-            "Ej: 'Eso del trabajo aparece bastante en lo que me contás. ¿Siempre fue así?'\n"
-            "No lo fuerces si no tiene contexto en la conversación actual."
+            "\nCómo usar estos patrones:\n"
+            "- Si el usuario menciona algo relacionado a un patrón: referencíalo con el contenido específico, no solo el tema. "
+            "Ej: en vez de 'el trabajo aparece bastante', decí '¿Sigue siendo difícil con el jefe?' usando lo que dice 'lo más reciente'.\n"
+            "- Si el usuario abre con otro tema o una situación urgente: no traigas el patrón, respondé lo que trajo.\n"
+            "- Nunca digas explícitamente 'noto un patrón' o 'lo mencionaste X veces'. Referencíalo de forma natural como si lo recordaras."
         )
         secciones.append(bloque)
 

@@ -13,7 +13,7 @@ let pasoIndex      = 0;
 let datosEjercicioActual = null;
 let _onFeedbackRespuesta = null;
 
-const TIEMPO_POR_PASO = 15; // segundos
+const TIEMPO_POR_PASO_DEFAULT = 20; // segundos (override con data.tiempoPorPaso)
 
 // ============================================
 // FUNCIONES PÚBLICAS
@@ -23,7 +23,7 @@ export function setFeedbackCallback(fn) {
   _onFeedbackRespuesta = fn;
 }
 
-export function runGuiado(tipo, data) {
+export function runGuiado(_tipo, data) {
     const overlay = document.getElementById("overlay-guiado");
     if (!overlay) return;
 
@@ -143,17 +143,19 @@ async function mostrarPaso() {
         videoElement.style.display = "none";
     }
 
+    const tiempoPaso = datosEjercicioActual.tiempoPorPaso || TIEMPO_POR_PASO_DEFAULT;
+
     if (progressBar) {
         progressBar.style.transition = "none";
         progressBar.style.width = "0%";
         setTimeout(() => {
-            progressBar.style.transition = `width ${TIEMPO_POR_PASO}s linear`;
+            progressBar.style.transition = `width ${tiempoPaso}s linear`;
             progressBar.style.width = "100%";
         }, 50);
     }
 
     pasoIndex++;
-    guiadoTimer = setTimeout(mostrarPaso, TIEMPO_POR_PASO * 1000);
+    guiadoTimer = setTimeout(mostrarPaso, tiempoPaso * 1000);
 }
 
 function runTimerSimple(duracion) {

@@ -47,7 +47,7 @@ export function iniciarEjercicio(tipo, data) {
             runGuiado(tipo, data);
         }
         else if (tipo === "lectura") {
-            if (window.showReading) window.showReading();
+            if (window.showReading) window.showReading(data);
         }
     }, 3000);
 }

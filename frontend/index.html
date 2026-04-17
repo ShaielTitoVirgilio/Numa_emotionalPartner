@@ -229,7 +229,6 @@
     </button>
     <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
       <span class="tab-icon">📊</span> Mi estado
-      <span class="tab-badge">Pronto</span>
     </button>
     <button class="tab-btn" id="tab-feedback-btn" onclick="switchMainTab('feedback')">
       <span class="tab-icon">💬</span> Feedback
@@ -283,59 +282,10 @@
   </div>
 
   <!-- ============================================
-       VISTA: DASHBOARD (PRÓXIMAMENTE)
+       VISTA: DASHBOARD
        ============================================ -->
   <div class="tab-view" id="view-dashboard">
-    <div class="dashboard-coming-soon">
-
-      <div class="dashboard-icon">📊</div>
-      <h2 class="dashboard-title">Tu estado emocional</h2>
-
-      <p class="dashboard-subtitle">
-        Pronto vas a poder ver cómo te fuiste sintiendo a lo largo del tiempo,
-        patrones de tus conversaciones con Numa y momentos donde te fue más difícil.
-      </p>
-
-      <div class="dashboard-preview">
-
-        <div class="preview-card">
-          <span class="preview-card-icon">🌈</span>
-          <div class="preview-card-text">
-            <span class="preview-card-label">Estado de ánimo esta semana</span>
-            <span class="preview-card-sub">Cómo te sentiste día a día</span>
-          </div>
-          <div class="mock-bars" style="margin-left:auto">
-            <div class="mock-bar" style="height:14px"></div>
-            <div class="mock-bar" style="height:22px; background:#7db89e"></div>
-            <div class="mock-bar" style="height:10px"></div>
-            <div class="mock-bar" style="height:20px; background:#a6c7b8"></div>
-            <div class="mock-bar" style="height:26px; background:#7db89e"></div>
-          </div>
-        </div>
-
-        <div class="preview-card">
-          <span class="preview-card-icon">🔁</span>
-          <div class="preview-card-text">
-            <span class="preview-card-label">Patrones detectados</span>
-            <span class="preview-card-sub">Conexiones entre lo que sentís y lo que hacés</span>
-          </div>
-        </div>
-
-        <div class="preview-card">
-          <span class="preview-card-icon">🧘</span>
-          <div class="preview-card-text">
-            <span class="preview-card-label">Ejercicios que más te ayudaron</span>
-            <span class="preview-card-sub">Basado en tu feedback</span>
-          </div>
-        </div>
-
-      </div>
-
-      <p class="dashboard-note">
-        Mientras tanto, Numa ya está aprendiendo sobre vos
-      </p>
-
-    </div>
+    <!-- Contenido cargado dinámicamente por dashboard.js -->
   </div>
 
   <!-- ============================================
@@ -352,6 +302,7 @@
   <div class="ejercicios-panel hidden" id="ejercicios-menu">
     <button class="close-btn" onclick="cerrarMenuEjercicios()">✕</button>
     <h2>¿Qué necesitás hoy?</h2>
+    <p class="panel-subtitle">Elegí una práctica para este momento</p>
     <div id="lista-categorias"></div>
   </div>
 
@@ -500,32 +451,78 @@
        ============================================ -->
   <div id="reading" class="overlay-ejercicio hidden">
     <button class="close-btn" onclick="closeReading()">✕</button>
-    <p class="quote" style="
-      font-size: 1.15rem;
+
+    <!-- Badge del pack -->
+    <div id="reading-pack-badge" style="
+      background: rgba(183,211,198,0.25);
+      border: 1.5px solid rgba(183,211,198,0.5);
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 0.82rem;
+      font-weight: 800;
+      color: #4a6a5e;
+      letter-spacing: 0.02em;
+      margin-bottom: 8px;
+    "></div>
+
+    <!-- Decoración visual -->
+    <div style="font-size: 2.2rem; opacity: 0.18; margin: 8px 0 4px; user-select:none;">"</div>
+
+    <!-- Cita -->
+    <p class="reading-quote" style="
+      font-size: 1.1rem;
       color: #2f4f45;
       text-align: center;
       font-style: italic;
-      line-height: 1.7;
+      line-height: 1.75;
       max-width: 300px;
-      margin: 0 auto 12px;
+      margin: 0 auto 16px;
+      transition: opacity 0.2s ease;
     "></p>
-    <p class="author" style="
-      font-size: 0.85rem;
+
+    <!-- Autor -->
+    <p class="reading-author" style="
+      font-size: 0.88rem;
       color: #8fb5a3;
       text-align: center;
-      font-weight: 600;
-    "></p>
-    <button onclick="nextReading()" style="
-      margin-top: 24px;
-      padding: 12px 28px;
-      background: #b7d3c6;
-      border: none;
-      border-radius: 20px;
-      color: #2f4f45;
       font-weight: 700;
-      font-size: 0.95rem;
-      cursor: pointer;
-    ">Siguiente →</button>
+      letter-spacing: 0.02em;
+      transition: opacity 0.2s ease;
+    "></p>
+
+    <!-- Contador y navegación -->
+    <div style="
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 28px;
+    ">
+      <button onclick="prevReading()" style="
+        padding: 10px 18px;
+        background: rgba(183,211,198,0.3);
+        border: none; border-radius: 12px;
+        color: #4a6a5e; font-weight: 700;
+        font-size: 0.9rem; cursor: pointer;
+        font-family: inherit;
+      ">← Ant.</button>
+
+      <span id="reading-counter" style="
+        font-size: 0.78rem;
+        color: #b7d3c6;
+        font-weight: 700;
+        min-width: 36px;
+        text-align: center;
+      "></span>
+
+      <button onclick="nextReading()" style="
+        padding: 10px 18px;
+        background: linear-gradient(135deg, #7db89e, #5a9e84);
+        border: none; border-radius: 12px;
+        color: white; font-weight: 700;
+        font-size: 0.9rem; cursor: pointer;
+        font-family: inherit;
+      ">Sig. →</button>
+    </div>
   </div>
 
 </div><!-- /.app -->
@@ -550,6 +547,9 @@
 
     if (tab === 'feedback' && window.initFeedbackTab) {
       window.initFeedbackTab();
+    }
+    if (tab === 'dashboard' && window.initDashboard) {
+      window.initDashboard();
     }
   }
 

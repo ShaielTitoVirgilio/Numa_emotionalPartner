@@ -1,12 +1,18 @@
 # app/memory_service.py
 from __future__ import annotations
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Dict, Any
-from app.core.db import supabase  
+from app.core.db import supabase
 
 # Parámetros por defecto (podés ajustarlos)
 MEMORY_WINDOW_DAYS_DEFAULT = 30
 MAX_MEMORIES_DEFAULT = 20
+
+# Caché en memoria de patrones por usuario.
+# Clave: user_id → (expires_at_epoch, lista_de_patrones)
+_PATTERNS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_PATTERNS_TTL_SECONDS = 300  # 5 minutos
 
 # ── Detector de eventos próximos ─────────────────────────────────────────────
 _PALABRAS_TIEMPO = [
@@ -59,26 +65,90 @@ def get_topic_patterns(
 
     res = (
         supabase.table("memories")
-        .select("category")
+        .select("category, content, created_at")
         .eq("user_id", user_id)
         .gte("created_at", since_ts)
-        .not_.eq("category", "chat")   # excluir memorias viejas sin categoría real
+        .not_.eq("category", "chat")   # excluir categorías genéricas sin valor como patrón
+        .not_.eq("category", "otro")
         .execute()
     )
     rows: List[Dict[str, Any]] = res.data or []
 
-    from collections import Counter
-    counts = Counter(
-        r["category"].strip().lower()
-        for r in rows
-        if r.get("category")
-    )
+    from collections import Counter, defaultdict
+
+    counts: Counter = Counter()
+    latest_content: Dict[str, tuple] = {}  # topic -> (created_at, content)
+
+    for r in rows:
+        cat = (r.get("category") or "").strip().lower()
+        if not cat:
+            continue
+        counts[cat] += 1
+        content = (r.get("content") or "").strip()
+        created_at = r.get("created_at") or ""
+        if content:
+            prev = latest_content.get(cat)
+            if prev is None or created_at > prev[0]:
+                latest_content[cat] = (created_at, content)
 
     return [
-        {"topic": topic, "count": count}
+        {
+            "topic": topic,
+            "count": count,
+            "ultimo_contenido": latest_content[topic][1] if topic in latest_content else None,
+        }
         for topic, count in counts.most_common()
         if count >= min_count
     ]
+
+
+def deactivate_event_memories(user_id: str) -> None:
+    """
+    Desactiva memorias de eventos próximos una vez que el usuario ya respondió sobre ellos.
+    Se llama después del segundo mensaje del usuario en una sesión.
+    """
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, content")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .execute()
+        )
+        rows = res.data or []
+        ids_a_desactivar = [
+            r["id"]
+            for r in rows
+            if any(p in (r.get("content") or "").lower() for p in _PALABRAS_EVENTO)
+        ]
+        if ids_a_desactivar:
+            supabase.table("memories").update({"is_active": False}).in_("id", ids_a_desactivar).execute()
+    except Exception as e:
+        print(f"⚠️ No se pudieron desactivar memorias de eventos: {e}")
+
+
+def get_topic_patterns_cached(
+    user_id: str,
+    days: int = 30,
+    min_count: int = 2,
+) -> List[Dict[str, Any]]:
+    """
+    Versión cacheada de get_topic_patterns. Evita golpear Supabase en cada mensaje.
+    El caché se invalida cuando se guarda una memoria nueva (ver invalidate_patterns_cache).
+    """
+    now = time.time()
+    cached = _PATTERNS_CACHE.get(user_id)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    patrones = get_topic_patterns(user_id=user_id, days=days, min_count=min_count)
+    _PATTERNS_CACHE[user_id] = (now + _PATTERNS_TTL_SECONDS, patrones)
+    return patrones
+
+
+def invalidate_patterns_cache(user_id: str) -> None:
+    """Borra el caché de patrones de un usuario (llamar al guardar una memoria nueva)."""
+    _PATTERNS_CACHE.pop(user_id, None)
 
 
 def get_recent_memories(
