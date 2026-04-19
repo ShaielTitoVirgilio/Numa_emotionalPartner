@@ -26,6 +26,26 @@ user_repo = UserRepository()
 conversation_repo = ConversationRepository()
 feedback_repo = FeedbackRepository()
 
+CATEGORIAS_VALIDAS = {
+    "trabajo", "estudios", "relaciones", "salud", "identidad",
+    "emocional", "hobbies", "vida_cotidiana", "otro",
+}
+
+
+def _validar_priority(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, min(5, n))
+
+
+def _validar_category(value) -> str:
+    if not value:
+        return "otro"
+    v = str(value).strip().lower()
+    return v if v in CATEGORIAS_VALIDAS else "otro"
+
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
@@ -96,11 +116,16 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 "nueva_memoria":    None,
             }
 
-        memorias_sesion = []
+        memorias_sesion: List[Dict[str, Any]] = []
         if perfil and "_memorias_sesion" in perfil:
-            memorias_sesion = perfil.pop("_memorias_sesion", []) or []
+            raw = perfil.pop("_memorias_sesion", []) or []
+            memorias_sesion = [
+                m if isinstance(m, dict)
+                else {"content": str(m), "priority": 3, "category": "otro"}
+                for m in raw
+            ]
 
-        memorias_vigentes: List[str] = []
+        memorias_vigentes: List[Dict[str, Any]] = []
         ids_a_desactivar: List[str] = []
         patrones: List[dict] = []
 
@@ -139,20 +164,27 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         )
 
         result = llm.generate_response(
-            conversation=[m.dict() for m in body.conversation],
+            conversation=[m.model_dump() for m in body.conversation],
             system_prompt=system_prompt,
         )
 
         memoria_detectada = result.get("memory")
+        memoria_category = result.get("memory_category")
+        memoria_priority = result.get("memory_priority")
 
         # Respaldo: si el LLM no guardó memoria, intentar detectar evento próximo
         if not memoria_detectada:
-            memoria_detectada = detectar_evento_proximo(ultimo_mensaje)
+            evento = detectar_evento_proximo(ultimo_mensaje)
+            if evento:
+                memoria_detectada, memoria_category, memoria_priority = evento
 
+        # Validar/clampear metadata antes de persistir
+        if memoria_detectada:
+            memoria_category = _validar_category(memoria_category)
+            memoria_priority = _validar_priority(memoria_priority)
+
+        # Si llegamos acá, crisis["detected"] fue False (el early return arriba lo garantiza)
         risk_level = "none"
-        if body.conversation:
-            crisis_riesgo = detectar_crisis(body.conversation[-1].content)
-            risk_level = crisis_riesgo["log_level"] if crisis_riesgo["detected"] else "none"
 
         # El usuario ya respondió al primer mensaje de Numa (que preguntó por el evento)
         # → desactivar memorias de eventos para que no vuelvan a aparecer
@@ -166,8 +198,9 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 body.conversation[-1].content,
                 result["message"],
                 memoria_detectada,
-                result.get("memory_category"),
+                memoria_category,
                 result.get("mood"),
+                memoria_priority,
             )
             if ids_a_desactivar:
                 background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
