@@ -7,7 +7,7 @@ import { iniciarSonidoAmbiente, detenerSonidoAmbiente } from './ambientSound.js'
 // CONSTANTES
 // ============================================
 
-export const TIEMPO_ENFRIAMIENTO = 200000; // ~3 min
+export const TIEMPO_ENFRIAMIENTO = 80000; // ~1 min 20 seg
 
 
 // ============================================

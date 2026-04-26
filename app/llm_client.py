@@ -45,6 +45,7 @@ class LLMClient:
             model="llama-3.3-70b-versatile",
             temperature=0.7,
             max_tokens=600,  # subido de 400 para que el JSON no se corte
+            response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
             messages=[
                 {"role": "system", "content": system_prompt},
                 *conversation,
@@ -101,8 +102,11 @@ class LLMClient:
             parsed["mood"] = "neutral"
 
         message_clean = re.sub(r'\[EJERCICIO:\s*\w+\]', '', str(parsed.get("message", ""))).strip()
-        # Eliminar cualquier JSON residual pegado al final del mensaje
-        message_clean = re.sub(r'\s*\{[\s\S]*', '', message_clean).strip()
+        # Capa 3: eliminar cualquier residuo del formato JSON pegado al final del mensaje
+        # 1) bloques markdown tipo ```json o ``` que el modelo a veces agrega
+        message_clean = re.sub(r'\s*```[\s\S]*$', '', message_clean).strip()
+        # 2) JSON crudo (sin requerir whitespace antes del '{', cubre casos como "Hola.{...")
+        message_clean = re.sub(r'\{[\s\S]*$', '', message_clean).strip()
 
         valid_categories = {"trabajo", "relaciones", "salud", "identidad", "emocional", "otro"}
         raw_category = parsed.get("memory_category")

@@ -37,14 +37,16 @@
    .app {
      width: 100%;
      max-width: 430px;
-     min-height: 100vh;
-     min-height: -webkit-fill-available;
+     height: 100vh;
+     height: -webkit-fill-available; /* iOS */
+     height: 100dvh;                 /* Android: se ajusta al teclado virtual */
+     overflow: hidden;
      padding: 16px 20px 20px;
      display: flex;
      flex-direction: column;
      align-items: center;
      background: linear-gradient(170deg, #eaf4ef 0%, #f4faf7 60%, #f8fbf9 100%);
-   
+
      /* Sombra lateral solo en desktop */
      box-shadow: 0 0 60px rgba(0,0,0,0.12);
    }
@@ -105,17 +107,15 @@
    .chat {
      width: 100%;
      flex: 1;
+     min-height: 0; /* fix crítico: permite overflow-y en flex container en Android */
      overflow-y: auto;
      padding: 8px 4px;
      display: flex;
      flex-direction: column;
      gap: 12px;
      margin-bottom: 8px;
-     /* Scroll suave */
-     
      overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-
+     -webkit-overflow-scrolling: touch;
    }
    
    .chat::-webkit-scrollbar {
