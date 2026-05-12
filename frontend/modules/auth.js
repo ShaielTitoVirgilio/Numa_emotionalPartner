@@ -161,11 +161,29 @@ async function _submitLogin() {
             return;
         }
 
-        const data = await res.json();
+         const data = await res.json();
         currentUser = data;
         localStorage.setItem('numa_user', JSON.stringify(data));
 
         hideAuthScreen();
+
+        // Chequear si ya completó el onboarding
+        try {
+            const perfilRes = await fetch(`/profile/${data.user_id}`, {
+                headers: { 'Authorization': `Bearer ${data.access_token}` }
+            });
+            if (perfilRes.ok) {
+                const perfil = await perfilRes.json();
+                if (!perfil.onboarding_completo) {
+                    const { showOnboarding } = await import('./onboarding.js');
+                    showOnboarding(data.user_id);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.warn('No se pudo verificar onboarding:', e);
+        }
+
         mostrarAvisoTesterCada();
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
