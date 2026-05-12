@@ -1,6 +1,6 @@
 // app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente} from './modules/chat.js';
+import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente } from './modules/chat.js';
 import { 
     irAEjercicios, 
     cerrarMenuEjercicios,
@@ -41,6 +41,7 @@ window.initFeedbackTab = initFeedbackTab;
 window.initDashboard = initDashboard;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
+window.inicializarChat = inicializarChat;
 
 
 

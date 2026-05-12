@@ -572,8 +572,6 @@ async function procesarAudio(blob) {
   }
 }
 
-setInterval(checkSurveyTrigger, 60 * 1000);
-
 function mostrarAvisoMic(texto) {
   const toast = document.getElementById("mic-toast");
   if (!toast) return;

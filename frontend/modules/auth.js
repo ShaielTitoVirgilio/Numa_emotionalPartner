@@ -184,6 +184,8 @@ async function _submitLogin() {
             console.warn('No se pudo verificar onboarding:', e);
         }
 
+        if (window.inicializarChat) await window.inicializarChat();
+        if (window.agregarMensaje) window.agregarMensaje(`Bienvenido ${data.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, 'oso');
         mostrarAvisoTesterCada();
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
