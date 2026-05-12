@@ -1212,25 +1212,65 @@
 }
 
 /* Gráfica semanal */
-.db-grafica-wrap {
+/* Esta semana */
+.db-sem-mood {
+  font-size: 0.95rem;
+  color: #2f4f45;
+  margin: 0 0 14px;
+  text-align: center;
+}
+
+.db-sem-fila {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.db-sem-dia {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 5px;
+  flex: 1;
 }
 
-#db-grafica {
-  width: 100%;
-  max-width: 320px;
-  height: auto;
-}
-
-.db-mood-leyenda {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  padding: 6px 4px 0;
-  font-size: 0.72rem;
+.db-sem-label {
+  font-size: 0.7rem;
   color: #8fb5a3;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.db-sem-punto {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #eef3f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+.db-sem-con-dato {
+  background: #e4f5eb;
+}
+
+.db-sem-activos {
+  font-size: 0.82rem;
+  color: #6b8e7d;
+  text-align: center;
+  margin: 0 0 6px;
+}
+
+.db-sem-comp {
+  font-size: 0.82rem;
+  color: #4a6a5e;
+  text-align: center;
+  margin: 0;
+  padding: 8px 12px;
+  background: #f4f9f7;
+  border-radius: 10px;
 }
 
 /* Check-ins grid */
@@ -1252,6 +1292,13 @@
 
 .db-ci-vacio {
   background: #eef3f1;
+}
+
+.db-ci-daynum {
+  font-size: 0.6rem;
+  color: #b0c9bf;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .db-ci-v1 { background: #fde8e8; }

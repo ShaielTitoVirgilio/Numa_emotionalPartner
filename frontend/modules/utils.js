@@ -92,14 +92,18 @@ export function mostrarAvisoTesterCada() {
       <div style="
         background: #eaf5f0; border: 2px solid #7db89e;
         border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;
+        text-align: left;
       ">
-        <p style="font-size: 1rem; font-weight: 800; color: #2f4f45; margin: 0 0 6px;">
-          🎙️ ¡NUEVA FEATURE!
+        <p style="font-size: 1rem; font-weight: 800; color: #2f4f45; margin: 0 0 10px; text-align: center;">
+          ✨ ¡NUEVA FEATURE! — Mi estado
         </p>
-        <p style="font-size: .95rem; color: #3a6b5a; margin: 0; line-height: 1.4;">
-          Ahora podés <strong>hablarle por micrófono a Numa</strong>.<br>
-          ¡Probalo y contanos qué te parece! 💬
+        <p style="font-size: .9rem; color: #3a6b5a; margin: 0 0 10px; line-height: 1.5;">
+          Numa ahora detecta <strong>patrones en lo que hablás</strong> y te muestra:
         </p>
+        <ul style="font-size: .9rem; color: #3a6b5a; margin: 0; padding-left: 18px; line-height: 1.8;">
+          <li>📈 Cómo te sentiste los <strong>últimos días</strong></li>
+          <li>💬 Los <strong>temas más hablados</strong> en tus conversaciones</li>
+        </ul>
       </div>
 
       <button id="tester-ok" style="

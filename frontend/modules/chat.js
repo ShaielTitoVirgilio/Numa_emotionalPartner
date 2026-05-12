@@ -2,7 +2,6 @@
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
-import { mostrarSurvey } from './feedbackSurvey.js';
 import { verificarCheckinDiario } from './checkin.js';
 // ============================================
 // ESTADO Y CONFIGURACIÓN
@@ -16,12 +15,7 @@ let audioChunks = [];
 let isRecording = false;
 
 
-//Constantes para survey
-let sessionStartMs = Date.now();
 let messageCount = 0;
-const SURVEY_MSGS = 50;      // Default N mensajes
-const SURVEY_MINUTES = 15;   // Default 15 min
-const SURVEY_COOLDOWN_H = 48;
 
 
 
@@ -181,45 +175,6 @@ function _prepararEnvio() {
 }
 
 
-function canShowSurvey() {
-  const last = localStorage.getItem('numa_survey_last_shown');
-  if (last && Date.now() - Number(last) < SURVEY_COOLDOWN_H * 3600 * 1000) return false;
-  return true;
-}
-
-function markSurveyShown() {
-  localStorage.setItem('numa_survey_last_shown', String(Date.now()));
-}
-
-function checkSurveyTrigger() {
-  if (!canShowSurvey()) return;
-  const elapsedMin = (Date.now() - sessionStartMs) / 60000;
-  if (messageCount >= SURVEY_MSGS || elapsedMin >= SURVEY_MINUTES) {
-    // Mostrar
-    mostrarSurvey(async (answers) => {
-      markSurveyShown();
-      try {
-        const numaUser = localStorage.getItem('numa_user');
-        const userId = numaUser ? JSON.parse(numaUser).user_id : null;
-
-        await fetch('/survey', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: userId,
-            session_length_s: Math.round((Date.now() - sessionStartMs) / 1000),
-            message_count: messageCount,
-            answers,
-          })
-        });
-      } catch (e) {
-        console.warn('No se pudo enviar la encuesta:', e);
-      }
-    }, () => {
-      markSurveyShown(); // Si omite, igual respetamos cooldown
-    });
-  }
-}
 
 
 
@@ -283,7 +238,6 @@ function _procesarRespuesta(data, textoUsuario) {
     }
     perfilCacheado._memorias_sesion.push(data.nueva_memoria);
   }
-  checkSurveyTrigger();
   verificarCheckinDiario();
 }
 
