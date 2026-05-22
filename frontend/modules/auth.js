@@ -161,7 +161,7 @@ async function _submitLogin() {
             return;
         }
 
-         const data = await res.json();
+        const data = await res.json();
         currentUser = data;
         localStorage.setItem('numa_user', JSON.stringify(data));
 

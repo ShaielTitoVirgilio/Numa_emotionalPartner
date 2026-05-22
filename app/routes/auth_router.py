@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any
-from app.auth_service import register_user, login_user, get_user_profile
+from app.auth_service import register_user, login_user, get_user_profile, refresh_session
 from app.supabase_client import supabase
 
 router = APIRouter()
@@ -14,6 +14,9 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 class SubscriptionRequest(BaseModel):
     user_id: str
@@ -31,6 +34,14 @@ def register_endpoint(request: RegisterRequest):
 def login_endpoint(request: LoginRequest):
     try:
         result = login_user(request.email, request.password)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+@router.post("/refresh")
+def refresh_endpoint(request: RefreshRequest):
+    try:
+        result = refresh_session(request.refresh_token)
         return result
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))

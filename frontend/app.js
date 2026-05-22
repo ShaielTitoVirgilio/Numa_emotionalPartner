@@ -100,6 +100,15 @@ async function suscribirANotificaciones(userId) {
 // INICIALIZACIÓN
 // ============================================
 
+function _tokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.exp < Date.now() / 1000;
+  } catch {
+    return true;
+  }
+}
+
 async function init() {
   const savedUser = localStorage.getItem('numa_user');
   if (!savedUser) {
@@ -108,9 +117,46 @@ async function init() {
   }
 
   const user = JSON.parse(savedUser);
-  
+
+  if (_tokenExpired(user.access_token)) {
+    if (user.refresh_token) {
+      try {
+        const r = await fetch('/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: user.refresh_token })
+        });
+        if (r.ok) {
+          const fresh = await r.json();
+          Object.assign(user, fresh);
+          localStorage.setItem('numa_user', JSON.stringify(user));
+        } else {
+          localStorage.removeItem('numa_user');
+          showAuthScreen();
+          return;
+        }
+      } catch {
+        localStorage.removeItem('numa_user');
+        showAuthScreen();
+        return;
+      }
+    } else {
+      localStorage.removeItem('numa_user');
+      showAuthScreen();
+      return;
+    }
+  }
+
   try {
     const res = await fetch(`/profile/${user.user_id}`);
+
+    if (!res.ok) {
+      // Server error — don't force onboarding, just open chat
+      await inicializarChat();
+      agregarMensaje("Hola 🐼 ¿Cómo estás?", "oso");
+      return;
+    }
+
     const profile = await res.json();
 
     if (!profile.onboarding_completo) {
@@ -119,7 +165,6 @@ async function init() {
       await inicializarChat();
       agregarMensaje(`Bienvenido ${user.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, "oso");
       mostrarAvisoTesterCada();
-      
       mostrarBannerNotificaciones(user.user_id);
     }
   } catch (e) {
