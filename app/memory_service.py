@@ -182,10 +182,11 @@ def get_recent_memories(
     """
     Devuelve:
       - memorias_vigentes: lista de dicts {content, priority, category} para el prompt
-      - to_deactivate_ids: IDs de memorias duplicadas a desactivar (se pasa como background task)
+      - to_deactivate_ids: IDs de memorias sobrantes a desactivar (se pasa como background task)
     Lógica:
       1) Sólo memorias activas, dentro de la ventana de 'days'
-      2) Por cada categoría deduplicable, conservar la de MAYOR PRIORIDAD (empate: más reciente)
+      2) Por cada categoría deduplicable, conservar hasta MAX_POR_CATEGORIA memorias
+         (orden: mayor prioridad primero; empate → más reciente)
       3) Categorías no deduplicables (otro) se incluyen todas
       4) Limitar a 'max_items' para el prompt
     """
@@ -208,20 +209,22 @@ def get_recent_memories(
     )
 
     CATEGORIAS_DEDUPLICABLES = {"trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana"}
+    MAX_POR_CATEGORIA = 3
 
-    seen_categories: set = set()
+    from collections import Counter
+    category_counts: Counter = Counter()
     unique_rows: List[Dict[str, Any]] = []
     to_deactivate_ids: List[str] = []
 
     for row in rows:
         cat = (row.get("category") or "").strip().lower()
         if cat in CATEGORIAS_DEDUPLICABLES:
-            if cat in seen_categories:
-                # Perdedora (prioridad menor o más antigua): desactivar
+            if category_counts[cat] >= MAX_POR_CATEGORIA:
+                # Ya hay MAX_POR_CATEGORIA memorias mejores de esta categoría
                 if row.get("id"):
                     to_deactivate_ids.append(row["id"])
                 continue
-            seen_categories.add(cat)
+            category_counts[cat] += 1
 
         unique_rows.append(row)
 

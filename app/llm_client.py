@@ -23,12 +23,16 @@ class ChatMessage(TypedDict):
     role: Literal["user", "assistant"]
     content: str
 
+class MemoryItem(TypedDict):
+    content: str
+    category: str
+    priority: int
+
 class LLMRawResponse(TypedDict):
     message: str
     mood: Mood
     suggested_action: Optional[str]
-    memory: Optional[str]
-    memory_category: Optional[str]
+    memories: List[MemoryItem]
 
 
 class LLMClient:
@@ -91,7 +95,7 @@ class LLMClient:
                 "message": pre_json if pre_json else raw.strip(),
                 "mood": "neutral",
                 "suggested_action": None,
-                "memory": None,
+                "memories": [],
             }
 
         # ─────────────────────────────────────────────────────────────
@@ -108,16 +112,40 @@ class LLMClient:
         # 2) JSON crudo (sin requerir whitespace antes del '{', cubre casos como "Hola.{...")
         message_clean = re.sub(r'\{[\s\S]*$', '', message_clean).strip()
 
-        valid_categories = {"trabajo", "relaciones", "salud", "identidad", "emocional", "otro"}
-        raw_category = parsed.get("memory_category")
-        memory_category = raw_category if raw_category in valid_categories else "otro" if raw_category else None
+        valid_categories = {"trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana", "otro"}
+
+        # Normalizar memorias: acepta nuevo formato (array "memories") y viejo (campos sueltos)
+        raw_memories = parsed.get("memories")
+        if isinstance(raw_memories, list):
+            memories = []
+            for m in raw_memories[:2]:  # máx 2
+                if not isinstance(m, dict):
+                    continue
+                content = str(m.get("content") or "").strip()
+                if not content:
+                    continue
+                cat = m.get("category")
+                cat = cat if cat in valid_categories else "otro"
+                try:
+                    prio = max(1, min(5, int(m.get("priority") or 3)))
+                except (TypeError, ValueError):
+                    prio = 3
+                memories.append({"content": content, "category": cat, "priority": prio})
+        else:
+            # Fallback: formato viejo con campos sueltos
+            old_content = str(parsed.get("memory") or "").strip()
+            if old_content:
+                raw_cat = parsed.get("memory_category")
+                cat = raw_cat if raw_cat in valid_categories else "otro"
+                memories = [{"content": old_content, "category": cat, "priority": 3}]
+            else:
+                memories = []
 
         return {
-            "message": message_clean,
-            "mood": parsed["mood"],
+            "message":          message_clean,
+            "mood":             parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
-            "memory": parsed.get("memory"),
-            "memory_category": memory_category,
+            "memories":         memories,
         }
 
 

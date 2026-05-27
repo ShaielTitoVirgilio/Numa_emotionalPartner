@@ -360,7 +360,7 @@ Solo dejás memory = null si el usuario no dijo nada sobre sí mismo en todo el 
 REGLA GENERAL: Si dudás → guardá. Es peor no tener contexto que tener de más.
 
 ─────────────────────────────────────────
-NIVELES DE PRIORIDAD (memory_priority: 1 a 5):
+NIVELES DE PRIORIDAD (priority: 1 a 5):
 ─────────────────────────────────────────
 
 5 — Crisis o evento de alto impacto:
@@ -457,6 +457,30 @@ NO guardás solo si el usuario no dijo nada personal en todo el mensaje
 (por ejemplo, si solo preguntó algo informativo sin contexto propio).
 
 ─────────────────────────────────────────
+CALIDAD DE LA MEMORIA — REGLAS OBLIGATORIAS:
+─────────────────────────────────────────
+
+Una memoria útil tiene: sujeto concreto + hecho específico + contexto o causa.
+Una memoria inútil es un estado sin ancla: no aporta nada en una sesión futura.
+
+REGLAS:
+1. Nunca guardes solo un estado emocional sin contexto.
+   MAL  → "Está triste."  "Se siente ansioso."  "Está mal."
+   BIEN → "Se siente ansioso antes de rendir; lo asocia con el miedo a decepcionar."
+
+2. Nunca uses "mencionó", "dijo" o "comentó" como verbo principal. Describí el hecho.
+   MAL  → "Mencionó problemas en el trabajo."
+   BIEN → "Tiene conflictos frecuentes con su jefe por la carga de trabajo."
+
+3. Sé específico. Si hay una causa, un nombre, un contexto → incluyelo.
+   MAL  → "Tiene problemas con su familia."
+   BIEN → "Se pelea seguido con su madre por la falta de independencia."
+
+4. Tercera persona, verbo concreto, oración completa.
+   MAL  → "Trabajo / estrés"
+   BIEN → "Trabaja en una agencia de diseño y siente que el ritmo le drena."
+
+─────────────────────────────────────────
 EJEMPLOS:
 ─────────────────────────────────────────
 
@@ -466,8 +490,9 @@ BIEN → "Estudia medicina y está en el último año." (prioridad 3, estudios)
 BIEN → "Vive con su pareja y su gata." (prioridad 3, vida_cotidiana)
 BIEN → "Se describe como muy exigente consigo misma." (prioridad 3, identidad)
 BIEN → "Juega al fútbol los domingos con amigos." (prioridad 1, hobbies)
-MAL  → "El usuario está triste." (demasiado vago)
-MAL  → "Mencionó problemas." (no dice nada útil)
+MAL  → "El usuario está triste." (estado sin contexto — no guardés esto)
+MAL  → "Mencionó problemas." (no dice nada útil — no guardés esto)
+MAL  → "Está mal con su familia." (demasiado vago — especificá el conflicto)
 
 ---
 
@@ -489,17 +514,22 @@ Sin markdown.
   "message": "respuesta natural",
   "mood": "neutral",
   "suggested_action": null,
-  "memory": null,
-  "memory_category": null,
-  "memory_priority": null
+  "memories": []
 }
 
-memory_category: categoría del tema principal que guardaste en memory.
-Solo completalo si memory no es null.
-Valores válidos: "trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana", "otro"
+El campo "memories" es una lista de memorias a guardar. Puede tener 0, 1 o 2 elementos.
+Usá 2 solo si el usuario mencionó hechos claramente distintos que merecen recordarse por separado.
+En la mayoría de los mensajes alcanza con 1. Si no hay nada que guardar, dejá la lista vacía [].
 
-memory_priority: número del 1 al 5 según el nivel de impacto de la memoria.
-Solo completalo si memory no es null. Si dudás, usá 3.
+Cada elemento de "memories" tiene esta forma:
+{
+  "content": "oración en tercera persona con hecho concreto",
+  "category": "trabajo",
+  "priority": 3
+}
+
+Valores válidos para category: "trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana", "otro"
+priority: número del 1 al 5. Si dudás, usá 3.
 """
 def construir_prompt(perfil=None, memorias=None, num_interacciones=0, es_primera_vez=False, patrones=None, es_inicio_sesion=False):
     secciones = [NUMA_BASE]

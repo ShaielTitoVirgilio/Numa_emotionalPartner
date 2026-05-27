@@ -63,9 +63,7 @@ class ChatResponse(BaseModel):
     mood: str
     suggested_action: Optional[str] = None
     risk_level: Optional[str] = None
-    nueva_memoria: Optional[str] = None
-    nueva_memoria_category: Optional[str] = None
-    nueva_memoria_priority: Optional[int] = None
+    nuevas_memorias: Optional[List[Dict[str, Any]]] = None
 
 
 @router.post("/speech-to-text")
@@ -115,7 +113,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 "mood":             "sad",
                 "suggested_action": None,
                 "risk_level":       "high",
-                "nueva_memoria":    None,
+                "nuevas_memorias":  None,
             }
 
         memorias_sesion: List[Dict[str, Any]] = []
@@ -145,7 +143,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                     if key and key not in seen:
                         seen.add(key)
                         merged.append(m)
-                memorias_vigentes = merged
+                memorias_vigentes = merged[:15]
                 ids_a_desactivar = ids_old
             except Exception as e:
                 print(f"⚠️ No se pudieron cargar memorias: {e}")
@@ -177,20 +175,25 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             system_prompt=system_prompt,
         )
 
-        memoria_detectada = result.get("memory")
-        memoria_category = result.get("memory_category")
-        memoria_priority = result.get("memory_priority")
+        memorias_llm: List[Dict[str, Any]] = result.get("memories") or []
 
-        # Respaldo: si el LLM no guardó memoria, intentar detectar evento próximo
-        if not memoria_detectada:
+        # Validar/clampear metadata de cada memoria antes de persistir
+        memorias_validadas: List[Dict[str, Any]] = []
+        for m in memorias_llm:
+            content = (m.get("content") or "").strip()
+            if content:
+                memorias_validadas.append({
+                    "content":  content,
+                    "category": _validar_category(m.get("category")),
+                    "priority": _validar_priority(m.get("priority")),
+                })
+
+        # Respaldo: si el LLM no guardó ninguna memoria, intentar detectar evento próximo
+        if not memorias_validadas:
             evento = detectar_evento_proximo(ultimo_mensaje)
             if evento:
-                memoria_detectada, memoria_category, memoria_priority = evento
-
-        # Validar/clampear metadata antes de persistir
-        if memoria_detectada:
-            memoria_category = _validar_category(memoria_category)
-            memoria_priority = _validar_priority(memoria_priority)
+                content_ev, cat_ev, prio_ev = evento
+                memorias_validadas.append({"content": content_ev, "category": cat_ev, "priority": prio_ev})
 
         # Si llegamos acá, crisis["detected"] fue False (el early return arriba lo garantiza)
         risk_level = "none"
@@ -206,25 +209,20 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 body.user_id,
                 body.conversation[-1].content,
                 result["message"],
-                memoria_detectada,
-                memoria_category,
+                memorias_validadas,
                 result.get("mood"),
-                memoria_priority,
             )
             if ids_a_desactivar:
                 background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
-            # Si se guardó una memoria nueva, los patrones pueden haber cambiado
-            if memoria_detectada:
+            if memorias_validadas:
                 invalidate_patterns_cache(body.user_id)
 
         return {
-            "message":                result["message"],
-            "mood":                   result["mood"],
-            "suggested_action":       result.get("suggested_action"),
-            "risk_level":             risk_level,
-            "nueva_memoria":          memoria_detectada,
-            "nueva_memoria_category": memoria_category if memoria_detectada else None,
-            "nueva_memoria_priority": memoria_priority if memoria_detectada else None,
+            "message":          result["message"],
+            "mood":             result["mood"],
+            "suggested_action": result.get("suggested_action"),
+            "risk_level":       risk_level,
+            "nuevas_memorias":  memorias_validadas,
         }
 
     except Exception as e:

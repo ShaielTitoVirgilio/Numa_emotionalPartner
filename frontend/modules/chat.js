@@ -230,17 +230,15 @@ function _procesarRespuesta(data, textoUsuario) {
   _actualizarHistorial(textoUsuario, textoLimpio);
   _manejarSugerencia(data, mood);
 
-  // Si el backend detectó una memoria nueva, actualizarla en el perfil cacheado
-  // para que los próximos mensajes ya la tengan en cuenta
-  if (data.nueva_memoria && perfilCacheado) {
+  // Si el backend detectó memorias nuevas, agregarlas al perfil cacheado
+  // para que los próximos mensajes ya las tengan en cuenta
+  if (data.nuevas_memorias?.length && perfilCacheado) {
     if (!perfilCacheado._memorias_sesion) {
       perfilCacheado._memorias_sesion = [];
     }
-    perfilCacheado._memorias_sesion.push({
-      content:  data.nueva_memoria,
-      category: data.nueva_memoria_category || "otro",
-      priority: data.nueva_memoria_priority || 3,
-    });
+    for (const m of data.nuevas_memorias) {
+      perfilCacheado._memorias_sesion.push(m);
+    }
   }
   verificarCheckinDiario();
 }
