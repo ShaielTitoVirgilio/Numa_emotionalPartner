@@ -42,8 +42,7 @@ def onboarding_endpoint(request: OnboardingRequest):
             "etapa_vida":          resp.get(3),
             "que_le_pesa":         resp.get(4),
             "como_reacciona":      resp.get(5),
-            "prefiere_respuestas": resp.get(6),
-            "preferencias_extra":  resp.get(7),
+            "preferencias_extra":  resp.get(6),
         }
         user_repo.upsert_profile(request.user_id, perfil_update)
 

@@ -61,17 +61,6 @@ const PREGUNTAS = [
     },
     {
         numero: 6,
-        pregunta: "¿Cómo preferís que Numa responda?",
-        tipo: "opcion_unica",
-        opciones: [
-            "Corto y directo, sin rodeos",
-            "Con calma, que me acompañe",
-            "Que me haga preguntas para entender mejor",
-            "Que mezcle escucha con algo concreto"
-        ]
-    },
-    {
-        numero: 7,
         pregunta: "¿Hay algo que querés que Numa sepa antes de empezar?",
         tipo: "textarea",
         placeholder: "Ej: estoy pasando un momento difícil, no me gustan los consejos genéricos, prefiero que sea directo..."
