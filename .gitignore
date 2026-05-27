@@ -18,3 +18,5 @@ Chats/
 
 # Claude Code internals
 .claude/worktrees/
+
+reportar_bugs.txt

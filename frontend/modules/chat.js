@@ -236,7 +236,11 @@ function _procesarRespuesta(data, textoUsuario) {
     if (!perfilCacheado._memorias_sesion) {
       perfilCacheado._memorias_sesion = [];
     }
-    perfilCacheado._memorias_sesion.push(data.nueva_memoria);
+    perfilCacheado._memorias_sesion.push({
+      content:  data.nueva_memoria,
+      category: data.nueva_memoria_category || "otro",
+      priority: data.nueva_memoria_priority || 3,
+    });
   }
   verificarCheckinDiario();
 }

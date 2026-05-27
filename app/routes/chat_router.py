@@ -64,6 +64,8 @@ class ChatResponse(BaseModel):
     suggested_action: Optional[str] = None
     risk_level: Optional[str] = None
     nueva_memoria: Optional[str] = None
+    nueva_memoria_category: Optional[str] = None
+    nueva_memoria_priority: Optional[int] = None
 
 
 @router.post("/speech-to-text")
@@ -136,7 +138,14 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                     days=MEMORY_WINDOW_DAYS_DEFAULT,
                     max_items=12
                 )
-                memorias_vigentes = (memorias_sesion or []) + m_db
+                seen = set()
+                merged = []
+                for m in (memorias_sesion or []) + m_db:
+                    key = (m.get("content") or "").strip()
+                    if key and key not in seen:
+                        seen.add(key)
+                        merged.append(m)
+                memorias_vigentes = merged
                 ids_a_desactivar = ids_old
             except Exception as e:
                 print(f"⚠️ No se pudieron cargar memorias: {e}")
@@ -209,11 +218,13 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 invalidate_patterns_cache(body.user_id)
 
         return {
-            "message":          result["message"],
-            "mood":             result["mood"],
-            "suggested_action": result.get("suggested_action"),
-            "risk_level":       risk_level,
-            "nueva_memoria":    memoria_detectada,
+            "message":                result["message"],
+            "mood":                   result["mood"],
+            "suggested_action":       result.get("suggested_action"),
+            "risk_level":             risk_level,
+            "nueva_memoria":          memoria_detectada,
+            "nueva_memoria_category": memoria_category if memoria_detectada else None,
+            "nueva_memoria_priority": memoria_priority if memoria_detectada else None,
         }
 
     except Exception as e:
