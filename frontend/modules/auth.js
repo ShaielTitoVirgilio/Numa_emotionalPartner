@@ -337,7 +337,8 @@ async function _loginConGoogle() {
     const { error } = await _supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-            redirectTo: 'https://web-production-3f4e4.up.railway.app'
+            redirectTo: 'https://web-production-3f4e4.up.railway.app',
+            queryParams: { prompt: 'select_account' }
         }
     });
     if (error) {

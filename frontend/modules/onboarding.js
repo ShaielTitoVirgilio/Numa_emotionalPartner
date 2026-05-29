@@ -376,47 +376,56 @@ async function _enviarOnboarding() {
             : respuestas[i] || ''
     }));
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
-    const user = JSON.parse(localStorage.getItem('numa_user'));
+        const user = JSON.parse(localStorage.getItem('numa_user'));
 
-    const res = await fetch('/onboarding', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${user.access_token}`
-        },
-        body: JSON.stringify({
-            user_id: user.user_id,
-            answers: answers
-        })
-    });
+        const res = await fetch('/onboarding', {
+            method: 'POST',
+            signal: controller.signal,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${user.access_token}`
+            },
+            body: JSON.stringify({
+                user_id: user.user_id,
+                answers: answers
+            })
+        });
+        clearTimeout(timeoutId);
 
-    if (!res.ok) {
-        const errorData = await res.json();
-        console.error('Error del servidor:', errorData);
-        throw new Error(errorData.detail || 'Error al guardar');
+        if (!res.ok) {
+            const errorData = await res.json();
+            console.error('Error del servidor:', errorData);
+            throw new Error(errorData.detail || 'Error al guardar');
+        }
+
+        hideOnboarding();
+
+        const app = document.querySelector('.app');
+        if (app) app.style.display = 'flex';
+
+        if (window.inicializarChat) await window.inicializarChat();
+
+        const nombre = respuestas[0] || 'vos';
+        if (window.agregarMensaje) {
+            window.agregarMensaje(
+                `Hola ${nombre} 🐼 Gracias por contarme un poco sobre vos. Estoy acá cuando quieras hablar.`,
+                "oso"
+            );
+        }
+        mostrarAvisoTesterCada();
+
+    } catch (e) {
+        clearTimeout(timeoutId);
+        console.error('Error completo:', e);
+        nextBtn.textContent = 'Empezar 🐼';
+        nextBtn.disabled = false;
+        const msg = e.name === 'AbortError' ? 'El servidor tardó demasiado, intentá de nuevo' : e.message;
+        _mostrarToast(`Error: ${msg}`);
     }
-
-    hideOnboarding();
-
-    const app = document.querySelector('.app');
-    if (app) app.style.display = 'flex';    
-
-    const nombre = respuestas[0] || 'vos';
-    if (window.agregarMensaje) {
-        window.agregarMensaje(
-            `Hola ${nombre} 🐼 Gracias por contarme un poco sobre vos. Estoy acá cuando quieras hablar.`,
-            "oso"
-        );
-    }
-    mostrarAvisoTesterCada();
-
-} catch (e) {
-    console.error('Error completo:', e);
-    nextBtn.textContent = 'Empezar 🐼';
-    nextBtn.disabled = false;
-    _mostrarToast(`Error: ${e.message}`);
-}
 }
 
 // ============================================
