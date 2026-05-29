@@ -347,24 +347,21 @@ async function _loginConGoogle() {
 }
 
 export async function manejarCallbackOAuth() {
-    const hash = window.location.hash;
-    if (!hash || !hash.includes('access_token')) return false;
+    // Supabase v2 usa PKCE: devuelve ?code= en los query params, no en el hash
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (!code) return false;
 
-    const params = new URLSearchParams(hash.substring(1));
-    const access_token = params.get('access_token');
-    const refresh_token = params.get('refresh_token');
+    const { data, error } = await _supabase.auth.exchangeCodeForSession(window.location.href);
+    if (error || !data.session) return false;
 
-    if (!access_token) return false;
-
-    const { data, error } = await _supabase.auth.getUser(access_token);
-    if (error || !data.user) return false;
-
-    const user = data.user;
+    const user = data.session.user;
+    const session = data.session;
     currentUser = {
         user_id: user.id,
         email: user.email,
-        access_token,
-        refresh_token
+        access_token: session.access_token,
+        refresh_token: session.refresh_token
     };
     localStorage.setItem('numa_user', JSON.stringify(currentUser));
 
@@ -372,7 +369,7 @@ export async function manejarCallbackOAuth() {
 
     try {
         const perfilRes = await fetch(`/profile/${user.id}`, {
-            headers: { 'Authorization': `Bearer ${access_token}` }
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
         if (perfilRes.ok) {
             const perfil = await perfilRes.json();
