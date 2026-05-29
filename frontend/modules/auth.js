@@ -4,7 +4,7 @@ import { mostrarAvisoTesterCada } from './utils.js';
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
 const _SUPABASE_URL = 'https://idbdvpykclbxdeoirsye.supabase.co';
-const _SUPABASE_ANON_KEY = 'sb_publishable_lJuSDcpFnFXGm0D2F27m-Q_-x1Y0LEq';
+const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlkYmR2cHlrY2xieGRlb2lyc3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0ODQ5ODYsImV4cCI6MjA4ODA2MDk4Nn0.GEPzBysq6hKiH5UCIi443lEeM0gX17wAtZjp9ZAJUoM';
 const _supabase = createClient(_SUPABASE_URL, _SUPABASE_ANON_KEY);
 // ============================================
 // ESTADO
