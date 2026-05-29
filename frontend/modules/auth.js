@@ -1,11 +1,19 @@
 // modules/auth.js
 
 import { mostrarAvisoTesterCada } from './utils.js';
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+const _SUPABASE_URL = 'https://idbdvpykclbxdeoirsye.supabase.co';
+const _SUPABASE_ANON_KEY = 'sb_publishable_lJuSDcpFnFXGm0D2F27m-Q_-x1Y0LEq';
+const _supabase = createClient(_SUPABASE_URL, _SUPABASE_ANON_KEY);
 // ============================================
 // ESTADO
 // ============================================
 
 let currentUser = null;
+let _pendingEmail = null;
+let _pendingPassword = null;
+let _pendingNombre = null;
 
 // ============================================
 // FUNCIONES PÚBLICAS
@@ -76,6 +84,11 @@ function _crearAuthScreen() {
                 <button class="auth-btn" onclick="submitLogin()">
                     Entrar
                 </button>
+                <div class="auth-divider"><span>o</span></div>
+                <button class="auth-btn-google" onclick="loginConGoogle()">
+                    <img src="https://www.google.com/favicon.ico" width="18" height="18" />
+                    Continuar con Google
+                </button>
                 <p id="login-error" class="auth-error hidden"></p>
             </div>
 
@@ -101,6 +114,11 @@ function _crearAuthScreen() {
                 />
                 <button class="auth-btn" onclick="submitRegister()">
                     Crear cuenta
+                </button>
+                <div class="auth-divider"><span>o</span></div>
+                <button class="auth-btn-google" onclick="loginConGoogle()">
+                    <img src="https://www.google.com/favicon.ico" width="18" height="18" />
+                    Continuar con Google
                 </button>
                 <p id="register-error" class="auth-error hidden"></p>
             </div>
@@ -225,27 +243,153 @@ async function _submitRegister() {
             return;
         }
 
-        // Registro exitoso → hacer login automático
-        const loginRes = await fetch('/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-        });
-
-        const data = await loginRes.json();
-        currentUser = data;
-        localStorage.setItem('numa_user', JSON.stringify(data));
-
-        // ✅ ÚNICO CAMBIO: ocultar auth y mostrar onboarding (en vez de ir directo al chat)
-        const authScreen = document.getElementById('auth-screen');
-        if (authScreen) authScreen.classList.add('hidden');
-
-        const { showOnboarding } = await import('./onboarding.js');
-        showOnboarding(data.user_id);
+        // Registro exitoso → guardar datos y mostrar pantalla OTP
+        _pendingEmail = email;
+        _pendingPassword = password;
+        _pendingNombre = nombre;
+        _mostrarPantallaOtp(email);
 
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
     }
+}
+
+// ============================================
+// PANTALLA OTP
+// ============================================
+
+function _mostrarPantallaOtp(email) {
+    const container = document.querySelector('#auth-screen .auth-container');
+    container.querySelector('.auth-tabs').classList.add('hidden');
+    container.querySelector('#form-login').classList.add('hidden');
+    container.querySelector('#form-register').classList.add('hidden');
+
+    const existing = container.querySelector('#form-otp');
+    if (existing) existing.remove();
+
+    const div = document.createElement('div');
+    div.id = 'form-otp';
+    div.className = 'auth-form';
+    div.innerHTML = `
+        <h2>Revisá tu email 📬</h2>
+        <p>Te mandamos un código a <strong>${email}</strong>. Ingresalo acá:</p>
+        <input
+            type="text"
+            id="otp-input"
+            inputmode="numeric"
+            maxlength="8"
+            placeholder="· · · · · ·"
+            class="auth-input"
+            style="text-align:center; font-size:2rem; letter-spacing:0.5rem"
+        />
+        <button class="auth-btn" onclick="submitOtp()">Confirmar</button>
+        <button onclick="reenviarOtp()" style="background:none;border:none;color:inherit;cursor:pointer;margin-top:8px;text-decoration:underline;">Reenviar código</button>
+        <p id="otp-error" class="auth-error hidden"></p>
+    `;
+    container.appendChild(div);
+}
+
+async function _submitOtp() {
+    const codigo = (document.getElementById('otp-input').value || '').trim();
+    const errorEl = document.getElementById('otp-error');
+    if (codigo.length !== 8) {
+        _mostrarError(errorEl, 'El código debe tener 8 dígitos');
+        return;
+    }
+    try {
+        const res = await fetch('/verify-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: _pendingEmail, token: codigo })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            _mostrarError(errorEl, err.detail || 'Código inválido o expirado');
+            return;
+        }
+        const data = await res.json();
+        currentUser = data;
+        localStorage.setItem('numa_user', JSON.stringify(data));
+        document.getElementById('auth-screen').classList.add('hidden');
+        const { showOnboarding } = await import('./onboarding.js');
+        showOnboarding(data.user_id);
+    } catch (e) {
+        _mostrarError(errorEl, 'Error de conexión');
+    }
+}
+
+async function _reenviarOtp() {
+    await fetch('/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: _pendingEmail, password: _pendingPassword, nombre: _pendingNombre })
+    });
+    const errorEl = document.getElementById('otp-error');
+    errorEl.textContent = '📬 Te reenviamos el código, revisá tu casilla';
+    errorEl.classList.remove('hidden');
+}
+
+// ============================================
+// GOOGLE OAUTH
+// ============================================
+
+async function _loginConGoogle() {
+    const { error } = await _supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+            redirectTo: 'https://web-production-3f4e4.up.railway.app'
+        }
+    });
+    if (error) {
+        const errorEl = document.getElementById('login-error');
+        _mostrarError(errorEl, 'Error al conectar con Google');
+    }
+}
+
+export async function manejarCallbackOAuth() {
+    const hash = window.location.hash;
+    if (!hash || !hash.includes('access_token')) return false;
+
+    const params = new URLSearchParams(hash.substring(1));
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
+
+    if (!access_token) return false;
+
+    const { data, error } = await _supabase.auth.getUser(access_token);
+    if (error || !data.user) return false;
+
+    const user = data.user;
+    currentUser = {
+        user_id: user.id,
+        email: user.email,
+        access_token,
+        refresh_token
+    };
+    localStorage.setItem('numa_user', JSON.stringify(currentUser));
+
+    window.history.replaceState(null, '', window.location.pathname);
+
+    try {
+        const perfilRes = await fetch(`/profile/${user.id}`, {
+            headers: { 'Authorization': `Bearer ${access_token}` }
+        });
+        if (perfilRes.ok) {
+            const perfil = await perfilRes.json();
+            if (!perfil.onboarding_completo) {
+                const { showOnboarding } = await import('./onboarding.js');
+                showOnboarding(user.id);
+                return true;
+            }
+        }
+    } catch (e) {
+        console.warn('No se pudo verificar onboarding OAuth:', e);
+    }
+
+    if (window.inicializarChat) await window.inicializarChat();
+    if (window.agregarMensaje) window.agregarMensaje(`Bienvenido 🐼 Me alegra que estés aquí.`, 'oso');
+    mostrarAvisoTesterCada();
+    return true;
 }
 
 // ============================================
@@ -281,3 +425,6 @@ window.switchTab = _mostrarTab;
 window.submitLogin = _submitLogin;
 window.submitRegister = _submitRegister;
 window.logout = _logout;
+window.submitOtp = _submitOtp;
+window.reenviarOtp = _reenviarOtp;
+window.loginConGoogle = _loginConGoogle;

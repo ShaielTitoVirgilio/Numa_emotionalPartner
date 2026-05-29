@@ -11,7 +11,7 @@ import {
 import { detenerRespiracion } from './modules/motorRespiracion.js';
 import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, prevReading, closeReading } from './modules/lectura.js';
-import { showAuthScreen, hideAuthScreen, getCurrentUser } from './modules/auth.js';
+import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
 import { initFeedbackTab } from './modules/feedbackTab.js';
@@ -110,6 +110,9 @@ function _tokenExpired(token) {
 }
 
 async function init() {
+  const fueOAuth = await manejarCallbackOAuth();
+  if (fueOAuth) return;
+
   const savedUser = localStorage.getItem('numa_user');
   if (!savedUser) {
     showAuthScreen();

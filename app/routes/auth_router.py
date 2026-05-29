@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any
-from app.auth_service import register_user, login_user, get_user_profile, refresh_session
+from app.auth_service import register_user, login_user, get_user_profile, refresh_session, verify_email_otp
 from app.supabase_client import supabase
 
 router = APIRouter()
@@ -17,6 +17,10 @@ class LoginRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+class VerifyEmailRequest(BaseModel):
+    email: str
+    token: str
 
 class SubscriptionRequest(BaseModel):
     user_id: str
@@ -53,6 +57,14 @@ def profile_endpoint(user_id: str):
         return profile
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/verify-email")
+def verify_email_endpoint(request: VerifyEmailRequest):
+    try:
+        result = verify_email_otp(request.email, request.token)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/subscribe")
 def subscribe_endpoint(request: SubscriptionRequest):

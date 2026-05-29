@@ -65,6 +65,24 @@ def refresh_session(refresh_token: str):
     }
 
 
+def verify_email_otp(email: str, token: str):
+    response = _auth_client().auth.verify_otp({
+        "email": email,
+        "token": token,
+        "type": "signup",
+    })
+    user = response.user
+    session = response.session
+    if not user or not session:
+        raise Exception("Código inválido o expirado")
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+    }
+
+
 def get_user_profile(user_id: str):
     response = supabase.table("users_profiles") \
         .select("*") \
