@@ -24,13 +24,20 @@ export function getCurrentUser() {
 }
 
 export function showAuthScreen() {
-    // Ocultar el chat
     document.querySelector('.app').style.display = 'none';
 
-    // Crear pantalla de auth si no existe
     if (!document.getElementById('auth-screen')) {
         _crearAuthScreen();
     }
+
+    // Limpiar estado OTP si quedó de una sesión anterior
+    const formOtp = document.getElementById('form-otp');
+    if (formOtp) formOtp.remove();
+    const tabs = document.querySelector('#auth-screen .auth-tabs');
+    if (tabs) tabs.classList.remove('hidden');
+    _pendingEmail = null;
+    _pendingPassword = null;
+    _pendingNombre = null;
 
     document.getElementById('auth-screen').classList.remove('hidden');
     _mostrarTab('login');

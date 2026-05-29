@@ -21,21 +21,29 @@ def register_user(email: str, password: str, nombre: str):
     if not user:
         raise Exception("Error al crear el usuario")
 
-    # Reintentar con backoff por si el usuario aún no propagó en auth.users
-    with_retry(lambda: supabase.table("users_profiles").upsert({
-        "id": user.id,
-        "nombre": nombre,
-        "onboarding_completo": False,
-    }).execute())
+    try:
+        with_retry(lambda: supabase.table("users_profiles").upsert({
+            "id": user.id,
+            "nombre": nombre,
+            "onboarding_completo": False,
+        }).execute())
+    except Exception as e:
+        err = str(e)
+        if "23503" in err or "foreign key" in err.lower():
+            raise Exception("Este email ya está registrado. Probá iniciando sesión.")
+        raise
 
     return user
 
 
 def login_user(email: str, password: str):
-    response = _auth_client().auth.sign_in_with_password({
-        "email": email,
-        "password": password,
-    })
+    try:
+        response = _auth_client().auth.sign_in_with_password({
+            "email": email,
+            "password": password,
+        })
+    except Exception:
+        raise Exception("Email o contraseña incorrectos")
 
     user = response.user
     session = response.session
