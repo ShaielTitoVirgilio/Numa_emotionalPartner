@@ -347,16 +347,31 @@ async function _loginConGoogle() {
 }
 
 export async function manejarCallbackOAuth() {
-    // Supabase v2 usa PKCE: devuelve ?code= en los query params, no en el hash
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (!code) return false;
+    let session = null;
 
-    const { data, error } = await _supabase.auth.exchangeCodeForSession(window.location.href);
-    if (error || !data.session) return false;
+    // PKCE flow: ?code= en los query params
+    const queryParams = new URLSearchParams(window.location.search);
+    const code = queryParams.get('code');
+    if (code) {
+        const { data, error } = await _supabase.auth.exchangeCodeForSession(window.location.href);
+        if (error || !data.session) return false;
+        session = data.session;
+    }
 
-    const user = data.session.user;
-    const session = data.session;
+    // Implicit flow: #access_token= en el hash
+    if (!session) {
+        const hash = window.location.hash;
+        if (!hash || !hash.includes('access_token')) return false;
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const access_token = hashParams.get('access_token');
+        const refresh_token = hashParams.get('refresh_token');
+        if (!access_token) return false;
+        const { data, error } = await _supabase.auth.setSession({ access_token, refresh_token });
+        if (error || !data.session) return false;
+        session = data.session;
+    }
+
+    const user = session.user;
     currentUser = {
         user_id: user.id,
         email: user.email,
