@@ -531,7 +531,7 @@ Cada elemento de "memories" tiene esta forma:
 Valores válidos para category: "trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana", "otro"
 priority: número del 1 al 5. Si dudás, usá 3.
 """
-def construir_prompt(perfil=None, memorias=None, num_interacciones=0, es_primera_vez=False, patrones=None, es_inicio_sesion=False):
+def construir_prompt(perfil=None, memorias=None, num_interacciones=0, es_primera_vez=False, patrones=None, es_inicio_sesion=False, ubicacion=None, dias_inactivo=0):
     secciones = [NUMA_BASE]
 
     # 🧠 CONTEXTO DE SESIÓN
@@ -544,6 +544,21 @@ CONTEXTO DE ESTA CONVERSACIÓN:
 - ¿Podés sugerir ejercicios?: {"sí" if ejercicios_ok else "no — todavía no, salvo que el usuario lo pida explícitamente"}
 """
     secciones.append(contexto_sesion)
+
+    # 📍 UBICACIÓN
+    if ubicacion and (ubicacion.get("ciudad") or ubicacion.get("pais")):
+        ciudad = ubicacion.get("ciudad", "")
+        pais = ubicacion.get("pais", "")
+        lugar = f"{ciudad}, {pais}".strip(", ")
+        bloque_ubicacion = f"""UBICACIÓN DEL USUARIO:
+- Está en: {lugar}
+- Usá esta información para:
+  • Recomendarle recursos, líneas de crisis y números de emergencia locales cuando sea relevante.
+  • Sugerirle actividades sociales, lugares o recursos de su zona si lo pide.
+  • Interpretar referencias geográficas que mencione (barrios, ciudades, distancias).
+- No menciones la ubicación explícitamente a menos que sea relevante para la conversación.
+"""
+        secciones.append(bloque_ubicacion)
 
     # 👤 PERFIL (ONBOARDING)
     if perfil:
@@ -579,6 +594,45 @@ CONTEXTO DE ESTA CONVERSACIÓN:
                     "No menciones esto explícitamente."
                 )
             secciones.append(bloque)
+
+    # 🔄 REENGANCHE — usuario inactivo >5 días
+    UMBRAL_INACTIVIDAD = 5
+    if dias_inactivo >= UMBRAL_INACTIVIDAD and memorias and len(memorias) > 0:
+        # Elegir la memoria más reciente/relevante para mencionar
+        # (las memorias ya vienen ordenadas por prioridad desc en el router)
+        candidatas = []
+        for m in memorias:
+            if isinstance(m, dict):
+                contenido = (m.get("content") or "").strip()
+                prioridad = m.get("priority") or 3
+            else:
+                contenido = str(m).strip()
+                prioridad = 3
+            if contenido:
+                candidatas.append((prioridad, contenido))
+
+        if candidatas:
+            # La de mayor prioridad
+            candidatas.sort(key=lambda x: x[0], reverse=True)
+            memoria_reenganche = candidatas[0][1]
+
+            semanas = dias_inactivo // 7
+            dias_str = f"{dias_inactivo} días" if dias_inactivo < 14 else f"unas {semanas} semanas"
+
+            bloque_reenganche = f"""
+SITUACIÓN ESPECIAL — USUARIO QUE VUELVE DESPUÉS DE AUSENCIA:
+El usuario lleva {dias_str} sin usar la app. Es su primera (o segunda) conversación desde que volvió.
+
+Memoria reciente disponible para reenganche:
+"{memoria_reenganche}"
+
+INSTRUCCIÓN PARA ESTA SESIÓN:
+- En el mensaje 1 o 2: respondé normal, sin mencionar la ausencia ni la memoria. Solo acompañá lo que trae.
+- En el mensaje 3 (cuando num_interacciones == 3): de manera natural y sin que parezca un recordatorio, sacá el tema de esa memoria. Usá algo como "¿Y aquello de [tema]? ¿Cómo quedó?" o "La última vez hablamos de [tema]... ¿cómo está ese frente?" — siempre dependiendo del tono de la conversación. Si el usuario ya trajo ese tema, no lo repitas.
+- El objetivo no es demostrar que recordaste, sino mostrar que seguís ahí y que lo que le importa te importa a vos también.
+- No uses la palabra "ausencia", "inactivo", ni menciones que tardó en volver.
+"""
+            secciones.append(bloque_reenganche)
 
     # 🧠 MEMORIAS (agrupadas por prioridad)
     if memorias and len(memorias) > 0:

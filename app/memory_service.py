@@ -241,3 +241,35 @@ def get_recent_memories(
             })
 
     return memorias_vigentes, to_deactivate_ids
+
+
+def get_dias_inactivo(user_id: str) -> int:
+    """
+    Devuelve cuántos días lleva el usuario sin generar una conversación.
+    Consulta el mensaje de assistant más reciente en la tabla conversations.
+    Devuelve 0 si tuvo actividad hoy, o si no hay historial.
+    """
+    try:
+        res = (
+            supabase.table("conversations")
+            .select("created_at")
+            .eq("user_id", user_id)
+            .eq("role", "assistant")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return 0
+        ultima = rows[0].get("created_at", "")
+        if not ultima:
+            return 0
+        # Parsear timestamp ISO (con o sin timezone)
+        ultima_dt = datetime.fromisoformat(ultima.replace("Z", "+00:00"))
+        ahora = datetime.now(timezone.utc)
+        delta = ahora - ultima_dt
+        return max(0, delta.days)
+    except Exception as e:
+        print(f"⚠️ get_dias_inactivo error: {e}")
+        return 0

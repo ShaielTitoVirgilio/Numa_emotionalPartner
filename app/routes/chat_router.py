@@ -11,6 +11,7 @@ from app.memory_service import (
     invalidate_patterns_cache,
     deactivate_event_memories,
     detectar_evento_proximo,
+    get_dias_inactivo,
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
 from app.crisis_detector import detectar_crisis
@@ -52,10 +53,17 @@ class Message(BaseModel):
     content: str
 
 
+class UbicacionData(BaseModel):
+    ciudad: Optional[str] = None
+    pais: Optional[str] = None
+    countryCode: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     conversation: List[Message]
     user_id: Optional[str] = None
     perfil: Optional[Dict[str, Any]] = None
+    ubicacion: Optional[UbicacionData] = None
 
 
 class ChatResponse(BaseModel):
@@ -161,6 +169,12 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
         es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
 
+        # Detectar reenganche: >5 días sin actividad
+        dias_inactivo = 0
+        if body.user_id and num_interacciones <= 4:
+            # Solo consultamos al principio de la sesión para no repetir la llamada
+            dias_inactivo = get_dias_inactivo(body.user_id)
+
         system_prompt = construir_prompt(
             perfil=perfil,
             memorias=memorias_vigentes,
@@ -168,6 +182,8 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             es_inicio_sesion=es_inicio_sesion,
             num_interacciones=num_interacciones,
             es_primera_vez=es_primera_vez,
+            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
+            dias_inactivo=dias_inactivo,
         )
 
         result = llm.generate_response(

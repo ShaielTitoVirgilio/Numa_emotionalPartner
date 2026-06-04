@@ -1,9 +1,20 @@
 # app/routes/dashboard_router.py
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException
+from openai import OpenAI
+import os
 from app.core.db import supabase
 from app.memory_service import get_topic_patterns_cached
+
+# Cliente Groq para generar el insight (reutiliza la misma key)
+_groq = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1",
+)
+
+# Cache en memoria: { user_id: (fecha_str, insight_dict) }
+_insight_cache: dict = {}
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -131,6 +142,14 @@ def get_dashboard(user_id: str):
 
         resumen = _construir_resumen(dias_bien, dias_mal, total_checkins, top_patron)
 
+        insight_ia = _generar_insight_ia(
+            checkins=checkins,
+            patrones=patrones,
+            comparacion=comparacion,
+            dias_activos=dias_activos_semana,
+            user_id=user_id,
+        )
+
         return {
             "mood_semanal":         mood_semanal,
             "dias_activos_semana":  dias_activos_semana,
@@ -138,10 +157,106 @@ def get_dashboard(user_id: str):
             "checkins":             checkins,
             "patrones":             patrones,
             "resumen":              resumen,
+            "insight_ia":           insight_ia,
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _generar_insight_ia(
+    checkins: list,
+    patrones: list,
+    comparacion: Optional[str],
+    dias_activos: int,
+    user_id: str,
+) -> Optional[dict]:
+    """
+    Llama al LLM para generar una observación nueva — algo que el usuario
+    probablemente no notó conscientemente. Se cachea por día para no gastar
+    tokens en cada apertura del dashboard.
+    """
+    hoy = date.today().isoformat()
+
+    # Devolver desde cache si ya se generó hoy
+    cached = _insight_cache.get(user_id)
+    if cached and cached[0] == hoy:
+        return cached[1]
+
+    # No generar si no hay datos suficientes
+    if not checkins and not patrones:
+        return None
+
+    # Armar resumen de datos para el prompt
+    total = len(checkins)
+    if total == 0:
+        return None
+
+    dias_bien = sum(1 for c in checkins if c["mood_value"] >= 3)
+    dias_mal  = sum(1 for c in checkins if c["mood_value"] <= 2)
+
+    checkin_desc = f"{total} check-ins este mes: {dias_bien} días bien/genial, {dias_mal} días mal/regular."
+
+    comparacion_desc = {
+        "muy_mejor":    "Esta semana estuvo bastante mejor que la anterior.",
+        "un_poco_mejor":"Esta semana un poco mejor que la anterior.",
+        "similar":      "Esta semana fue parecida a la anterior.",
+        "un_poco_peor": "Esta semana un poco más difícil que la anterior.",
+        "muy_peor":     "Esta semana fue bastante más difícil que la anterior.",
+    }.get(comparacion or "", "")
+
+    patrones_desc = ""
+    if patrones:
+        tops = [f"'{p['topic']}' ({p['count']} veces)" for p in patrones[:4]]
+        patrones_desc = "Temas más hablados: " + ", ".join(tops) + "."
+
+    dias_activos_desc = f"Días que usó la app esta semana: {dias_activos}."
+
+    prompt = f"""Sos Numa, el compañero emocional. Tenés los siguientes datos del usuario del último mes:
+
+{checkin_desc}
+{comparacion_desc}
+{patrones_desc}
+{dias_activos_desc}
+
+Tu tarea: escribir UNA observación corta (2-3 oraciones máximo) para el usuario que:
+- Diga algo que probablemente NO notó conscientemente sobre sí mismo
+- Conecte patrones entre temas y estado de ánimo si es posible
+- Sea específica con los datos, no genérica
+- Suene como Numa: cercana, directa, sin análisis clínico
+- NO empiece con "Según los datos" ni "Noté que" ni "Basándome en"
+- NO sea un resumen de lo que ya sabe
+- Puede señalar una fortaleza, una tendencia o algo que vale la pena explorar
+
+También devolvé un campo "tipo" con uno de estos valores:
+- "fortaleza" — si destacás algo positivo o resiliente
+- "patron" — si conectás temas con estado de ánimo
+- "tendencia" — si señalás un cambio o dirección
+- "reflexion" — si proponés algo para pensar
+
+Devolvé JSON con este formato exacto:
+{{"texto": "...", "tipo": "..."}}"""
+
+    try:
+        resp = _groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            temperature=0.75,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        import json
+        data = json.loads(resp.choices[0].message.content or "{}")
+        texto = data.get("texto", "").strip()
+        tipo  = data.get("tipo", "reflexion")
+        if not texto:
+            return None
+        result = {"texto": texto, "tipo": tipo}
+        _insight_cache[user_id] = (hoy, result)
+        return result
+    except Exception as e:
+        print(f"⚠️ insight_ia error: {e}")
+        return None
 
 
 def _construir_resumen(dias_bien: int, dias_mal: int, total: int, top_patron: Optional[str]) -> str:
