@@ -7,3 +7,4 @@ supabase
 slowapi
 python-multipart
 pywebpush
+PyJWT[crypto]
