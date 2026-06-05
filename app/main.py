@@ -20,6 +20,7 @@ from app.routes.onboarding_router import router as onboarding_router
 from app.routes.feedback_router import router as feedback_router
 from app.routes.checkin_router import router as checkin_router
 from app.routes.dashboard_router import router as dashboard_router
+from app.routes.account_router import router as account_router
 from app.supabase_client import supabase
 
 # ==========================
@@ -139,3 +140,4 @@ app.include_router(onboarding_router)
 app.include_router(feedback_router)
 app.include_router(checkin_router)
 app.include_router(dashboard_router)
+app.include_router(account_router)

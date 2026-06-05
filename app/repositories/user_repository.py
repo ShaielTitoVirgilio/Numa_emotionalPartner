@@ -36,3 +36,14 @@ class UserRepository:
 
     def save_onboarding_answers(self, user_id: str, answers: list[dict]) -> None:
         supabase.table("onboarding_answers").insert(answers).execute()
+
+    def delete_all_user_data(self, user_id: str) -> None:
+        # Borrar datos en orden para respetar FKs
+        supabase.table("memories").delete().eq("user_id", user_id).execute()
+        supabase.table("conversations").delete().eq("user_id", user_id).execute()
+        supabase.table("daily_checkins").delete().eq("user_id", user_id).execute()
+        supabase.table("onboarding_answers").delete().eq("user_id", user_id).execute()
+        supabase.table("user_notifications").delete().eq("user_id", user_id).execute()
+        supabase.table("users_profiles").delete().eq("id", user_id).execute()
+        # Eliminar el usuario de Supabase Auth (requiere service key)
+        supabase.auth.admin.delete_user(user_id)
