@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Numa</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="manifest" href="/static/manifest.json" />
@@ -222,17 +222,20 @@
 <div class="app">
 
   <!-- ============================================
-       TAB BAR — Chat / Mi estado / Feedback
+       TAB BAR — Chat / Ejercicios / Mi estado / Perfil
        ============================================ -->
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
       <span class="tab-icon">💬</span> Chat
     </button>
+    <button class="tab-btn" id="tab-ejercicios-btn" onclick="irAEjercicios()">
+      <span class="tab-icon">🧘</span> Ejercicios
+    </button>
     <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
       <span class="tab-icon">📊</span> Mi estado
     </button>
-    <button class="tab-btn" id="tab-feedback-btn" onclick="switchMainTab('feedback')">
-      <span class="tab-icon">💬</span> Feedback
+    <button class="tab-btn" id="tab-profile-btn" onclick="switchMainTab('profile')">
+      <span class="tab-icon">👤</span> Perfil
     </button>
   </div>
 
@@ -263,23 +266,7 @@
       <button class="btn-enviar" onclick="enviarMensaje()">Enviar</button>
     </div>
 
-    <!-- NAV BOTONES -->
-    <div class="nav-buttons">
-      <button class="nav-btn" onclick="irAEjercicios()">
-        <span>🧘</span> Ejercicios
-      </button>
-      <button class="nav-btn" onclick="logout()">
-        <span>🚪</span> Salir
-      </button>
-    </div>
 
-  </div>
-
-  <!-- ============================================
-       VISTA: FEEDBACK
-       ============================================ -->
-  <div class="tab-view" id="view-feedback">
-    <!-- Renderizado dinámicamente por feedbackTab.js -->
   </div>
 
   <!-- ============================================
@@ -287,6 +274,13 @@
        ============================================ -->
   <div class="tab-view" id="view-dashboard">
     <!-- Contenido cargado dinámicamente por dashboard.js -->
+  </div>
+
+  <!-- ============================================
+       VISTA: PERFIL
+       ============================================ -->
+  <div class="tab-view" id="view-profile">
+    <!-- Contenido cargado dinámicamente por profile.js -->
   </div>
 
   <!-- ============================================
@@ -540,17 +534,17 @@
   function switchMainTab(tab) {
     document.getElementById('tab-chat-btn').classList.toggle('active', tab === 'chat');
     document.getElementById('tab-dashboard-btn').classList.toggle('active', tab === 'dashboard');
-    document.getElementById('tab-feedback-btn').classList.toggle('active', tab === 'feedback');
+    document.getElementById('tab-profile-btn').classList.toggle('active', tab === 'profile');
 
     document.getElementById('view-chat').classList.toggle('active', tab === 'chat');
     document.getElementById('view-dashboard').classList.toggle('active', tab === 'dashboard');
-    document.getElementById('view-feedback').classList.toggle('active', tab === 'feedback');
+    document.getElementById('view-profile').classList.toggle('active', tab === 'profile');
 
-    if (tab === 'feedback' && window.initFeedbackTab) {
-      window.initFeedbackTab();
-    }
     if (tab === 'dashboard' && window.initDashboard) {
       window.initDashboard();
+    }
+    if (tab === 'profile' && window.initProfile) {
+      window.initProfile();
     }
   }
 

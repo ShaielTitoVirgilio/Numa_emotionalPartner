@@ -41,7 +41,8 @@
      height: -webkit-fill-available; /* iOS */
      height: 100dvh;                 /* Android: se ajusta al teclado virtual */
      overflow: hidden;
-     padding: 16px 20px 20px;
+     padding: 16px 20px 0;
+     padding-bottom: max(20px, env(safe-area-inset-bottom, 20px));
      display: flex;
      flex-direction: column;
      align-items: center;
@@ -1234,6 +1235,34 @@
 }
 
 /* Resumen */
+.db-insight {
+  border-width: 1.5px;
+  border-style: solid;
+}
+
+.db-insight-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.db-insight-texto {
+  font-size: 0.97rem;
+  color: #2f4f45;
+  line-height: 1.6;
+  font-style: italic;
+  margin: 0 0 10px;
+}
+
+.db-insight-autor {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin: 0;
+}
+
 .db-resumen {
   background: linear-gradient(135deg, #2f4f45 0%, #4a7a6a 100%);
 }
@@ -1412,4 +1441,351 @@
   text-align: center;
   margin: 8px 0 0;
   line-height: 1.5;
+}
+
+.db-empty-inicio {
+  margin-top: 40px;
+  font-size: 0.95rem;
+  padding: 0 16px;
+}
+
+.db-insight-placeholder {
+  background: #f4faf7;
+  border-color: #d4e5df;
+}
+
+.db-insight-placeholder-texto {
+  font-size: 0.9rem;
+  color: #8fb5a3;
+  line-height: 1.6;
+  margin: 0;
+  text-align: center;
+}
+
+/* ============================================
+   PERFIL
+   ============================================ */
+
+.prf-scroll {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 4px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Header */
+.prf-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 0 8px;
+  gap: 6px;
+}
+
+.prf-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: #7db89e;
+  color: white;
+  font-size: 1.8rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.prf-nombre {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #2f4f45;
+  margin: 0;
+}
+
+.prf-email {
+  font-size: 0.85rem;
+  color: #8fb5a3;
+  margin: 0;
+}
+
+/* Cards */
+.prf-card {
+  background: white;
+  border-radius: 18px;
+  border: 1px solid #d4e5df;
+  padding: 18px;
+}
+
+.prf-card-titulo {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #2f4f45;
+  margin: 0 0 14px;
+}
+
+/* Check-in */
+.prf-mood-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.prf-mood-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 12px 4px;
+  background: #f4faf7;
+  border: 1.5px solid #d4e5df;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+
+.prf-mood-btn:hover {
+  background: #e4f5eb;
+  border-color: #7db89e;
+}
+
+.prf-mood-btn:active,
+.prf-mood-btn.seleccionado {
+  background: #cfe7dd;
+  border-color: #5a9e84;
+  transform: scale(0.96);
+}
+
+.prf-mood-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.prf-mood-emoji {
+  font-size: 1.9rem;
+}
+
+.prf-mood-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #6b8e7d;
+}
+
+.prf-checkin-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+}
+
+.prf-checkin-emoji {
+  font-size: 2.8rem;
+}
+
+.prf-checkin-done-texto {
+  font-size: 0.88rem;
+  color: #8fb5a3;
+  margin: 0;
+  text-align: center;
+}
+
+/* Disclaimer */
+.prf-disclaimer {
+  background: #fdf8f0;
+  border-color: #e8d5b0;
+}
+
+.prf-disclaimer-texto {
+  font-size: 0.88rem;
+  color: #5a4a2a;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Links legales */
+.prf-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.prf-link {
+  font-size: 0.78rem;
+  color: #8fb5a3;
+  text-decoration: underline;
+}
+
+.prf-link-sep {
+  font-size: 0.78rem;
+  color: #b7d3c6;
+}
+
+/* Botón cerrar sesión */
+.prf-btn-logout {
+  width: 100%;
+  padding: 14px;
+  background: transparent;
+  border: 2px solid #7db89e;
+  border-radius: 16px;
+  color: #2f4f45;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.prf-btn-logout:hover {
+  background: #e4f5eb;
+}
+
+/* Botón eliminar cuenta */
+.prf-btn-delete {
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: none;
+  color: #c0392b;
+  font-size: 0.88rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Modal eliminar cuenta */
+.prf-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.prf-modal-overlay.visible {
+  opacity: 1;
+}
+
+.prf-modal {
+  background: white;
+  border-radius: 24px 24px 0 0;
+  padding: 28px 24px max(24px, env(safe-area-inset-bottom, 24px));
+  width: 100%;
+  max-width: 430px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transform: translateY(40px);
+  transition: transform 0.25s ease;
+}
+
+.prf-modal-overlay.visible .prf-modal {
+  transform: translateY(0);
+}
+
+.prf-modal-titulo {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #2f4f45;
+  margin: 0;
+}
+
+.prf-modal-subtitulo {
+  font-size: 0.9rem;
+  color: #6b8e7d;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.prf-modal-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid #b7d3c6;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: #2f4f45;
+  resize: none;
+  height: 80px;
+  outline: none;
+}
+
+.prf-modal-warning {
+  background: #fdecea;
+  border: 1px solid #f5c6c2;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.82rem;
+  color: #922b21;
+  line-height: 1.5;
+}
+
+.prf-modal-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prf-modal-btn-cancel {
+  padding: 14px;
+  background: #f4faf7;
+  border: 1.5px solid #d4e5df;
+  border-radius: 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: inherit;
+  color: #2f4f45;
+  cursor: pointer;
+}
+
+.prf-modal-btn-confirm {
+  padding: 14px;
+  background: #c0392b;
+  border: none;
+  border-radius: 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: inherit;
+  color: white;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.prf-modal-btn-confirm:hover {
+  background: #a93226;
+}
+
+.prf-modal-btn-confirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Estado loading/error del perfil */
+.prf-estado-centro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+}
+
+.prf-estado-texto {
+  font-size: 0.9rem;
+  color: #8fb5a3;
+  text-align: center;
 }

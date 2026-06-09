@@ -52,7 +52,24 @@ function _animarEntrada(contenedor) {
 // ── HTML principal ────────────────────────────────────────────────────────────
 
 function _htmlDashboard(data) {
-  const { mood_semanal, dias_activos_semana, comparacion_semana, checkins, patrones, resumen } = data;
+  const { mood_semanal, dias_activos_semana, comparacion_semana, checkins, patrones, resumen, insight_ia } = data;
+
+  // Sin ningún dato aún → pantalla vacía con una sola frase
+  const hasData = insight_ia !== null || patrones.length > 0 || checkins.length > 0;
+
+  if (!hasData) {
+    return `
+      <div class="db-scroll">
+        <div class="db-header">
+          <h2 class="db-titulo">Tu estado</h2>
+          <p class="db-subtitulo">Últimos 30 días</p>
+        </div>
+        <p class="db-empty db-empty-inicio">
+          Cuando chatees con Numa y registres tu ánimo, acá vas a ver tu progreso y lo que Numa nota sobre vos.
+        </p>
+      </div>
+    `;
+  }
 
   return `
     <div class="db-scroll">
@@ -60,6 +77,8 @@ function _htmlDashboard(data) {
         <h2 class="db-titulo">Tu estado</h2>
         <p class="db-subtitulo">Últimos 30 días</p>
       </div>
+
+      ${insight_ia ? _htmlInsightIA(insight_ia) : _htmlInsightPlaceholder()}
 
       <!-- Resumen -->
       <div class="db-card db-resumen">
@@ -100,6 +119,36 @@ function _htmlDashboard(data) {
         `}
       </div>
 
+    </div>
+  `;
+}
+
+// ── Insight IA ────────────────────────────────────────────────────────────────
+
+function _htmlInsightPlaceholder() {
+  return `
+    <div class="db-card db-insight db-insight-placeholder">
+      <p class="db-insight-placeholder-texto">
+        Cuando chatees con Numa y registres tu ánimo, acá vas a ver tu progreso y lo que Numa nota sobre vos.
+      </p>
+    </div>
+  `;
+}
+
+const INSIGHT_CONFIG = {
+  fortaleza: { bg: "#eef7f1", color: "#5a9e7a", label: "Fortaleza" },
+  patron:    { bg: "#eef0fa", color: "#6b7fc4", label: "Patrón"    },
+  tendencia: { bg: "#faf3ea", color: "#c47a3a", label: "Tendencia" },
+  reflexion: { bg: "#eaf5f8", color: "#3a9eb5", label: "Reflexión" },
+};
+
+function _htmlInsightIA(insight) {
+  const cfg = INSIGHT_CONFIG[insight.tipo] || INSIGHT_CONFIG.reflexion;
+  return `
+    <div class="db-card db-insight" style="background:${cfg.bg}; border-color:${cfg.color}40;">
+      <span class="db-insight-label" style="color:${cfg.color}">${cfg.label.toUpperCase()}</span>
+      <p class="db-insight-texto">"${insight.texto}"</p>
+      <p class="db-insight-autor" style="color:${cfg.color}">— Numa</p>
     </div>
   `;
 }

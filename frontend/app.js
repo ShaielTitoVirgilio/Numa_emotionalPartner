@@ -14,8 +14,8 @@ import { showReading, nextReading, prevReading, closeReading } from './modules/l
 import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada } from './modules/utils.js';
-import { initFeedbackTab } from './modules/feedbackTab.js';
 import { initDashboard } from './modules/dashboard.js';
+import { initProfile } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 
@@ -37,8 +37,8 @@ window.closeReading = closeReading;
 window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
 window.mostrarProximamente = mostrarProximamente;
-window.initFeedbackTab = initFeedbackTab;
 window.initDashboard = initDashboard;
+window.initProfile = initProfile;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
 window.inicializarChat = inicializarChat;

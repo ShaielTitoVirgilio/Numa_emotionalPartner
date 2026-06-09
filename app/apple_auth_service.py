@@ -3,6 +3,7 @@ import hashlib
 import os
 import requests
 import jwt
+from typing import Optional
 from jwt.algorithms import RSAAlgorithm
 from app.auth_service import _auth_client
 from app.core.db import supabase
@@ -54,8 +55,8 @@ def _derive_password(apple_sub: str) -> str:
 
 def find_or_create_apple_user(
     apple_sub: str,
-    email: str | None,
-    full_name: str | None,
+    email: Optional[str],
+    full_name: Optional[str],
 ) -> dict:
     derived_password = _derive_password(apple_sub)
     client = _auth_client()
