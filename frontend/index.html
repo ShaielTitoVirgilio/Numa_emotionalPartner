@@ -28,12 +28,12 @@
     }
     .tab-btn {
       flex: 1;
-      padding: 10px 8px;
+      padding: 10px 4px;
       border: none;
       border-radius: 16px;
       background: transparent;
       color: #6b8e7d;
-      font-size: 0.92rem;
+      font-size: 0.78rem;
       font-family: inherit;
       font-weight: 700;
       cursor: pointer;
@@ -41,15 +41,27 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 5px;
+      gap: 4px;
+      white-space: nowrap;
+      overflow: hidden;
     }
     .tab-btn.active {
+      flex: 1.6;
       background: white;
       color: #2f4f45;
+      font-size: 0.88rem;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     .tab-btn .tab-icon {
       font-size: 1rem;
+      flex-shrink: 0;
+    }
+    /* Label oculto en tabs inactivos, visible en activo */
+    .tab-btn .tab-label {
+      display: none;
+    }
+    .tab-btn.active .tab-label {
+      display: inline;
     }
     /* Badge "Próximamente" */
     .tab-badge {
@@ -226,16 +238,16 @@
        ============================================ -->
   <div class="tab-bar">
     <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
-      <span class="tab-icon">💬</span> Chat
+      <span class="tab-icon">💬</span><span class="tab-label"> Chat</span>
     </button>
     <button class="tab-btn" id="tab-ejercicios-btn" onclick="irAEjercicios()">
-      <span class="tab-icon">🧘</span> Ejercicios
+      <span class="tab-icon">🧘</span><span class="tab-label"> Ejercicios</span>
     </button>
     <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
-      <span class="tab-icon">📊</span> Mi estado
+      <span class="tab-icon">📊</span><span class="tab-label"> Mi estado</span>
     </button>
     <button class="tab-btn" id="tab-profile-btn" onclick="switchMainTab('profile')">
-      <span class="tab-icon">👤</span> Perfil
+      <span class="tab-icon">👤</span><span class="tab-label"> Perfil</span>
     </button>
   </div>
 
@@ -263,7 +275,7 @@
         autocomplete="off"
         onkeypress="if (event.key === 'Enter') enviarMensaje()"
       />
-      <button class="btn-enviar" onclick="enviarMensaje()">Enviar</button>
+      <button class="btn-enviar" onclick="enviarMensaje()" aria-label="Enviar">↑</button>
     </div>
 
 

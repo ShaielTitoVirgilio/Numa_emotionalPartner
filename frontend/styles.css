@@ -204,26 +204,31 @@
    }
    
    .btn-enviar {
-     padding: 16px 22px;
-     font-size: 1rem;
+     width: 48px;
+     height: 48px;
+     padding: 0;
+     font-size: 1.3rem;
      font-family: inherit;
      font-weight: 700;
      border: none;
-     border-radius: 22px;
+     border-radius: 50%;
      background: #7db89e;
      color: white;
      cursor: pointer;
      transition: transform 0.15s ease, background 0.2s;
      flex-shrink: 0;
+     display: flex;
+     align-items: center;
+     justify-content: center;
    }
-   
+
    .btn-enviar:hover {
-     transform: scale(1.03);
+     transform: scale(1.05);
      background: #6aaa8f;
    }
-   
+
    .btn-enviar:active {
-     transform: scale(0.97);
+     transform: scale(0.93);
    }
    
    /* ============================================
