@@ -11,6 +11,14 @@ const OPCIONES_FEEDBACK = [
     { id: "same",         emoji: "😐", texto: "Sigo igual",    valor: "neutral" },
     { id: "not_really",  emoji: "😔", texto: "No tanto",      valor: "negative" },
   ];
+
+  // Mapeo opción → rating 1-5 que se persiste en exercise_ratings (skip = sin registro)
+  export const VALOR_A_RATING = {
+    positive_high: 5,
+    positive_low:  4,
+    neutral:       3,
+    negative:      2,
+  };
   
   // Respuestas de Numa según el resultado — mantiene el tono de amigo
   const RESPUESTAS_NUMA = {

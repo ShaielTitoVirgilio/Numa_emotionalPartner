@@ -1,9 +1,10 @@
 import base64
 from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.repositories.feedback_repository import FeedbackRepository
+from app.memory_service import invalidate_patterns_cache
 from app.core.config import config
 
 router = APIRouter()
@@ -32,6 +33,13 @@ class FeedbackRequest(BaseModel):
     rating: Optional[int] = None
     audio_base64: Optional[str] = None
     audio_mime: Optional[str] = None
+
+
+class ExerciseRatingRequest(BaseModel):
+    user_id: str
+    exercise_id: str
+    rating: int = Field(..., ge=1, le=5)
+    valor_texto: Optional[str] = None  # "positive_high" | "positive_low" | "neutral" | "negative"
 
 
 @router.post("/survey")
@@ -69,6 +77,23 @@ def feedback_endpoint(req: FeedbackRequest):
     except Exception as e:
         print(f"⚠️ Error guardando feedback: {e}")
         return {"ok": True, "warning": str(e)}
+
+
+@router.post("/exercise-rating")
+def exercise_rating_endpoint(req: ExerciseRatingRequest):
+    try:
+        feedback_repo.save_exercise_rating(
+            user_id=req.user_id,
+            exercise_id=req.exercise_id,
+            rating=req.rating,
+            valor_texto=req.valor_texto,
+        )
+        # El rating es información de preferencia del usuario
+        invalidate_patterns_cache(req.user_id)
+        return {"ok": True}
+    except Exception as e:
+        print(f"⚠️ Error guardando exercise rating: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/admin/feedback")

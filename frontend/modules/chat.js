@@ -3,6 +3,9 @@ import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
 import { verificarCheckinDiario } from './checkin.js';
+import { getRespuestaNuma, VALOR_A_RATING } from './feedbackPost.js';
+import { setFeedbackCallback as setFeedbackRespiracion } from './motorRespiracion.js';
+import { setFeedbackCallback as setFeedbackGuiado } from './motorGuiado.js';
 // ============================================
 // ESTADO Y CONFIGURACIÓN
 // ============================================
@@ -25,6 +28,9 @@ const MAX_HISTORIAL = 20;
 
 // 👤 Perfil cacheado — se carga una vez al inicio, se actualiza si hay memoria nueva
 let perfilCacheado = null;
+
+// 🎭 Mood de la última respuesta de Numa — el backend lo usa para el routing de módulos
+let ultimoMood = null;
 
 // ⏱️ Control de Enfriamiento
 let ultimoEjercicioSugeridoTime = 0;
@@ -146,24 +152,54 @@ export async function enviarMensaje() {
   }
 }
 
-export function recibirFeedbackEjercicio(textoOpcion, respuestaNuma, valor) {
+export async function recibirFeedbackEjercicio(textoOpcion, valor, ejercicio) {
   agregarMensaje(textoOpcion, "user");
 
-  setTimeout(() => {
-    const moodParaFeedback = _valorAMood(valor);
-    agregarMensaje(respuestaNuma, "oso", moodParaFeedback);
+  const numaUser = localStorage.getItem('numa_user');
+  const userId = numaUser ? JSON.parse(numaUser).user_id : null;
 
+  // 1) Persistir el rating 1-5 del ejercicio (fire-and-forget, no bloquea la respuesta)
+  if (userId && ejercicio?.id && VALOR_A_RATING[valor]) {
+    fetch("/exercise-rating", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        exercise_id: ejercicio.id,
+        rating: VALOR_A_RATING[valor],
+        valor_texto: valor,
+      }),
+    }).catch(e => console.warn("No se pudo guardar el rating:", e));
+  }
+
+  // 2) Respuesta real de Numa vía LLM — el prefijo [Post-ejercicio | ...] activa
+  //    el módulo de feedback contextual en el backend
+  const mensajePost = `[Post-ejercicio | ${ejercicio?.nombre || "ejercicio"}] ${textoOpcion}`;
+  _prepararEnvio();
+  try {
+    const data = await _llamarBackend(mensajePost);
+    _procesarRespuesta(data, mensajePost);
+  } catch (error) {
+    // Fallback offline: frase local si falla la red
+    console.warn("Feedback vía LLM falló, uso respuesta local:", error);
+    ocultarTyping();
+    const moodParaFeedback = _valorAMood(valor);
+    const respuestaFallback = getRespuestaNuma(valor);
+    agregarMensaje(respuestaFallback, "oso", moodParaFeedback);
     if (window.setBearState) {
       window.setBearState(MOOD_TO_BEAR_STATE[moodParaFeedback] || 'calm');
     }
-
-    historialConversacion.push({ role: "user", content: `[Post-ejercicio] ${textoOpcion}` });
-    historialConversacion.push({ role: "assistant", content: respuestaNuma });
+    historialConversacion.push({ role: "user", content: mensajePost });
+    historialConversacion.push({ role: "assistant", content: respuestaFallback });
     _trimHistorial();
-
     chat.scrollTop = chat.scrollHeight;
-  }, 400);
+  }
 }
+
+// Cablear el callback de feedback de los motores hacia el chat
+// (antes setFeedbackCallback no se llamaba nunca y el feedback se perdía)
+setFeedbackRespiracion(recibirFeedbackEjercicio);
+setFeedbackGuiado(recibirFeedbackEjercicio);
 
 // ============================================
 // FUNCIONES PRIVADAS — ENVÍO
@@ -197,6 +233,7 @@ async function _llamarBackend(texto) {
       conversation: conversationToSend,
       user_id: userId,
       perfil: perfilCacheado,   // ← mandamos el perfil cacheado, backend no lo busca en DB
+      ultimo_mood: ultimoMood,  // ← mood del turno anterior, para el routing de módulos
     })
   });
 
@@ -219,6 +256,7 @@ if (!res.ok) {
 function _procesarRespuesta(data, textoUsuario) {
  
   const mood = data.mood || 'neutral';
+  ultimoMood = mood;
   const textoLimpio = _limpiarMensaje(data.message);
 
   ocultarTyping();

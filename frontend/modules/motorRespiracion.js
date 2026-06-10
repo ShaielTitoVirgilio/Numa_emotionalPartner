@@ -1,6 +1,6 @@
 // modules/motorRespiracion.js
 
-import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+import { mostrarFeedback } from './feedbackPost.js';
 import { detenerSonidoAmbiente } from './ambientSound.js';
 
 // ============================================
@@ -227,7 +227,7 @@ export function runRespiracion(data) {
   intervalRespiracion = setInterval(ciclo, cicloTotal);
 
   finalizarTimeout = setTimeout(() => {
-    finalizarRespiracion(data.nombre);
+    finalizarRespiracion(data);
   }, 60000);
 }
 
@@ -245,7 +245,7 @@ export function detenerRespiracion() {
 // PRIVADO
 // ============================================
 
-function finalizarRespiracion(nombreEjercicio) {
+function finalizarRespiracion(ejercicio) {
   clearInterval(intervalRespiracion);
   intervalRespiracion = null;
   clearTimeout(finalizarTimeout);
@@ -264,10 +264,9 @@ function finalizarRespiracion(nombreEjercicio) {
     detenerRespiracion();
     if (circulo) circulo.style.display = "block";
 
-    mostrarFeedback(nombreEjercicio || "la respiración", (valor, textoOpcion) => {
+    mostrarFeedback(ejercicio?.nombre || "la respiración", (valor, textoOpcion) => {
       if (_onFeedbackRespuesta) {
-        const respuestaNuma = getRespuestaNuma(valor);
-        _onFeedbackRespuesta(textoOpcion, respuestaNuma, valor);
+        _onFeedbackRespuesta(textoOpcion, valor, ejercicio);
       }
     });
   }, 2500);

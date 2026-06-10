@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.core.db import supabase
+from app.memory_service import invalidate_checkin_cache
 
 router = APIRouter(prefix="/checkin", tags=["checkin"])
 
@@ -39,6 +40,7 @@ def crear_checkin(body: CheckinRequest):
             },
             on_conflict="user_id,checkin_date",
         ).execute()
+        invalidate_checkin_cache(body.user_id)
         return {"ok": True, "mood_emoji": emoji}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

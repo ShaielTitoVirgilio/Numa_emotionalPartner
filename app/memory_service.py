@@ -1,8 +1,8 @@
 # app/memory_service.py
 from __future__ import annotations
 import time
-from datetime import datetime, timedelta, timezone
-from typing import List, Tuple, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional, Tuple, Dict, Any
 from app.core.db import supabase
 
 # Parámetros por defecto (podés ajustarlos)
@@ -13,6 +13,11 @@ MAX_MEMORIES_DEFAULT = 20
 # Clave: user_id → (expires_at_epoch, lista_de_patrones)
 _PATTERNS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 _PATTERNS_TTL_SECONDS = 300  # 5 minutos
+
+# Caché del check-in del día por usuario.
+# Clave: (user_id, fecha_iso) → (expires_at_epoch, mood_value | None)
+_CHECKIN_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[int]]] = {}
+_CHECKIN_TTL_SECONDS = 300  # 5 minutos
 
 # ── Detector de eventos próximos ─────────────────────────────────────────────
 _PALABRAS_TIEMPO = [
@@ -172,6 +177,37 @@ def get_topic_patterns_cached(
 def invalidate_patterns_cache(user_id: str) -> None:
     """Borra el caché de patrones de un usuario (llamar al guardar una memoria nueva)."""
     _PATTERNS_CACHE.pop(user_id, None)
+
+
+def get_checkin_hoy_cached(user_id: str) -> Optional[int]:
+    """
+    Devuelve el mood_value (1-4) del check-in de hoy del usuario, o None si no hizo.
+    Cacheado 5 min para no golpear Supabase en cada mensaje del chat.
+    """
+    hoy = date.today().isoformat()
+    key = (user_id, hoy)
+    now = time.time()
+    cached = _CHECKIN_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    res = (
+        supabase.table("daily_checkins")
+        .select("mood_value")
+        .eq("user_id", user_id)
+        .eq("checkin_date", hoy)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    valor = rows[0].get("mood_value") if rows else None
+    _CHECKIN_CACHE[key] = (now + _CHECKIN_TTL_SECONDS, valor)
+    return valor
+
+
+def invalidate_checkin_cache(user_id: str) -> None:
+    """Borra el caché del check-in de hoy (llamar al guardar un check-in nuevo)."""
+    _CHECKIN_CACHE.pop((user_id, date.today().isoformat()), None)
 
 
 def get_recent_memories(

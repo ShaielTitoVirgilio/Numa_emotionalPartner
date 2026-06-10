@@ -22,6 +22,14 @@ class FeedbackRepository:
 
         return query.execute().data
 
+    def save_exercise_rating(self, user_id: str, exercise_id: str, rating: int, valor_texto: Optional[str]) -> None:
+        supabase.table("exercise_ratings").insert({
+            "user_id":     user_id,
+            "exercise_id": exercise_id,
+            "rating":      rating,
+            "valor_texto": valor_texto,
+        }).execute()
+
     def save_crisis_log(self, user_id: Optional[str], mensaje: str, category: str, log_level: str) -> None:
         supabase.table("crisis_logs").insert({
             "user_id":         user_id,

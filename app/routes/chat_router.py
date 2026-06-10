@@ -12,6 +12,7 @@ from app.memory_service import (
     deactivate_event_memories,
     detectar_evento_proximo,
     get_dias_inactivo,
+    get_checkin_hoy_cached,
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
 from app.crisis_detector import detectar_crisis
@@ -64,6 +65,7 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = None
     perfil: Optional[Dict[str, Any]] = None
     ubicacion: Optional[UbicacionData] = None
+    ultimo_mood: Optional[str] = None  # mood del último turno del LLM (lo manda el frontend)
 
 
 class ChatResponse(BaseModel):
@@ -106,16 +108,18 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
 
         ultimo_mensaje = body.conversation[-1].content if body.conversation else ""
         crisis = detectar_crisis(ultimo_mensaje)
+        crisis_score = crisis.get("score", 0.0)
 
         if crisis["detected"]:
-            if crisis["log_level"] in ("critical", "high"):
-                background_tasks.add_task(
-                    feedback_repo.save_crisis_log,
-                    body.user_id,
-                    ultimo_mensaje,
-                    crisis["category"],
-                    crisis["log_level"],
-                )
+            # Solo critical/high llegan acá (método, ideación, autolesión):
+            # respuesta determinística, sin LLM.
+            background_tasks.add_task(
+                feedback_repo.save_crisis_log,
+                body.user_id,
+                ultimo_mensaje,
+                crisis["category"],
+                crisis["log_level"],
+            )
             return {
                 "message":          crisis["message"],
                 "mood":             "sad",
@@ -123,6 +127,17 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 "risk_level":       "high",
                 "nuevas_memorias":  None,
             }
+
+        # Señal media (desborde/implícitas): va al LLM con el módulo de crisis activado.
+        # Se loguea igual para trazabilidad del equipo.
+        if crisis_score >= 0.35 and crisis.get("category"):
+            background_tasks.add_task(
+                feedback_repo.save_crisis_log,
+                body.user_id,
+                ultimo_mensaje,
+                crisis["category"],
+                crisis["log_level"],
+            )
 
         memorias_sesion: List[Dict[str, Any]] = []
         if perfil and "_memorias_sesion" in perfil:
@@ -175,6 +190,26 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             # Solo consultamos al principio de la sesión para no repetir la llamada
             dias_inactivo = get_dias_inactivo(body.user_id)
 
+        # ¿El turno anterior estuvo en territorio de crisis? (stateless: se mira el
+        # score de los últimos 2 mensajes previos del usuario que vienen en el request)
+        ultimo_modulo_critico = False
+        previos_usuario = [m.content for m in body.conversation[:-1] if m.role == "user"][-2:]
+        for msg_previo in previos_usuario:
+            if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
+                ultimo_modulo_critico = True
+                break
+
+        # Check-in del día (1-4) — cacheado 5 min en memory_service
+        checkin_hoy = None
+        if body.user_id:
+            try:
+                checkin_hoy = get_checkin_hoy_cached(body.user_id)
+            except Exception as e:
+                print(f"⚠️ No se pudo cargar el check-in: {e}")
+
+        # Últimos 4 mensajes para las detecciones del router de módulos
+        historial_reciente = [m.model_dump() for m in body.conversation[-4:]]
+
         system_prompt = construir_prompt(
             perfil=perfil,
             memorias=memorias_vigentes,
@@ -184,6 +219,12 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             es_primera_vez=es_primera_vez,
             ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
             dias_inactivo=dias_inactivo,
+            checkin_hoy=checkin_hoy,
+            crisis_score=crisis_score,
+            ultimo_modulo_critico=ultimo_modulo_critico,
+            historial_reciente=historial_reciente,
+            mood_actual=body.ultimo_mood,
+            ultimo_mensaje=ultimo_mensaje,
         )
 
         result = llm.generate_response(
@@ -211,8 +252,8 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
                 content_ev, cat_ev, prio_ev = evento
                 memorias_validadas.append({"content": content_ev, "category": cat_ev, "priority": prio_ev})
 
-        # Si llegamos acá, crisis["detected"] fue False (el early return arriba lo garantiza)
-        risk_level = "none"
+        # Sin early-return: reportar el nivel real de señal detectada
+        risk_level = "medium" if crisis_score >= 0.35 else "none"
 
         # El usuario ya respondió al primer mensaje de Numa (que preguntó por el evento)
         # → desactivar memorias de eventos para que no vuelvan a aparecer

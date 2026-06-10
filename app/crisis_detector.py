@@ -11,7 +11,8 @@ class CrisisResult(TypedDict):
     category: Optional[str]          # None si no hay crisis
     message: str                      # respuesta para mostrar al usuario
     resources: list[str]              # recursos de ayuda
-    log_level: str                    # "none" | "low" | "high" | "critical"
+    log_level: str                    # "none" | "low" | "medium" | "high" | "critical"
+    score: float                      # 0.0-1.0 — señal continua para el routing de módulos
 
 
 # ══════════════════════════════════════════════════════════════
@@ -77,6 +78,34 @@ CRISIS_OVERFLOW_PHRASES = [
     "quiero desaparecer", "quisiera no despertar",
     "ojalá no despierte", "ojalá me durmiera y no despertara",
 ]
+
+# ── Nivel MEDIO: señales implícitas de riesgo ─────────────────
+# Frases que en una conversación pesada indican riesgo sin usar
+# las palabras directas. No tienen respuesta hardcodeada: activan
+# el módulo de crisis implícita en el prompt (el LLM responde).
+
+IMPLICIT_RISK_PHRASES = [
+    "ya lo decidí", "ya lo decidi",
+    "no tiene caso seguir", "no tiene caso ya",
+    "ya me voy de este mundo",
+    "este es mi último mensaje", "este es mi ultimo mensaje",
+    "no quiero hablar más, solo voy a hacerlo", "solo voy a hacerlo",
+    "nadie me va a extrañar", "nadie me extrañaría", "nadie me extranaria",
+    "ya no importa nada", "nada va a cambiar nunca",
+    "adiós a todos", "adios a todos",
+    "ya está todo dicho", "ya esta todo dicho",
+    "es la última vez que hablo", "es la ultima vez que hablo",
+]
+
+# Score por categoría — alimenta el routing de módulos del prompt:
+#   >= 0.60 → M20 (crisis explícita) | 0.35-0.60 → M19 (crisis implícita)
+SCORE_POR_CATEGORIA = {
+    "SUICIDE_METHOD":    0.95,
+    "SUICIDAL_IDEATION": 0.85,
+    "SELF_HARM":         0.65,
+    "CRISIS_OVERFLOW":   0.45,
+    "IMPLICIT_RISK":     0.40,
+}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -191,13 +220,16 @@ RESPONSES_OVERFLOW = [
 def detectar_crisis(mensaje: str) -> CrisisResult:
     """
     Analiza el último mensaje del usuario.
-    Devuelve un CrisisResult con detected=True si hay señal de crisis.
 
     Orden de evaluación (de más a menos crítico):
-      1. SUICIDE_METHOD    → crítico
-      2. SUICIDAL_IDEATION → crítico
-      3. SELF_HARM         → alto
-      4. CRISIS_OVERFLOW   → medio-alto
+      1. SUICIDE_METHOD    → crítico  (detected=True, respuesta hardcodeada)
+      2. SUICIDAL_IDEATION → crítico  (detected=True, respuesta hardcodeada)
+      3. SELF_HARM         → alto     (detected=True, respuesta hardcodeada)
+      4. CRISIS_OVERFLOW   → medio    (detected=False — va al LLM con módulo de crisis implícita)
+      5. IMPLICIT_RISK     → medio    (detected=False — ídem)
+
+    El campo `score` siempre se devuelve y alimenta el routing de módulos
+    del prompt, incluso cuando no hay early-return.
     """
     texto = mensaje.lower().strip()
 
@@ -210,6 +242,7 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
             message=_formatear(resp, RESOURCES["generico"]),
             resources=RESOURCES["generico"],
             log_level="critical",
+            score=SCORE_POR_CATEGORIA["SUICIDE_METHOD"],
         )
 
     # ── 2. Ideación suicida ──────────────────────────────────
@@ -221,6 +254,7 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
             message=_formatear(resp, RESOURCES["generico"]),
             resources=RESOURCES["generico"],
             log_level="critical",
+            score=SCORE_POR_CATEGORIA["SUICIDAL_IDEATION"],
         )
 
     # ── 3. Autolesión ────────────────────────────────────────
@@ -232,17 +266,29 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
             message=_formatear(resp, RESOURCES["generico"]),
             resources=RESOURCES["generico"],
             log_level="high",
+            score=SCORE_POR_CATEGORIA["SELF_HARM"],
         )
 
-    # ── 4. Desborde emocional severo ─────────────────────────
+    # ── 4. Desborde emocional severo → al LLM con M19 ────────
     if _contiene(texto, CRISIS_OVERFLOW_PHRASES):
-        resp = random.choice(RESPONSES_OVERFLOW)
         return CrisisResult(
-            detected=True,
+            detected=False,
             category="CRISIS_OVERFLOW",
-            message=resp["message"],
+            message="",
             resources=[],
-            log_level="low",
+            log_level="medium",
+            score=SCORE_POR_CATEGORIA["CRISIS_OVERFLOW"],
+        )
+
+    # ── 5. Señales implícitas → al LLM con M19 ───────────────
+    if _contiene(texto, IMPLICIT_RISK_PHRASES):
+        return CrisisResult(
+            detected=False,
+            category="IMPLICIT_RISK",
+            message="",
+            resources=[],
+            log_level="medium",
+            score=SCORE_POR_CATEGORIA["IMPLICIT_RISK"],
         )
 
     # ── Sin crisis ───────────────────────────────────────────
@@ -252,6 +298,7 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
         message="",
         resources=[],
         log_level="none",
+        score=0.0,
     )
 
 

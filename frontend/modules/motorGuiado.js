@@ -1,6 +1,6 @@
 // modules/motorGuiado.js
 
-import { mostrarFeedback, getRespuestaNuma } from './feedbackPost.js';
+import { mostrarFeedback } from './feedbackPost.js';
 import { detenerSonidoAmbiente } from './ambientSound.js';
 
 // ============================================
@@ -141,15 +141,15 @@ export function finalizarEjercicio() {
     detenerSonidoAmbiente();
 
     setTimeout(() => {
-        const nombreEjercicio = datosEjercicioActual?.nombre || "el ejercicio";
+        const ejercicio = datosEjercicioActual;
+        const nombreEjercicio = ejercicio?.nombre || "el ejercicio";
 
         // Ocultar overlay SIN llamar detenerGuiado (que volvería a llamar detenerSonidoAmbiente)
         document.getElementById("overlay-guiado").classList.add("hidden");
 
         mostrarFeedback(nombreEjercicio, (valor, textoOpcion) => {
             if (_onFeedbackRespuesta) {
-                const respuestaNuma = getRespuestaNuma(valor);
-                _onFeedbackRespuesta(textoOpcion, respuestaNuma, valor);
+                _onFeedbackRespuesta(textoOpcion, valor, ejercicio);
             }
         });
     }, 2500);
