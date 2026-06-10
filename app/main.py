@@ -22,6 +22,7 @@ from app.routes.checkin_router import router as checkin_router
 from app.routes.dashboard_router import router as dashboard_router
 from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
+from app.routes.password_reset_router import router as password_reset_router
 from app.supabase_client import supabase
 
 # ==========================
@@ -143,3 +144,4 @@ app.include_router(checkin_router)
 app.include_router(dashboard_router)
 app.include_router(account_router)
 app.include_router(apple_router)
+app.include_router(password_reset_router)

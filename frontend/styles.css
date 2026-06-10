@@ -818,6 +818,52 @@
      margin-top: 4px;
    }
 
+   /* Botón link sutil para "¿Olvidaste tu contraseña?" */
+   .auth-forgot-link {
+     background: none;
+     border: none;
+     color: #7db89e;
+     font-size: 0.88rem;
+     font-family: inherit;
+     cursor: pointer;
+     text-align: center;
+     padding: 2px 0;
+     text-decoration: underline;
+     text-underline-offset: 3px;
+   }
+   .auth-forgot-link:hover {
+     color: #4a8a6e;
+   }
+
+   /* Botón link secundario para "← Volver" y "Reenviar" */
+   .auth-link-btn {
+     background: none;
+     border: none;
+     color: #8fb5a3;
+     font-size: 0.9rem;
+     font-family: inherit;
+     cursor: pointer;
+     text-align: center;
+     padding: 4px 0;
+     text-decoration: none;
+   }
+   .auth-link-btn:hover {
+     color: #5a8a74;
+   }
+   .auth-link-btn:disabled {
+     color: #bbb;
+     cursor: default;
+   }
+
+   /* Mensaje de éxito en flujo reset */
+   .auth-success {
+     color: #5a9e7a;
+     font-size: 0.9rem;
+     font-weight: 600;
+     text-align: center;
+     margin: 0;
+   }
+
    /* ============================================
       ONBOARDING
       ============================================ */
