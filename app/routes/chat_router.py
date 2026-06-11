@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
@@ -32,6 +34,19 @@ CATEGORIAS_VALIDAS = {
     "trabajo", "estudios", "relaciones", "salud", "identidad",
     "emocional", "hobbies", "vida_cotidiana", "otro",
 }
+
+
+def _quitar_pregunta_final(texto: str) -> str:
+    """Recorta las oraciones interrogativas del final del mensaje.
+
+    Red de seguridad para la regla de preguntas: si el LLM ignora el bloqueo
+    del prompt y vuelve a cerrar con pregunta, se corta acá. Devuelve "" si
+    el mensaje entero era pregunta (en ese caso se deja el original).
+    """
+    partes = re.split(r"(?<=[.!?…])\s+", texto.strip())
+    while partes and partes[-1].rstrip("\"'” ").endswith("?"):
+        partes.pop()
+    return " ".join(partes).strip()
 
 
 def _validar_priority(value) -> int:
@@ -246,6 +261,21 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             conversation=[m.model_dump() for m in body.conversation],
             system_prompt=system_prompt,
         )
+
+        # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
+        # prohibió preguntar; si el modelo desobedece igual, se recorta la
+        # pregunta final acá. No aplica en contexto de crisis (las preguntas
+        # de seguridad nunca se tocan).
+        if (
+            preguntas_seguidas >= 2
+            and crisis_score < 0.35
+            and not ultimo_modulo_critico
+            and (result.get("message") or "").rstrip().rstrip("\"'” ").endswith("?")
+        ):
+            recortado = _quitar_pregunta_final(result["message"])
+            if recortado:
+                print(f"✂️ Pregunta final recortada (racha={preguntas_seguidas})")
+                result["message"] = recortado
 
         memorias_llm: List[Dict[str, Any]] = result.get("memories") or []
 
