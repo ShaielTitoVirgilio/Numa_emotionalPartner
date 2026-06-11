@@ -3,6 +3,13 @@
 // Solo para usuarios logueados. Un check-in por día.
 
 let _checkinVerificado = false; // Evita verificar más de una vez por sesión
+let _checkinHechoEnSesion = false; // Se activa cuando el usuario completa el check-in
+
+export function consumirFlagCheckin() {
+  const val = _checkinHechoEnSesion;
+  _checkinHechoEnSesion = false;
+  return val;
+}
 
 const OPCIONES = [
   { value: 1, emoji: "😔", label: "Mal" },
@@ -83,6 +90,7 @@ async function _guardarCheckin(userId, moodValue, overlay) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, mood_value: moodValue }),
     });
+    _checkinHechoEnSesion = true;
   } catch (e) {
     console.warn("No se pudo guardar el check-in:", e);
   }

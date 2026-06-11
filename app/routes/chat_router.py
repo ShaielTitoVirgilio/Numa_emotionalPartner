@@ -65,7 +65,8 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = None
     perfil: Optional[Dict[str, Any]] = None
     ubicacion: Optional[UbicacionData] = None
-    ultimo_mood: Optional[str] = None  # mood del último turno del LLM (lo manda el frontend)
+    ultimo_mood: Optional[str] = None
+    checkin_recien_hecho: Optional[bool] = False
 
 
 class ChatResponse(BaseModel):
@@ -210,6 +211,18 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         # Últimos 4 mensajes para las detecciones del router de módulos
         historial_reciente = [m.model_dump() for m in body.conversation[-4:]]
 
+        # Racha de mensajes de Numa terminados en "?": el servidor la cuenta
+        # (el modelo no sabe auditar su propio historial) y el prompt recibe
+        # la señal ya calculada. Se recalcula en cada turno, así el bloqueo
+        # se levanta solo apenas Numa responde sin pregunta.
+        mensajes_numa = [m.content for m in body.conversation if m.role == "assistant"]
+        preguntas_seguidas = 0
+        for contenido in reversed(mensajes_numa):
+            if contenido.rstrip().rstrip('"\'').endswith("?"):
+                preguntas_seguidas += 1
+            else:
+                break
+
         system_prompt = construir_prompt(
             perfil=perfil,
             memorias=memorias_vigentes,
@@ -220,11 +233,13 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
             dias_inactivo=dias_inactivo,
             checkin_hoy=checkin_hoy,
+            checkin_recien_hecho=bool(body.checkin_recien_hecho),
             crisis_score=crisis_score,
             ultimo_modulo_critico=ultimo_modulo_critico,
             historial_reciente=historial_reciente,
             mood_actual=body.ultimo_mood,
             ultimo_mensaje=ultimo_mensaje,
+            preguntas_seguidas=preguntas_seguidas,
         )
 
         result = llm.generate_response(

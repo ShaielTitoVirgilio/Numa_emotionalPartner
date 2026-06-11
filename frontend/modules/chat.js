@@ -2,7 +2,7 @@
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
-import { verificarCheckinDiario } from './checkin.js';
+import { verificarCheckinDiario, consumirFlagCheckin } from './checkin.js';
 import { getRespuestaNuma, VALOR_A_RATING } from './feedbackPost.js';
 import { setFeedbackCallback as setFeedbackRespiracion } from './motorRespiracion.js';
 import { setFeedbackCallback as setFeedbackGuiado } from './motorGuiado.js';
@@ -226,14 +226,17 @@ async function _llamarBackend(texto) {
   const numaUser = localStorage.getItem('numa_user');
   const userId = numaUser ? JSON.parse(numaUser).user_id : null;
 
+  const checkinRecienHecho = consumirFlagCheckin();
+
   const res = await fetch("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       conversation: conversationToSend,
       user_id: userId,
-      perfil: perfilCacheado,   // ← mandamos el perfil cacheado, backend no lo busca en DB
-      ultimo_mood: ultimoMood,  // ← mood del turno anterior, para el routing de módulos
+      perfil: perfilCacheado,
+      ultimo_mood: ultimoMood,
+      checkin_recien_hecho: checkinRecienHecho,
     })
   });
 

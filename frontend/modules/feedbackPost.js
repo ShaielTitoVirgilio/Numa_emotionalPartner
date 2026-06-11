@@ -126,13 +126,12 @@ const OPCIONES_FEEDBACK = [
   
   function _buildHTML(nombreEjercicio) {
     const opcionesHTML = OPCIONES_FEEDBACK.map(op => `
-      <button 
-        class="feedback-opcion" 
-        data-valor="${op.valor}" 
+      <button
+        class="feedback-opcion"
+        data-valor="${op.valor}"
         data-texto="${op.texto}"
         aria-label="${op.texto}"
       >
-        <span class="feedback-emoji">${op.emoji}</span>
         <span class="feedback-label">${op.texto}</span>
       </button>
     `).join("");
