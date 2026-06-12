@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from app.core.db import supabase
 
@@ -39,6 +40,27 @@ class FeedbackRepository:
         }).execute()
 
 
+
+    def hay_crisis_reciente(self, user_id: str, minutos: int = 45) -> bool:
+        """True si el usuario tuvo un evento de crisis logueado hace poco.
+
+        Respaldo para el modo post-contención (M21): la señal por historial del
+        request es stateless y se pierde si el usuario recarga la app en medio
+        de una conversación difícil. Esta consulta la recupera desde crisis_logs.
+        """
+        try:
+            desde = (datetime.now(timezone.utc) - timedelta(minutes=minutos)).isoformat()
+            res = (
+                supabase.table("crisis_logs")
+                .select("id")
+                .eq("user_id", user_id)
+                .gte("created_at", desde)
+                .limit(1)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception:
+            return False
 
     def get_feedback_audio(self, feedback_id: str) -> dict:
         res = supabase.table("user_feedback") \

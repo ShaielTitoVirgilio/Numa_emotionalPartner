@@ -128,11 +128,30 @@ def get_topic_patterns(
     ]
 
 
+# Formato exacto que produce detectar_evento_proximo: "Tiene <evento> <tiempo>."
+_RE_MEMORIA_RESPALDO_EVENTO = None  # se compila lazy abajo
+
+
+def _es_memoria_respaldo_evento(contenido: str) -> bool:
+    global _RE_MEMORIA_RESPALDO_EVENTO
+    if _RE_MEMORIA_RESPALDO_EVENTO is None:
+        import re
+        eventos = "|".join(re.escape(e) for e in _PALABRAS_EVENTO)
+        tiempos = "|".join(re.escape(t) for t in _PALABRAS_TIEMPO)
+        _RE_MEMORIA_RESPALDO_EVENTO = re.compile(
+            rf"^tiene ({eventos}) ({tiempos})\.$", re.IGNORECASE
+        )
+    return bool(_RE_MEMORIA_RESPALDO_EVENTO.match(contenido.strip()))
+
+
 def deactivate_event_memories(user_id: str) -> None:
     """
-    Desactiva memorias de eventos próximos de BAJA prioridad una vez que el usuario
-    ya respondió sobre ellos. NO toca memorias importantes (prioridad ≥ 3), aunque
-    contengan palabras como "viaje" o "cita" (ej: "Tuvo un ataque de pánico en un viaje").
+    Desactiva las memorias-respaldo de eventos próximos ("Tiene final este
+    finde.") una vez que el usuario ya respondió sobre ellos.
+
+    Solo toca memorias que tienen EXACTAMENTE el formato del respaldo
+    (detectar_evento_proximo): antes alcanzaba con que una memoria de baja
+    prioridad contuviera "viaje" o "cita" y se desactivaban memorias legítimas.
     """
     try:
         res = (
@@ -147,7 +166,7 @@ def deactivate_event_memories(user_id: str) -> None:
         ids_a_desactivar = [
             r["id"]
             for r in rows
-            if any(p in (r.get("content") or "").lower() for p in _PALABRAS_EVENTO)
+            if _es_memoria_respaldo_evento(r.get("content") or "")
         ]
         if ids_a_desactivar:
             supabase.table("memories").update({"is_active": False}).in_("id", ids_a_desactivar).execute()

@@ -1,8 +1,9 @@
 # app/routes/checkin_router.py
 from datetime import date, timedelta
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
+from app.core.auth import get_current_user_id
 from app.core.db import supabase
 from app.memory_service import invalidate_checkin_cache
 
@@ -17,12 +18,12 @@ MOOD_OPTIONS = {
 
 
 class CheckinRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignorado: el user_id sale del token
     mood_value: int = Field(..., ge=1, le=4)
 
 
 @router.post("")
-def crear_checkin(body: CheckinRequest):
+def crear_checkin(body: CheckinRequest, user_id: str = Depends(get_current_user_id)):
     """Guarda el check-in diario del usuario. Un solo check-in por día."""
     emoji = MOOD_OPTIONS.get(body.mood_value)
     if not emoji:
@@ -33,21 +34,21 @@ def crear_checkin(body: CheckinRequest):
     try:
         supabase.table("daily_checkins").upsert(
             {
-                "user_id":     body.user_id,
+                "user_id":     user_id,
                 "mood_value":  body.mood_value,
                 "mood_emoji":  emoji,
                 "checkin_date": today,
             },
             on_conflict="user_id,checkin_date",
         ).execute()
-        invalidate_checkin_cache(body.user_id)
+        invalidate_checkin_cache(user_id)
         return {"ok": True, "mood_emoji": emoji}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/today")
-def checkin_hoy(user_id: str):
+def checkin_hoy(user_id: str = Depends(get_current_user_id)):
     """Devuelve el check-in de hoy si ya existe, o null si no."""
     today = date.today().isoformat()
     try:
@@ -66,7 +67,7 @@ def checkin_hoy(user_id: str):
 
 
 @router.get("/history")
-def historial_checkins(user_id: str, days: int = 30):
+def historial_checkins(days: int = 30, user_id: str = Depends(get_current_user_id)):
     """Devuelve los check-ins de los últimos N días para el dashboard."""
     since = (date.today() - timedelta(days=days)).isoformat()
     try:

@@ -1,10 +1,12 @@
 import re
+from difflib import SequenceMatcher
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app.core.auth import get_current_user_id
+from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
 from app.memory_service import (
@@ -18,13 +20,14 @@ from app.memory_service import (
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
 from app.crisis_detector import detectar_crisis
+from app.crisis_verifier import confirmar_riesgo_real
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.feedback_repository import FeedbackRepository
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 llm = LLMClient()
 user_repo = UserRepository()
 conversation_repo = ConversationRepository()
@@ -35,17 +38,41 @@ CATEGORIAS_VALIDAS = {
     "emocional", "hobbies", "vida_cotidiana", "otro",
 }
 
+# Límites server-side: el cliente recorta a 20 mensajes, pero un cliente
+# malicioso podía mandar miles (costo de tokens / DoS).
+MAX_CONV_MESSAGES = 20
+MAX_MSG_CHARS = 4000
+MAX_AUDIO_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# Frases que indican que la memoria afirma algo "de oídas" (diagnóstico no
+# confirmado, comentario de terceros) → no merece prioridad alta.
+_RE_MEMORIA_DE_OIDAS = re.compile(
+    r"(me dijeron que|le dijeron que|cree que tiene|piensa que tiene|"
+    r"según le|segun le|alguien le dijo|le comentaron)",
+    re.IGNORECASE,
+)
+
 
 def _quitar_pregunta_final(texto: str) -> str:
-    """Recorta las oraciones interrogativas del final del mensaje.
+    """Recorta la pregunta final del mensaje conservando lo afirmativo.
 
     Red de seguridad para la regla de preguntas: si el LLM ignora el bloqueo
-    del prompt y vuelve a cerrar con pregunta, se corta acá. Devuelve "" si
-    el mensaje entero era pregunta (en ese caso se deja el original).
+    del prompt y vuelve a cerrar con pregunta, se corta acá. En vez de borrar
+    la oración entera, intenta conservar la parte afirmativa antes del '¿'
+    (ej: "Hace días que te sentís así, ¿pasó algo?" → "Hace días que te
+    sentís así."). Devuelve "" si el mensaje entero era pregunta (en ese caso
+    se deja el original).
     """
     partes = re.split(r"(?<=[.!?…])\s+", texto.strip())
     while partes and partes[-1].rstrip("\"'” ").endswith("?"):
-        partes.pop()
+        ultima = partes.pop()
+        idx = ultima.find("¿")
+        if idx > 0:
+            prefijo = ultima[:idx].rstrip(" ,;:—–-")
+            if len(prefijo) >= 12:
+                if not prefijo.endswith((".", "!", "…")):
+                    prefijo += "."
+                partes.append(prefijo)
     return " ".join(partes).strip()
 
 
@@ -64,6 +91,69 @@ def _validar_category(value) -> str:
     return v if v in CATEGORIAS_VALIDAS else "otro"
 
 
+def _normalizar_prioridad(content: str, priority: int, crisis_score: float, es_post_ejercicio: bool) -> int:
+    """Normaliza la prioridad server-side: el LLM tiende a poner prioridad 5
+    a menciones casuales. Prioridad 5 queda reservada a turnos con señal de
+    crisis; lo dicho "de oídas" baja a 3; el feedback de un ejercicio es un
+    dato menor (máx 2)."""
+    p = priority
+    if es_post_ejercicio:
+        p = min(p, 2)
+    if _RE_MEMORIA_DE_OIDAS.search(content):
+        p = min(p, 3)
+    if crisis_score < 0.35:
+        p = min(p, 4)
+    return max(1, p)
+
+
+# ── Dedup difuso de memorias ──────────────────────────────────────────────
+# El LLM tiende a re-guardar el mismo hecho reformulado en cada turno
+# ("Se sintió criticado por su jefe" / "Se sintió mal por una crítica de su
+# jefe"...). El dedup exacto no lo atrapa; acá se compara por similitud.
+
+_TILDES_MEM = str.maketrans("áéíóúüÁÉÍÓÚÜ", "aeiouuAEIOUU")
+_STOPWORDS_MEM = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "en",
+    "y", "o", "a", "al", "que", "se", "su", "sus", "por", "para", "con", "sin",
+    "le", "lo", "es", "fue", "esta", "este", "hay", "muy", "mas", "como",
+    "usuario", "usuaria", "persona",
+}
+
+
+def _normalizar_mem(texto: str) -> str:
+    t = texto.lower().translate(_TILDES_MEM)
+    t = re.sub(r"[^\w\sñ]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _stems_mem(texto: str) -> set:
+    # Stem barato (primeras 4 letras) para que "crítica"/"criticado" cuenten igual
+    return {
+        (w[:4] if len(w) > 4 else w)
+        for w in _normalizar_mem(texto).split()
+        if w not in _STOPWORDS_MEM
+    }
+
+
+def _es_memoria_duplicada(content: str, existentes: List[str]) -> bool:
+    a_norm = _normalizar_mem(content)
+    a_stems = _stems_mem(content)
+    if not a_norm:
+        return True
+    for otro in existentes:
+        b_norm = _normalizar_mem(otro)
+        if not b_norm:
+            continue
+        if SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.55:
+            return True
+        b_stems = _stems_mem(otro)
+        if a_stems and b_stems:
+            jaccard = len(a_stems & b_stems) / len(a_stems | b_stems)
+            if jaccard >= 0.5:
+                return True
+    return False
+
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -77,7 +167,7 @@ class UbicacionData(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation: List[Message]
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None  # ignorado: el user_id sale del token
     perfil: Optional[Dict[str, Any]] = None
     ubicacion: Optional[UbicacionData] = None
     ultimo_mood: Optional[str] = None
@@ -93,12 +183,17 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/speech-to-text")
-async def speech_to_text_endpoint(file: UploadFile = File(...)):
+async def speech_to_text_endpoint(
+    file: UploadFile = File(...),
+    _user_id: str = Depends(get_current_user_id),
+):
     try:
         audio_bytes = await file.read()
 
         if len(audio_bytes) < 5000:
             raise HTTPException(status_code=400, detail="Audio demasiado corto")
+        if len(audio_bytes) > MAX_AUDIO_BYTES:
+            raise HTTPException(status_code=413, detail="Audio demasiado largo")
 
         text = speech_to_text(audio_bytes, file.filename)
         return {"text": text}
@@ -110,49 +205,85 @@ async def speech_to_text_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Servicio de transcripción no disponible")
 
 
+@router.get("/chat/history")
+def chat_history(limit: int = 30, user_id: str = Depends(get_current_user_id)):
+    """Devuelve los últimos mensajes guardados para rehidratar el chat al
+    abrir la app (antes el historial vivía solo en memoria de la página y
+    se perdía en cada recarga)."""
+    limit = max(1, min(limit, 50))
+    try:
+        messages = conversation_repo.get_recent_messages(user_id, limit)
+        return {"messages": messages}
+    except Exception as e:
+        print(f"⚠️ No se pudo cargar el historial: {e}")
+        return {"messages": []}
+
+
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit("18/minute")
-def chat_endpoint(request: Request, body: ChatRequest, background_tasks: BackgroundTasks):
+def chat_endpoint(
+    request: Request,
+    body: ChatRequest,
+    background_tasks: BackgroundTasks,
+    auth_user_id: str = Depends(get_current_user_id),
+):
     try:
+        # El user_id viene SIEMPRE del token, nunca del body (IDOR fix)
+        user_id = auth_user_id
+
+        # Límite server-side de tamaño de la conversación
+        conversation = body.conversation[-MAX_CONV_MESSAGES:]
+        for m in conversation:
+            if len(m.content) > MAX_MSG_CHARS:
+                m.content = m.content[:MAX_MSG_CHARS]
+
         perfil = body.perfil
 
-        if perfil is None and body.user_id:
+        if perfil is None:
             try:
-                perfil = user_repo.get_profile(body.user_id)
+                perfil = user_repo.get_profile(user_id)
             except Exception:
                 perfil = None
 
-        ultimo_mensaje = body.conversation[-1].content if body.conversation else ""
+        ultimo_mensaje = conversation[-1].content if conversation else ""
         crisis = detectar_crisis(ultimo_mensaje)
         crisis_score = crisis.get("score", 0.0)
+        crisis_log_level = crisis.get("log_level", "none")
 
         if crisis["detected"]:
-            # Solo critical/high llegan acá (método, ideación, autolesión):
-            # respuesta determinística, sin LLM.
-            background_tasks.add_task(
-                feedback_repo.save_crisis_log,
-                body.user_id,
-                ultimo_mensaje,
-                crisis["category"],
-                crisis["log_level"],
-            )
-            return {
-                "message":          crisis["message"],
-                "mood":             "sad",
-                "suggested_action": None,
-                "risk_level":       "high",
-                "nuevas_memorias":  None,
-            }
+            # Verificación en dos pasos: las keywords dispararon crítico/alto;
+            # un clasificador LLM rápido confirma si el riesgo es real y actual.
+            # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
+            if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
+                # Respuesta determinística, sin LLM principal.
+                background_tasks.add_task(
+                    feedback_repo.save_crisis_log,
+                    user_id,
+                    ultimo_mensaje,
+                    crisis["category"],
+                    crisis_log_level,
+                )
+                return {
+                    "message":          crisis["message"],
+                    "mood":             "sad",
+                    "suggested_action": None,
+                    "risk_level":       "high",
+                    "nuevas_memorias":  None,
+                }
+            # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
+            # se degrada a señal media → el LLM responde con módulos de crisis.
+            crisis_score = 0.45
+            crisis_log_level = "medium"
 
-        # Señal media (desborde/implícitas): va al LLM con el módulo de crisis activado.
-        # Se loguea igual para trazabilidad del equipo.
+        # Señal media (desborde/implícitas/degradadas): va al LLM con el módulo
+        # de crisis activado. Se loguea igual para trazabilidad del equipo.
         if crisis_score >= 0.35 and crisis.get("category"):
             background_tasks.add_task(
                 feedback_repo.save_crisis_log,
-                body.user_id,
+                user_id,
                 ultimo_mensaje,
                 crisis["category"],
-                crisis["log_level"],
+                crisis_log_level,
             )
 
         memorias_sesion: List[Dict[str, Any]] = []
@@ -168,69 +299,72 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         ids_a_desactivar: List[str] = []
         patrones: List[dict] = []
 
-        if body.user_id:
-            try:
-                m_db, ids_old = get_recent_memories(
-                    user_id=body.user_id,
-                    days=MEMORY_WINDOW_DAYS_DEFAULT,
-                    max_items=12
-                )
-                seen = set()
-                merged = []
-                for m in (memorias_sesion or []) + m_db:
-                    key = (m.get("content") or "").strip()
-                    if key and key not in seen:
-                        seen.add(key)
-                        merged.append(m)
-                memorias_vigentes = merged[:15]
-                ids_a_desactivar = ids_old
-            except Exception as e:
-                print(f"⚠️ No se pudieron cargar memorias: {e}")
-                memorias_vigentes = memorias_sesion or []
+        try:
+            m_db, ids_old = get_recent_memories(
+                user_id=user_id,
+                days=MEMORY_WINDOW_DAYS_DEFAULT,
+                max_items=12
+            )
+            seen = set()
+            merged = []
+            for m in (memorias_sesion or []) + m_db:
+                key = (m.get("content") or "").strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(m)
+            memorias_vigentes = merged[:15]
+            ids_a_desactivar = ids_old
+        except Exception as e:
+            print(f"⚠️ No se pudieron cargar memorias: {e}")
+            memorias_vigentes = memorias_sesion or []
 
-            try:
-                patrones = get_topic_patterns_cached(user_id=body.user_id)
-                print(f"🔍 Patrones detectados: {patrones}")
-            except Exception as e:
-                print(f"⚠️ No se pudieron cargar patrones: {e}")
+        try:
+            patrones = get_topic_patterns_cached(user_id=user_id)
+        except Exception as e:
+            print(f"⚠️ No se pudieron cargar patrones: {e}")
 
-        es_inicio_sesion = len(body.conversation) == 1
-        num_interacciones = len(body.conversation)
+        es_inicio_sesion = len(conversation) == 1
+        num_interacciones = len(conversation)
 
         # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
         es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
 
         # Detectar reenganche: >5 días sin actividad
         dias_inactivo = 0
-        if body.user_id and num_interacciones <= 4:
+        if num_interacciones <= 4:
             # Solo consultamos al principio de la sesión para no repetir la llamada
-            dias_inactivo = get_dias_inactivo(body.user_id)
+            dias_inactivo = get_dias_inactivo(user_id)
 
-        # ¿El turno anterior estuvo en territorio de crisis? (stateless: se mira el
-        # score de los últimos 2 mensajes previos del usuario que vienen en el request)
+        # ¿El turno anterior estuvo en territorio de crisis? (se mira el score
+        # de los últimos 2 mensajes previos del usuario que vienen en el request)
         ultimo_modulo_critico = False
-        previos_usuario = [m.content for m in body.conversation[:-1] if m.role == "user"][-2:]
+        previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
         for msg_previo in previos_usuario:
             if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
                 ultimo_modulo_critico = True
                 break
 
+        # Respaldo stateless: si la sesión recién empieza (el historial del
+        # request no alcanza), mirar crisis_logs — el usuario pudo haber
+        # recargado la app justo después de una crisis.
+        if not ultimo_modulo_critico and num_interacciones <= 4:
+            ultimo_modulo_critico = feedback_repo.hay_crisis_reciente(user_id)
+
         # Check-in del día (1-4) — cacheado 5 min en memory_service
         checkin_hoy = None
-        if body.user_id:
-            try:
-                checkin_hoy = get_checkin_hoy_cached(body.user_id)
-            except Exception as e:
-                print(f"⚠️ No se pudo cargar el check-in: {e}")
+        try:
+            checkin_hoy = get_checkin_hoy_cached(user_id)
+        except Exception as e:
+            print(f"⚠️ No se pudo cargar el check-in: {e}")
 
         # Últimos 4 mensajes para las detecciones del router de módulos
-        historial_reciente = [m.model_dump() for m in body.conversation[-4:]]
+        historial_reciente = [m.model_dump() for m in conversation[-4:]]
 
         # Racha de mensajes de Numa terminados en "?": el servidor la cuenta
         # (el modelo no sabe auditar su propio historial) y el prompt recibe
         # la señal ya calculada. Se recalcula en cada turno, así el bloqueo
         # se levanta solo apenas Numa responde sin pregunta.
-        mensajes_numa = [m.content for m in body.conversation if m.role == "assistant"]
+        mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
         preguntas_seguidas = 0
         for contenido in reversed(mensajes_numa):
             if contenido.rstrip().rstrip('"\'').endswith("?"):
@@ -258,7 +392,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
         )
 
         result = llm.generate_response(
-            conversation=[m.model_dump() for m in body.conversation],
+            conversation=[m.model_dump() for m in conversation],
             system_prompt=system_prompt,
         )
 
@@ -273,22 +407,37 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             and (result.get("message") or "").rstrip().rstrip("\"'” ").endswith("?")
         ):
             recortado = _quitar_pregunta_final(result["message"])
-            if recortado:
-                print(f"✂️ Pregunta final recortada (racha={preguntas_seguidas})")
+            # Guardia anti-cortante: si el recorte deja un fragmento pobre
+            # ("Eso pesa."), mejor dejar la pregunta original que sonar seco.
+            if recortado and len(recortado) >= 40 and len(recortado) >= 0.35 * len(result["message"]):
                 result["message"] = recortado
 
         memorias_llm: List[Dict[str, Any]] = result.get("memories") or []
 
-        # Validar/clampear metadata de cada memoria antes de persistir
+        # Validar/clampear metadata de cada memoria antes de persistir.
+        # El dedup difuso descarta el mismo hecho reformulado (contra las
+        # memorias ya conocidas y contra la otra memoria del mismo turno).
+        es_post_ejercicio = ultimo_mensaje.strip().startswith("[Post-ejercicio")
+        contenidos_conocidos = [(m.get("content") or "") for m in memorias_vigentes]
         memorias_validadas: List[Dict[str, Any]] = []
         for m in memorias_llm:
             content = (m.get("content") or "").strip()
-            if content:
-                memorias_validadas.append({
-                    "content":  content,
-                    "category": _validar_category(m.get("category")),
-                    "priority": _validar_priority(m.get("priority")),
-                })
+            if not content:
+                continue
+            if _es_memoria_duplicada(content, contenidos_conocidos):
+                continue
+            prioridad = _normalizar_prioridad(
+                content,
+                _validar_priority(m.get("priority")),
+                crisis_score,
+                es_post_ejercicio,
+            )
+            memorias_validadas.append({
+                "content":  content,
+                "category": _validar_category(m.get("category")),
+                "priority": prioridad,
+            })
+            contenidos_conocidos.append(content)
 
         # Respaldo: si el LLM no guardó ninguna memoria, intentar detectar evento próximo
         if not memorias_validadas:
@@ -302,14 +451,14 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
 
         # El usuario ya respondió al primer mensaje de Numa (que preguntó por el evento)
         # → desactivar memorias de eventos para que no vuelvan a aparecer
-        if body.user_id and len(body.conversation) == 3:
-            background_tasks.add_task(deactivate_event_memories, body.user_id)
+        if len(conversation) == 3:
+            background_tasks.add_task(deactivate_event_memories, user_id)
 
-        if body.user_id and body.conversation:
+        if conversation:
             background_tasks.add_task(
                 conversation_repo.save,
-                body.user_id,
-                body.conversation[-1].content,
+                user_id,
+                conversation[-1].content,
                 result["message"],
                 memorias_validadas,
                 result.get("mood"),
@@ -317,7 +466,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             if ids_a_desactivar:
                 background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
             if memorias_validadas:
-                invalidate_patterns_cache(body.user_id)
+                invalidate_patterns_cache(user_id)
 
         return {
             "message":          result["message"],
@@ -327,5 +476,7 @@ def chat_endpoint(request: Request, body: ChatRequest, background_tasks: Backgro
             "nuevas_memorias":  memorias_validadas,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

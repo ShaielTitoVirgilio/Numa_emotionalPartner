@@ -2,6 +2,8 @@
 // Pestaña de Feedback — texto + audio opcional
 // Guarda en Supabase a través del backend
 
+import { authHeaders } from './utils.js';
+
 // ============================================
 // ESTADO INTERNO
 // ============================================
@@ -284,7 +286,7 @@ window.feedbackSubmit = async () => {
 
     const res = await fetch('/feedback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
 

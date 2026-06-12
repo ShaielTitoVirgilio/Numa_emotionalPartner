@@ -1,6 +1,6 @@
 // app.js
 import { CATALOGO_EJERCICIOS } from './ejerciciosData.js';
-import { enviarMensaje, agregarMensaje, inicializarChat, mostrarProximamente } from './modules/chat.js';
+import { enviarMensaje, agregarMensaje, inicializarChat } from './modules/chat.js';
 import { 
     irAEjercicios, 
     cerrarMenuEjercicios,
@@ -13,9 +13,9 @@ import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, prevReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
-import { mostrarAvisoTesterCada } from './modules/utils.js';
+import { mostrarAvisoTesterCada, authHeaders } from './modules/utils.js';
 import { initDashboard } from './modules/dashboard.js';
-import { initProfile } from './modules/profile.js';
+import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 
@@ -36,7 +36,6 @@ window.prevReading = prevReading;
 window.closeReading = closeReading;
 window.agregarMensaje = agregarMensaje;
 window.showOnboarding = showOnboarding;
-window.mostrarProximamente = mostrarProximamente;
 window.initDashboard = initDashboard;
 window.initProfile = initProfile;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
@@ -80,17 +79,13 @@ async function suscribirANotificaciones(userId) {
       applicationServerKey: applicationServerKey
     });
 
-    const user = JSON.parse(localStorage.getItem('numa_user'));
-
     await fetch('/subscribe', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        user_id: userId,
         subscription_data: suscripcion
       })
     });
-    console.log("Suscripción a notificaciones exitosa.");
   } catch (e) {
     console.error('Error suscribiendo a notificaciones:', e);
   }
@@ -110,6 +105,8 @@ function _tokenExpired(token) {
 }
 
 async function init() {
+  aplicarTemaGuardado();
+  aplicarTamanoFuenteGuardado();
   const fueOAuth = await manejarCallbackOAuth();
   if (fueOAuth) return;
 
@@ -151,7 +148,13 @@ async function init() {
   }
 
   try {
-    const res = await fetch(`/profile/${user.user_id}`);
+    const res = await fetch(`/profile/${user.user_id}`, { headers: authHeaders() });
+
+    if (res.status === 401) {
+      localStorage.removeItem('numa_user');
+      showAuthScreen();
+      return;
+    }
 
     if (!res.ok) {
       // Server error — don't force onboarding, just open chat
@@ -165,8 +168,13 @@ async function init() {
     if (!profile.onboarding_completo) {
       showOnboarding(user.user_id);
     } else {
-      await inicializarChat();
-      agregarMensaje(`Bienvenido ${user.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, "oso");
+      const huboHistorial = await inicializarChat();
+      // Si se rehidrató la charla anterior, el saludo largo sobra
+      if (huboHistorial) {
+        agregarMensaje(`Bienvenido de vuelta 🐼`, "oso");
+      } else {
+        agregarMensaje(`Bienvenido ${user.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, "oso");
+      }
       mostrarAvisoTesterCada();
       mostrarBannerNotificaciones(user.user_id);
     }
@@ -180,48 +188,17 @@ function mostrarBannerNotificaciones(userId) {
 
   const banner = document.createElement('div');
   banner.id = 'banner-notif';
+  banner.className = 'banner-notif';
+  banner.setAttribute('role', 'dialog');
+  banner.setAttribute('aria-label', 'Activar notificaciones');
   banner.innerHTML = `
-    <div style="font-size:2rem; margin-bottom:8px;">🐼</div>
-    <p style="margin:0 0 16px; font-size:1rem; line-height:1.5; text-align:center;">
+    <div class="banner-notif-emoji">🐼</div>
+    <p class="banner-notif-texto">
       ¿Querés que Numa te mande un mensajito de vez en cuando?
     </p>
-    <button id="btn-si-notif" style="
-      width: 100%;
-      padding: 14px;
-      background: #7db89e;
-      color: white;
-      border: none;
-      border-radius: 14px;
-      font-size: 1.1rem;
-      font-weight: 700;
-      cursor: pointer;
-      margin-bottom: 10px;
-    ">Sí, activar notificaciones</button>
-    <button id="btn-no-notif" style="
-      width: 100%;
-      padding: 12px;
-      background: transparent;
-      color: #aaa;
-      border: none;
-      font-size: 0.95rem;
-      cursor: pointer;
-    ">Ahora no</button>
+    <button id="btn-si-notif" class="banner-notif-si">Sí, activar notificaciones</button>
+    <button id="btn-no-notif" class="banner-notif-no">Ahora no</button>
   `;
-  Object.assign(banner.style, {
-    position: 'fixed',
-    bottom: '0',
-    left: '0',
-    right: '0',
-    background: '#2f4f45',
-    color: 'white',
-    padding: '24px 24px 36px', // 36px abajo por el home indicator del iPhone
-    borderRadius: '24px 24px 0 0',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    zIndex: '9999',
-    boxShadow: '0 -4px 30px rgba(0,0,0,0.3)',
-  });
   document.body.appendChild(banner);
 
   document.getElementById('btn-si-notif').addEventListener('click', () => {

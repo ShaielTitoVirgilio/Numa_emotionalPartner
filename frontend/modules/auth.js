@@ -312,8 +312,10 @@ function _mostrarPantallaOtp(email) {
 async function _submitOtp() {
     const codigo = (document.getElementById('otp-input').value || '').trim();
     const errorEl = document.getElementById('otp-error');
-    if (codigo.length !== 8) {
-        _mostrarError(errorEl, 'El código debe tener 8 dígitos');
+    // Supabase envía códigos de 6 dígitos (la validación anterior exigía 8
+    // y bloqueaba el registro). Se acepta 6-8 por si cambia la config.
+    if (!/^\d{6,8}$/.test(codigo)) {
+        _mostrarError(errorEl, 'Ingresá el código de 6 dígitos que te llegó por email');
         return;
     }
     try {

@@ -1,5 +1,7 @@
 // modules/profile.js
 
+import { authHeaders } from './utils.js';
+
 const PRIVACY_URL = 'https://shaieltitovirgilio.github.io/landing-numa/privacy-policy.html';
 const TERMS_URL   = 'https://shaieltitovirgilio.github.io/landing-numa/terms.html';
 
@@ -11,6 +13,12 @@ const MOODS = [
 ];
 
 let _cargado = false;
+
+// Estado local de la sección de memorias: lista + si está expandida.
+// Por defecto se muestran solo las 2 más recientes con "Mostrar más".
+let _memorias = [];
+let _memoriasExpandido = false;
+const MEMORIAS_VISIBLES = 2;
 
 export async function initProfile() {
   const contenedor = document.getElementById('view-profile');
@@ -24,19 +32,23 @@ export async function initProfile() {
   contenedor.innerHTML = _htmlCargando();
 
   try {
-    const [profileRes, checkinRes] = await Promise.all([
-      fetch(`/profile/${user_id}`),
-      fetch(`/checkin/today?user_id=${user_id}`),
+    const [profileRes, checkinRes, memoriasRes] = await Promise.all([
+      fetch(`/profile/${user_id}`, { headers: authHeaders() }),
+      fetch('/checkin/today', { headers: authHeaders() }),
+      fetch('/memories', { headers: authHeaders() }),
     ]);
 
     const profile  = profileRes.ok ? await profileRes.json() : {};
     const checkinData = checkinRes.ok ? await checkinRes.json() : {};
+    _memorias = memoriasRes.ok ? (await memoriasRes.json()).memories || [] : [];
+    _memoriasExpandido = false;
 
     const nombre   = profile.nombre || '';
     const checkin  = checkinData.checkin || null;
 
     contenedor.innerHTML = _htmlPerfil(nombre, email, checkin, user_id);
     _bindEvents(contenedor, user_id);
+    _renderMemorias();
     _cargado = true;
   } catch (e) {
     contenedor.innerHTML = _htmlError();
@@ -44,6 +56,10 @@ export async function initProfile() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
+
+function _escapar(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function _htmlPerfil(nombre, email, checkin, userId) {
   const inicial = (nombre || email || '?')[0].toUpperCase();
@@ -54,8 +70,8 @@ function _htmlPerfil(nombre, email, checkin, userId) {
       <!-- Header avatar -->
       <div class="prf-header">
         <div class="prf-avatar">${inicial}</div>
-        ${nombre ? `<p class="prf-nombre">${nombre}</p>` : ''}
-        <p class="prf-email">${email || ''}</p>
+        ${nombre ? `<p class="prf-nombre">${_escapar(nombre)}</p>` : ''}
+        <p class="prf-email">${_escapar(email || '')}</p>
       </div>
 
       <!-- Check-in de hoy -->
@@ -63,6 +79,33 @@ function _htmlPerfil(nombre, email, checkin, userId) {
         <p class="prf-card-titulo">¿Cómo estás hoy?</p>
         <div id="prf-checkin-content">
           ${_htmlCheckinContent(checkin)}
+        </div>
+      </div>
+
+      <!-- Lo que Numa recuerda -->
+      <div class="prf-card" id="prf-memorias-card">
+        <p class="prf-card-titulo">🧠 Lo que Numa recuerda de vos</p>
+        <p class="prf-card-subtexto">Podés borrar lo que no quieras que recuerde.</p>
+        <div id="prf-memorias-list"></div>
+      </div>
+
+      <!-- Tema -->
+      <div class="prf-card">
+        <p class="prf-card-titulo">Tema</p>
+        <div class="prf-tema-row" role="group" aria-label="Tema de la app">
+          <button class="prf-tema-btn" data-tema="auto"   aria-label="Tema automático">📱 Auto</button>
+          <button class="prf-tema-btn" data-tema="claro"  aria-label="Tema claro">☀️ Claro</button>
+          <button class="prf-tema-btn" data-tema="oscuro" aria-label="Tema oscuro">🌙 Oscuro</button>
+        </div>
+      </div>
+
+      <!-- Tamaño de texto -->
+      <div class="prf-card">
+        <p class="prf-card-titulo">Tamaño de texto</p>
+        <div class="prf-font-row" role="group" aria-label="Tamaño de texto">
+          <button class="prf-font-btn" data-size="small"  aria-label="Texto chico">A</button>
+          <button class="prf-font-btn" data-size="normal" aria-label="Texto normal">A</button>
+          <button class="prf-font-btn" data-size="large"  aria-label="Texto grande">A</button>
         </div>
       </div>
 
@@ -91,6 +134,50 @@ function _htmlPerfil(nombre, email, checkin, userId) {
 
     </div>
   `;
+}
+
+function _renderMemorias() {
+  const list = document.getElementById('prf-memorias-list');
+  if (!list) return;
+
+  if (!_memorias.length) {
+    list.innerHTML = `<p class="prf-memoria-vacio">Todavía no hay nada guardado. A medida que charlen, Numa va a recordar lo importante.</p>`;
+    return;
+  }
+
+  const visibles = _memoriasExpandido ? _memorias : _memorias.slice(0, MEMORIAS_VISIBLES);
+  const ocultas = _memorias.length - MEMORIAS_VISIBLES;
+
+  let html = visibles.map(m => `
+    <div class="prf-memoria-item" data-id="${_escapar(m.id)}">
+      <span class="prf-memoria-texto">${_escapar(m.content)}</span>
+      <button class="prf-memoria-borrar" data-id="${_escapar(m.id)}" aria-label="Borrar esta memoria">✕</button>
+    </div>
+  `).join('');
+
+  if (ocultas > 0) {
+    html += _memoriasExpandido
+      ? `<button class="prf-memorias-toggle" id="prf-memorias-toggle">Mostrar menos ▲</button>`
+      : `<button class="prf-memorias-toggle" id="prf-memorias-toggle">Mostrar más (${ocultas}) ▼</button>`;
+  }
+
+  list.innerHTML = html;
+
+  list.querySelectorAll('.prf-memoria-borrar').forEach(btn => {
+    btn.addEventListener('click', () => _borrarMemoria(btn.dataset.id));
+  });
+
+  const toggle = list.querySelector('#prf-memorias-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      _memoriasExpandido = !_memoriasExpandido;
+      _renderMemorias();
+      if (!_memoriasExpandido) {
+        // Al colapsar desde abajo de una lista larga, volver a la tarjeta
+        document.getElementById('prf-memorias-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
 }
 
 function _htmlCheckinContent(checkin) {
@@ -135,6 +222,85 @@ function _bindEvents(contenedor, userId) {
   if (btnDelete) {
     btnDelete.addEventListener('click', () => _mostrarModalEliminar(userId));
   }
+
+  // Borrar memorias
+  contenedor.querySelectorAll('.prf-memoria-borrar').forEach(btn => {
+    btn.addEventListener('click', () => _borrarMemoria(btn.dataset.id));
+  });
+
+  // Tamaño de texto
+  const actual = localStorage.getItem('numa_font_size') || 'normal';
+  contenedor.querySelectorAll('.prf-font-btn').forEach(btn => {
+    if (btn.dataset.size === actual) btn.classList.add('activo');
+    btn.addEventListener('click', () => {
+      aplicarTamanoFuente(btn.dataset.size);
+      contenedor.querySelectorAll('.prf-font-btn').forEach(b => b.classList.toggle('activo', b === btn));
+    });
+  });
+
+  // Tema (auto / claro / oscuro)
+  const temaActual = localStorage.getItem('numa_tema') || 'auto';
+  contenedor.querySelectorAll('.prf-tema-btn').forEach(btn => {
+    if (btn.dataset.tema === temaActual) btn.classList.add('activo');
+    btn.addEventListener('click', () => {
+      aplicarTema(btn.dataset.tema);
+      contenedor.querySelectorAll('.prf-tema-btn').forEach(b => b.classList.toggle('activo', b === btn));
+    });
+  });
+}
+
+// ── Memorias ──────────────────────────────────────────────────────────────────
+
+async function _borrarMemoria(id) {
+  try {
+    const res = await fetch(`/memories/${id}`, { method: 'DELETE', headers: authHeaders() });
+    if (!res.ok) throw new Error('No se pudo borrar');
+    // Actualizar el estado local y re-renderizar: así las "últimas 2" visibles
+    // y el contador de "Mostrar más" quedan siempre correctos.
+    _memorias = _memorias.filter(m => String(m.id) !== String(id));
+    _renderMemorias();
+    _cargado = false; // recargar la próxima vez que entre al perfil
+  } catch (e) {
+    console.warn('No se pudo borrar la memoria:', e);
+  }
+}
+
+// ── Tamaño de fuente ──────────────────────────────────────────────────────────
+
+const FONT_SIZES = { small: '14px', normal: '16px', large: '18.5px' };
+
+export function aplicarTamanoFuente(size) {
+  const px = FONT_SIZES[size] || FONT_SIZES.normal;
+  document.documentElement.style.fontSize = px;
+  localStorage.setItem('numa_font_size', size);
+}
+
+export function aplicarTamanoFuenteGuardado() {
+  const guardado = localStorage.getItem('numa_font_size');
+  if (guardado && guardado !== 'normal') aplicarTamanoFuente(guardado);
+}
+
+// ── Tema (claro / oscuro / automático) ───────────────────────────────────────
+// El modo oscuro se aplica con la clase .tema-oscuro en <html>.
+// "auto" sigue la preferencia del sistema y reacciona si cambia en vivo.
+
+const _mediaOscuro = window.matchMedia('(prefers-color-scheme: dark)');
+
+function _refrescarTema() {
+  const tema = localStorage.getItem('numa_tema') || 'auto';
+  const oscuro = tema === 'oscuro' || (tema === 'auto' && _mediaOscuro.matches);
+  document.documentElement.classList.toggle('tema-oscuro', oscuro);
+}
+
+_mediaOscuro.addEventListener?.('change', _refrescarTema);
+
+export function aplicarTema(tema) {
+  localStorage.setItem('numa_tema', tema);
+  _refrescarTema();
+}
+
+export function aplicarTemaGuardado() {
+  _refrescarTema();
 }
 
 // ── Check-in ──────────────────────────────────────────────────────────────────
@@ -151,8 +317,8 @@ async function _guardarCheckin(userId, moodValue) {
   try {
     const res = await fetch('/checkin', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, mood_value: moodValue }),
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ mood_value: moodValue }),
     });
     const data = res.ok ? await res.json() : {};
     const emoji = data.mood_emoji || MOODS.find(m => m.value === moodValue)?.emoji || '🙂';
@@ -223,8 +389,8 @@ async function _eliminarCuenta(userId, modal) {
   try {
     const res = await fetch('/account/delete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, reason }),
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ reason }),
     });
 
     if (!res.ok) throw new Error('Error al eliminar');

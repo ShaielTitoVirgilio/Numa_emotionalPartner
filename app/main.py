@@ -1,19 +1,22 @@
 # app/main.py
 
+import hmac
 import os
 import json
 from typing import Any
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from pywebpush import webpush, WebPushException
 from pydantic import BaseModel
 
+from app.core.config import config
+from app.core.auth import get_current_user_id
+from app.core.ratelimit import client_ip
 from app.routes.auth_router import router as auth_router
 from app.routes.chat_router import router as chat_router
 from app.routes.onboarding_router import router as onboarding_router
@@ -22,14 +25,24 @@ from app.routes.checkin_router import router as checkin_router
 from app.routes.dashboard_router import router as dashboard_router
 from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
-from app.routes.password_reset_router import router as password_reset_router
+from app.routes.memories_router import router as memories_router
 from app.supabase_client import supabase
+
+# ==========================
+# VALIDACIÓN DE ENTORNO (fail-fast)
+# ==========================
+
+if not config.ADMIN_KEY:
+    raise RuntimeError(
+        "ADMIN_KEY no está configurada. Definila en el .env antes de arrancar: "
+        "sin ella los endpoints de administración quedarían abiertos."
+    )
 
 # ==========================
 # APP
 # ==========================
 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 
 app = FastAPI(title="Numa Emotional Partner API", version="1.0.0")
 app.state.limiter = limiter
@@ -58,7 +71,6 @@ app.add_middleware(NoCacheJSMiddleware)
 # ==========================
 
 class SuscripcionPush(BaseModel):
-    user_id: str
     subscription_data: Any
 
 
@@ -86,10 +98,10 @@ def serve_sw():
 # ==========================
 
 @app.post("/subscribe")
-def subscribe(data: SuscripcionPush):
+def subscribe(data: SuscripcionPush, user_id: str = Depends(get_current_user_id)):
     try:
         supabase.table("user_notifications").upsert({
-            "user_id": data.user_id,
+            "user_id": user_id,
             "subscription_data": data.subscription_data
         }, on_conflict="user_id").execute()
         return {"ok": True}
@@ -98,8 +110,8 @@ def subscribe(data: SuscripcionPush):
 
 @app.post("/api/send-daily-push")
 def send_daily_push(x_admin_key: str = Header(None)):
-    admin_key_env = os.getenv("ADMIN_KEY", "")
-    if not x_admin_key or x_admin_key != admin_key_env:
+    admin_key_env = config.ADMIN_KEY
+    if not x_admin_key or not hmac.compare_digest(x_admin_key, admin_key_env):
         raise HTTPException(status_code=401, detail="No autorizado")
 
     try:
@@ -125,9 +137,11 @@ def send_daily_push(x_admin_key: str = Header(None)):
                 )
                 success_count += 1
             except WebPushException as ex:
-                print(f"Error enviando push al usuario {sub.get('user_id')}: {ex}")
+                print(f"Error enviando push a una suscripción: {ex}")
 
         return {"message": f"Se enviaron {success_count} notificaciones de {len(subscriptions)}."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -144,4 +158,4 @@ app.include_router(checkin_router)
 app.include_router(dashboard_router)
 app.include_router(account_router)
 app.include_router(apple_router)
-app.include_router(password_reset_router)
+app.include_router(memories_router)

@@ -1840,3 +1840,662 @@
   color: #8fb5a3;
   text-align: center;
 }
+
+/* ============================================
+   TARJETA DE CRISIS — recursos clicables
+   Burbuja diferenciada para respuestas de crisis:
+   los teléfonos y links son accionables con un toque.
+   ============================================ */
+
+.bubble.oso.crisis-card {
+  background: #fff8f0;
+  border: 2px solid #e8a87c;
+  box-shadow: 0 4px 14px rgba(232, 168, 124, 0.25);
+  line-height: 1.55;
+}
+
+.crisis-card .crisis-tel,
+.crisis-card .crisis-link {
+  display: inline-block;
+  background: #e8a87c;
+  color: #fff;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  margin: 2px 0;
+}
+
+.crisis-card .crisis-tel:active,
+.crisis-card .crisis-link:active {
+  transform: scale(0.97);
+}
+
+/* ============================================
+   BOTÓN DE SUGERENCIA DE EJERCICIO
+   (antes estaba inline en chat.js)
+   ============================================ */
+
+.exercise-suggestion-btn {
+  background: #a6c7b8;
+  border: none;
+  padding: 12px;
+  width: 100%;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #2f4f45;
+  font-weight: bold;
+  font-family: inherit;
+  font-size: 1rem;
+  transition: transform 0.2s;
+}
+
+.exercise-suggestion-btn:hover {
+  transform: scale(1.02);
+}
+
+/* ============================================
+   MICRÓFONO DESHABILITADO (reintentable)
+   ============================================ */
+
+.mic-btn.disabled {
+  opacity: 0.45;
+}
+
+/* ============================================
+   SEPARADOR DE CHARLA ANTERIOR (rehidratación)
+   ============================================ */
+
+.chat-separador {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 8px;
+  color: #9abfb0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.chat-separador::before,
+.chat-separador::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(154, 191, 176, 0.4);
+}
+
+/* ============================================
+   SUGERENCIA DE EJERCICIO EN EL CHAT
+   ============================================ */
+
+.sugerencia-frase {
+  font-size: 0.9em;
+  margin: 0 0 8px;
+}
+
+.sugerencia-cientifico {
+  font-size: 0.75em;
+  opacity: 0.8;
+  margin: 6px 0 0;
+  font-style: italic;
+}
+
+.sugerencia-ahora-no {
+  display: block;
+  margin: 8px auto 0;
+  background: none;
+  border: none;
+  color: #8fb5a3;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: inherit;
+  padding: 4px 8px;
+}
+
+/* ============================================
+   PERFIL — memorias y tamaño de texto
+   ============================================ */
+
+.prf-card-subtexto {
+  font-size: 0.8rem;
+  color: #8fb5a3;
+  margin: -4px 0 10px;
+}
+
+.prf-memoria-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(183, 211, 198, 0.3);
+}
+
+.prf-memoria-item:last-child {
+  border-bottom: none;
+}
+
+.prf-memoria-texto {
+  flex: 1;
+  font-size: 0.87rem;
+  color: #4a6a5e;
+  line-height: 1.45;
+}
+
+.prf-memoria-borrar {
+  background: none;
+  border: none;
+  color: #c5a8a8;
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.prf-memoria-borrar:hover {
+  background: rgba(197, 168, 168, 0.15);
+  color: #b08585;
+}
+
+.prf-memoria-vacio {
+  font-size: 0.85rem;
+  color: #8fb5a3;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.prf-font-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.prf-font-btn {
+  width: 52px;
+  height: 44px;
+  border: 1.5px solid rgba(183, 211, 198, 0.5);
+  border-radius: 12px;
+  background: white;
+  color: #4a6a5e;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.prf-font-btn[data-size="small"]  { font-size: 0.8rem; }
+.prf-font-btn[data-size="normal"] { font-size: 1rem; }
+.prf-font-btn[data-size="large"]  { font-size: 1.25rem; }
+
+.prf-font-btn.activo {
+  background: #7db89e;
+  border-color: #7db89e;
+  color: white;
+}
+
+/* ============================================
+   DASHBOARD — racha y exportar
+   ============================================ */
+
+.db-racha {
+  font-size: 0.82rem;
+  color: #5a9e7a;
+  background: rgba(125, 184, 158, 0.12);
+  border-radius: 10px;
+  padding: 6px 10px;
+  margin: 0 0 10px;
+}
+
+.db-btn-export {
+  display: block;
+  width: 100%;
+  padding: 13px;
+  margin-top: 4px;
+  background: white;
+  border: 1.5px solid rgba(125, 184, 158, 0.5);
+  border-radius: 14px;
+  color: #5a9e7a;
+  font-weight: 700;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.db-export-hint {
+  text-align: center;
+  font-size: 0.75rem;
+  color: #9abfb0;
+  margin: 6px 0 18px;
+}
+
+/* ============================================
+   ONBOARDING — microcopy y "prefiero no responder"
+   ============================================ */
+
+.onboarding-porque {
+  font-size: 0.82rem;
+  color: #8fb5a3;
+  margin: -6px 0 14px;
+  line-height: 1.45;
+}
+
+.onboarding-skip {
+  display: block;
+  margin: 12px auto 0;
+  background: none;
+  border: none;
+  color: #9abfb0;
+  font-size: 0.83rem;
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: inherit;
+  padding: 6px 10px;
+}
+
+/* ============================================
+   MENÚ DE EJERCICIOS (antes inline en menuEjercicios.js)
+   ============================================ */
+
+.menu-sep {
+  width: 100%;
+  max-width: 340px;
+  height: 1px;
+  background: rgba(183, 211, 198, 0.4);
+  margin: 4px 0 10px;
+}
+
+.menu-cat-btn {
+  width: 100%;
+  max-width: 340px;
+  background: white;
+  border: 1.5px solid rgba(183, 211, 198, 0.4);
+  border-radius: 18px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.menu-cat-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.09);
+}
+
+.menu-cat-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.45rem;
+  flex-shrink: 0;
+}
+
+.menu-cat-info  { flex: 1; min-width: 0; }
+.menu-cat-label { font-weight: 800; color: #2f4f45; font-size: 1rem; }
+.menu-cat-desc  { font-size: 0.82rem; color: #6b8e7d; margin-top: 1px; }
+.menu-cat-badge { font-size: 0.72rem; color: #b7d3c6; margin-top: 2px; }
+.menu-cat-chevron { color: #b7d3c6; font-size: 1.4rem; font-weight: 300; margin-left: 4px; }
+
+.ej-card {
+  background: white;
+  padding: 16px;
+  border-radius: 16px;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1.5px solid rgba(183, 211, 198, 0.25);
+}
+
+.ej-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+
+.ej-card-titulo {
+  color: #2f4f45;
+  font-size: 1.05rem;
+  font-weight: 800;
+  flex: 1;
+  margin: 0;
+}
+
+.ej-card-duracion {
+  background: #eaf4ef;
+  color: #7db89e;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 20px;
+  margin-left: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ej-card-desc {
+  font-size: 0.87rem;
+  color: #5a7a6e;
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+
+.ej-card-cientifico {
+  font-size: 0.77rem;
+  color: #9fb5aa;
+  font-style: italic;
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+
+.ej-card-spacer { margin-bottom: 12px; }
+
+.btn-start-ejercicio {
+  background: linear-gradient(135deg, #7db89e, #5a9e84);
+  border: none;
+  padding: 10px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  width: 100%;
+  color: white;
+  font-weight: 800;
+  font-size: 0.92rem;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+  transition: opacity 0.2s;
+}
+
+.btn-start-ejercicio:hover { opacity: 0.88; }
+
+.lectura-intro {
+  font-size: 0.85rem;
+  color: #8fb5a3;
+  text-align: center;
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.lectura-card {
+  width: 100%;
+  max-width: 340px;
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1.5px solid rgba(183, 211, 198, 0.25);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.lectura-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.09);
+}
+
+.lectura-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.lectura-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.lectura-card-info   { flex: 1; }
+.lectura-card-nombre { font-weight: 800; color: #2f4f45; font-size: 1rem; }
+.lectura-card-count  { font-size: 0.72rem; color: #b7d3c6; margin-top: 2px; }
+
+.lectura-card-desc {
+  font-size: 0.85rem;
+  color: #5a7a6e;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.btn-leer-pack {
+  border: 1.5px solid transparent;
+  padding: 9px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  width: 100%;
+  font-weight: 800;
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: opacity 0.2s;
+}
+
+.btn-leer-pack:hover { opacity: 0.8; }
+
+/* ============================================
+   BANNER DE NOTIFICACIONES (antes inline en app.js)
+   ============================================ */
+
+.banner-notif {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #2f4f45;
+  color: white;
+  padding: 24px 24px 36px; /* 36px abajo por el home indicator del iPhone */
+  border-radius: 24px 24px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 9999;
+  box-shadow: 0 -4px 30px rgba(0, 0, 0, 0.3);
+}
+
+.banner-notif-emoji { font-size: 2rem; margin-bottom: 8px; }
+
+.banner-notif-texto {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.banner-notif-si {
+  width: 100%;
+  padding: 14px;
+  background: #7db89e;
+  color: white;
+  border: none;
+  border-radius: 14px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 10px;
+  font-family: inherit;
+}
+
+.banner-notif-no {
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  color: #aaa;
+  border: none;
+  font-size: 0.95rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* ============================================
+   MODO OSCURO (uso nocturno)
+   Se activa con la clase .tema-oscuro en <html>.
+   El JS la aplica según la preferencia del usuario
+   (Perfil → Tema): Automático (sistema) / Claro / Oscuro.
+   ============================================ */
+
+html.tema-oscuro body {
+  background: #17201c;
+}
+
+html.tema-oscuro .app,
+html.tema-oscuro #onboarding-screen,
+html.tema-oscuro #auth-screen {
+  background: linear-gradient(170deg, #1b2521 0%, #19221e 60%, #171f1b 100%);
+}
+
+/* Burbujas del chat */
+html.tema-oscuro .bubble.user { background: #35514a; color: #e6efe9; }
+html.tema-oscuro .bubble.oso  { background: #25312c; color: #dde8e2; }
+html.tema-oscuro .bubble.oso.mood-stressed    { background: #3a2c2c; }
+html.tema-oscuro .bubble.oso.mood-overwhelmed { background: #402e2e; }
+html.tema-oscuro .bubble.oso.mood-sad         { background: #2c2c3a; }
+html.tema-oscuro .bubble.oso.mood-anxious     { background: #3a322a; }
+html.tema-oscuro .bubble.oso.mood-happy       { background: #283a2c; }
+html.tema-oscuro .bubble.oso.mood-excited     { background: #3a382a; }
+html.tema-oscuro .bubble.oso.mood-calm,
+html.tema-oscuro .bubble.oso.mood-neutral     { background: #2b302c; }
+
+html.tema-oscuro .bubble.oso.crisis-card {
+  background: #332a22;
+  border-color: #e8a87c;
+  color: #f0e4d8;
+}
+
+/* Superficies y tarjetas */
+html.tema-oscuro .db-card,
+html.tema-oscuro .prf-card,
+html.tema-oscuro .ej-card,
+html.tema-oscuro .lectura-card,
+html.tema-oscuro .menu-cat-btn,
+html.tema-oscuro .prf-font-btn,
+html.tema-oscuro .prf-tema-btn,
+html.tema-oscuro .db-btn-export,
+html.tema-oscuro .checkin-card,
+html.tema-oscuro .prf-modal {
+  background: #242f2a;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #dde8e2;
+}
+
+html.tema-oscuro .prf-font-btn.activo,
+html.tema-oscuro .prf-tema-btn.activo {
+  background: #7db89e;
+  border-color: #7db89e;
+  color: white;
+}
+
+html.tema-oscuro .menu-cat-label,
+html.tema-oscuro .ej-card-titulo,
+html.tema-oscuro .lectura-card-nombre,
+html.tema-oscuro .db-card-titulo,
+html.tema-oscuro .prf-card-titulo,
+html.tema-oscuro .prf-nombre,
+html.tema-oscuro .db-titulo,
+html.tema-oscuro .prf-modal-titulo,
+html.tema-oscuro .onboarding-pregunta,
+html.tema-oscuro .checkin-pregunta {
+  color: #e6efe9;
+}
+
+html.tema-oscuro .menu-cat-desc,
+html.tema-oscuro .ej-card-desc,
+html.tema-oscuro .lectura-card-desc,
+html.tema-oscuro .prf-memoria-texto,
+html.tema-oscuro .db-resumen-texto,
+html.tema-oscuro .prf-email,
+html.tema-oscuro .prf-disclaimer-texto {
+  color: #aec4ba;
+}
+
+/* Inputs */
+html.tema-oscuro .auth-input,
+html.tema-oscuro #input,
+html.tema-oscuro .prf-modal-textarea,
+html.tema-oscuro .onboarding-textarea {
+  background: #242f2a;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e6efe9;
+}
+
+html.tema-oscuro #input::placeholder,
+html.tema-oscuro .auth-input::placeholder { color: #7d948a; }
+
+html.tema-oscuro .input-container {
+  background: linear-gradient(to top, #1b2521 80%, transparent);
+}
+
+/* Menús y overlays a pantalla completa */
+html.tema-oscuro #ejercicios-menu,
+html.tema-oscuro #submenu-detalle {
+  background: rgba(23, 30, 26, 0.98);
+}
+
+/* Separadores */
+html.tema-oscuro .chat-separador { color: #6d847a; }
+html.tema-oscuro .chat-separador::before,
+html.tema-oscuro .chat-separador::after {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ============================================
+   SELECTOR DE TEMA (Perfil)
+   ============================================ */
+
+.prf-tema-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.prf-tema-btn {
+  flex: 1;
+  max-width: 110px;
+  padding: 10px 6px;
+  border: 1.5px solid rgba(183, 211, 198, 0.5);
+  border-radius: 12px;
+  background: white;
+  color: #4a6a5e;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.prf-tema-btn.activo {
+  background: #7db89e;
+  border-color: #7db89e;
+  color: white;
+}
+
+/* Toggle "Mostrar más / menos" de memorias */
+.prf-memorias-toggle {
+  display: block;
+  margin: 10px auto 0;
+  background: none;
+  border: none;
+  color: #7db89e;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 6px 12px;
+  border-radius: 10px;
+}
+
+.prf-memorias-toggle:hover {
+  background: rgba(125, 184, 158, 0.12);
+}
+
+html.tema-oscuro .prf-memorias-toggle {
+  color: #8fc7ab;
+}

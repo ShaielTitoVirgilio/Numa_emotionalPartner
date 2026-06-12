@@ -3,22 +3,31 @@ from typing import List, Dict, Any, Optional
 from app.core.db import supabase
 
 _MINIMO_CHARS = 20
+_MINIMO_PALABRAS = 4
 
 _PATRONES_INVALIDOS = [
     # Estado emocional puro sin contexto adicional
-    r"^(el usuario |la persona )?(está|se siente|parece|se ve) (triste|mal|bien|cansad[oa]|ansios[oa]|angustiad[oa]|preocupad[oa]|deprimid[oa]|abrumad[oa])\.?$",
+    r"^(el usuario |la usuaria |la persona )?(está|esta|se siente|parece|se ve) (muy |un poco |bastante )?(triste|mal|bien|cansad[oa]|ansios[oa]|angustiad[oa]|preocupad[oa]|deprimid[oa]|abrumad[oa])\.?$",
     # Menciones vagas sin hecho concreto
-    r"^(mencionó|dijo|comentó|expresó) (algo|problemas|cosas|temas|situaciones|que está)",
-    # Fragmentos sin verbo ni sujeto
-    r"^[a-záéíóúñü\s]+$",  # solo palabras sueltas sin puntuación ni estructura
+    r"^(mencionó|menciono|dijo|comentó|comento|expresó|expreso) (algo|problemas|cosas|temas|situaciones|que está|que esta)",
 ]
 
 _RE_INVALIDOS = [re.compile(p, re.IGNORECASE) for p in _PATRONES_INVALIDOS]
 
 
 def _es_memoria_valida(contenido: str) -> bool:
+    """Filtra memorias basura sin descartar oraciones válidas.
+
+    El filtro anterior incluía el patrón ^[a-záéíóúñü\\s]+$ que rechazaba
+    CUALQUIER oración sin puntuación interna ("Vive sola con su gata Mora")
+    → las memorias llegaban al cliente pero nunca se persistían. Ahora se
+    exige longitud y cantidad mínima de palabras, sin penalizar la falta
+    de puntuación.
+    """
     texto = contenido.strip()
     if len(texto) < _MINIMO_CHARS:
+        return False
+    if len(texto.split()) < _MINIMO_PALABRAS:
         return False
     if any(r.search(texto) for r in _RE_INVALIDOS):
         return False
@@ -59,3 +68,19 @@ class ConversationRepository:
         if not ids:
             return
         supabase.table("memories").update({"is_active": False}).in_("id", ids).execute()
+
+    def get_recent_messages(self, user_id: str, limit: int = 30) -> List[Dict[str, Any]]:
+        """Últimos mensajes del usuario para rehidratar el chat al abrir la app.
+        Excluye los mensajes técnicos de feedback post-ejercicio."""
+        res = (
+            supabase.table("conversations")
+            .select("role, content, mood, created_at")
+            .eq("user_id", user_id)
+            .not_.like("content", "[Post-ejercicio%")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = res.data or []
+        rows.reverse()  # devolver en orden cronológico
+        return rows

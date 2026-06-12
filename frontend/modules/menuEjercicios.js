@@ -3,6 +3,9 @@ import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
 import { iniciarEjercicio } from './utils.js';
 import { mostrarSelectorSonido, getSonidoGuardado, SONIDOS_AMBIENTE } from './ambientSound.js';
 
+// Los estilos estructurales viven en styles.css (.menu-cat-btn, .ej-card, etc.);
+// inline solo quedan los colores dinámicos por categoría/pack.
+
 // ============================================
 // MENÚ PRINCIPAL DE EJERCICIOS
 // ============================================
@@ -10,7 +13,7 @@ import { mostrarSelectorSonido, getSonidoGuardado, SONIDOS_AMBIENTE } from './am
 export function irAEjercicios() {
     const menu = document.getElementById("ejercicios-menu");
     const lista = document.getElementById("lista-categorias");
-    
+
     if (!menu || !lista) {
         return console.error("Faltan elementos del menú en HTML");
     }
@@ -49,7 +52,7 @@ export function irAEjercicios() {
 
     // Separador visual
     const sep = document.createElement("div");
-    sep.style.cssText = "width:100%; max-width:340px; height:1px; background:rgba(183,211,198,0.4); margin:4px 0 10px;";
+    sep.className = "menu-sep";
     lista.appendChild(sep);
 
     // ── Categorías ──────────────────────────────────
@@ -71,84 +74,30 @@ export function irAEjercicios() {
             desc: "Soltar tensión física",
             badge: `${CATALOGO_EJERCICIOS.yoga.length} ejercicios · 3-5 min`,
             iconBg: "rgba(197,168,107,0.18)"
+        },
+        {
+            key: "lectura", label: "Lectura", emoji: "📖",
+            desc: "Frases para reflexionar",
+            badge: "Motivación · Espiritualidad · Diaria",
+            iconBg: "rgba(158,125,184,0.18)"
         }
     ];
 
     categorias.forEach(cat => {
         const btn = document.createElement("button");
-        btn.style.cssText = `
-            width: 100%; max-width: 340px;
-            background: white;
-            border: 1.5px solid rgba(183,211,198,0.4);
-            border-radius: 18px;
-            padding: 14px 16px;
-            display: flex; align-items: center; gap: 14px;
-            cursor: pointer; text-align: left;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            transition: all 0.2s ease;
-            font-family: inherit;
-        `;
+        btn.className = "menu-cat-btn";
         btn.innerHTML = `
-            <div style="width:46px; height:46px; border-radius:14px; background:${cat.iconBg};
-                        display:flex; align-items:center; justify-content:center;
-                        font-size:1.45rem; flex-shrink:0;">
-                ${cat.emoji}
+            <div class="menu-cat-icon" style="background:${cat.iconBg};">${cat.emoji}</div>
+            <div class="menu-cat-info">
+                <div class="menu-cat-label">${cat.label}</div>
+                <div class="menu-cat-desc">${cat.desc}</div>
+                <div class="menu-cat-badge">${cat.badge}</div>
             </div>
-            <div style="flex:1; min-width:0;">
-                <div style="font-weight:800; color:#2f4f45; font-size:1rem;">${cat.label}</div>
-                <div style="font-size:0.82rem; color:#6b8e7d; margin-top:1px;">${cat.desc}</div>
-                <div style="font-size:0.72rem; color:#b7d3c6; margin-top:2px;">${cat.badge}</div>
-            </div>
-            <div style="color:#b7d3c6; font-size:1.4rem; font-weight:300; margin-left:4px;">›</div>
+            <div class="menu-cat-chevron">›</div>
         `;
-        btn.onmouseenter = () => {
-            btn.style.transform = "translateY(-2px)";
-            btn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.09)";
-        };
-        btn.onmouseleave = () => {
-            btn.style.transform = "translateY(0)";
-            btn.style.boxShadow = "0 2px 10px rgba(0,0,0,0.05)";
-        };
         btn.onclick = () => abrirSubmenu(cat.key);
         lista.appendChild(btn);
     });
-
-    // Botón de Lectura
-    const btnLectura = document.createElement("button");
-    btnLectura.style.cssText = `
-        width: 100%; max-width: 340px;
-        background: white;
-        border: 1.5px solid rgba(183,211,198,0.4);
-        border-radius: 18px;
-        padding: 14px 16px;
-        display: flex; align-items: center; gap: 14px;
-        cursor: pointer; text-align: left;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        transition: all 0.2s ease;
-        font-family: inherit;
-    `;
-    btnLectura.innerHTML = `
-        <div style="width:46px; height:46px; border-radius:14px; background:rgba(158,125,184,0.18);
-                    display:flex; align-items:center; justify-content:center; font-size:1.45rem; flex-shrink:0;">
-            📖
-        </div>
-        <div style="flex:1; min-width:0;">
-            <div style="font-weight:800; color:#2f4f45; font-size:1rem;">Lectura</div>
-            <div style="font-size:0.82rem; color:#6b8e7d; margin-top:1px;">Frases para reflexionar</div>
-            <div style="font-size:0.72rem; color:#b7d3c6; margin-top:2px;">Motivación · Espiritualidad · Diaria</div>
-        </div>
-        <div style="color:#b7d3c6; font-size:1.4rem; font-weight:300; margin-left:4px;">›</div>
-    `;
-    btnLectura.onmouseenter = () => {
-        btnLectura.style.transform = "translateY(-2px)";
-        btnLectura.style.boxShadow = "0 6px 18px rgba(0,0,0,0.09)";
-    };
-    btnLectura.onmouseleave = () => {
-        btnLectura.style.transform = "translateY(0)";
-        btnLectura.style.boxShadow = "0 2px 10px rgba(0,0,0,0.05)";
-    };
-    btnLectura.onclick = () => abrirSubmenu('lectura');
-    lista.appendChild(btnLectura);
 
     menu.classList.remove("hidden");
 }
@@ -185,40 +134,17 @@ export function abrirSubmenu(categoriaKey) {
         const duracion = getDuracion(categoriaKey, ej);
 
         const card = document.createElement("div");
-        card.style.cssText = `
-            background: white;
-            padding: 16px;
-            border-radius: 16px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border: 1.5px solid rgba(183,211,198,0.25);
-        `;
+        card.className = "ej-card";
         card.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
-                <h3 style="color:#2f4f45; font-size:1.05rem; font-weight:800; flex:1; margin:0;">${ej.nombre}</h3>
-                ${duracion ? `<span style="
-                    background: #eaf4ef; color: #7db89e;
-                    font-size: 0.7rem; font-weight: 700;
-                    padding: 3px 9px; border-radius: 20px;
-                    margin-left: 10px; white-space: nowrap; flex-shrink:0;
-                ">${duracion}</span>` : ''}
+            <div class="ej-card-head">
+                <h3 class="ej-card-titulo">${ej.nombre}</h3>
+                ${duracion ? `<span class="ej-card-duracion">${duracion}</span>` : ''}
             </div>
-            <p style="font-size:0.87rem; color:#5a7a6e; margin:0 0 6px; line-height:1.5;">${ej.descripcion}</p>
-            ${ej.cientifico ? `<p style="font-size:0.77rem; color:#9fb5aa; font-style:italic; margin:0 0 12px; line-height:1.4;">💡 ${ej.cientifico}</p>` : '<div style="margin-bottom:12px;"></div>'}
+            <p class="ej-card-desc">${ej.descripcion}</p>
+            ${ej.cientifico ? `<p class="ej-card-cientifico">💡 ${ej.cientifico}</p>` : '<div class="ej-card-spacer"></div>'}
             <button class="btn-start-ejercicio">Comenzar →</button>
         `;
-        const btnStart = card.querySelector(".btn-start-ejercicio");
-        btnStart.style.cssText = `
-            background: linear-gradient(135deg, #7db89e, #5a9e84);
-            border: none; padding: 10px 16px; border-radius: 12px;
-            cursor: pointer; width: 100%;
-            color: white; font-weight: 800; font-size: 0.92rem;
-            font-family: inherit; letter-spacing: 0.02em;
-            transition: opacity 0.2s;
-        `;
-        btnStart.onmouseenter = () => btnStart.style.opacity = "0.88";
-        btnStart.onmouseleave = () => btnStart.style.opacity = "1";
-        btnStart.onclick = () => iniciarEjercicio(categoriaKey, ej);
+        card.querySelector(".btn-start-ejercicio").onclick = () => iniciarEjercicio(categoriaKey, ej);
         lista.appendChild(card);
     });
 }
@@ -231,7 +157,7 @@ export function volverAMenuPrincipal() {
 function _renderPacksLectura(lista, packs) {
     // Intro text
     const intro = document.createElement("p");
-    intro.style.cssText = "font-size:0.85rem; color:#8fb5a3; text-align:center; margin: 0 0 8px; line-height:1.5;";
+    intro.className = "lectura-intro";
     intro.textContent = "Elegí un tipo de lectura para este momento";
     lista.appendChild(intro);
 
@@ -246,45 +172,20 @@ function _renderPacksLectura(lista, packs) {
         const c = colores[pack.id] || { bg: "rgba(183,211,198,0.15)", accent: "#7db89e" };
 
         const card = document.createElement("div");
-        card.style.cssText = `
-            width: 100%; max-width: 340px;
-            background: white;
-            border-radius: 18px;
-            padding: 16px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border: 1.5px solid rgba(183,211,198,0.25);
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        `;
+        card.className = "lectura-card";
         card.innerHTML = `
-            <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
-                <div style="width:44px; height:44px; border-radius:13px; background:${c.bg};
-                            display:flex; align-items:center; justify-content:center;
-                            font-size:1.4rem; flex-shrink:0;">
-                    ${pack.emoji}
-                </div>
-                <div style="flex:1;">
-                    <div style="font-weight:800; color:#2f4f45; font-size:1rem;">${pack.nombre}</div>
-                    <div style="font-size:0.72rem; color:#b7d3c6; margin-top:2px;">${pack.quotes.length} frases</div>
+            <div class="lectura-card-head">
+                <div class="lectura-card-icon" style="background:${c.bg};">${pack.emoji}</div>
+                <div class="lectura-card-info">
+                    <div class="lectura-card-nombre">${pack.nombre}</div>
+                    <div class="lectura-card-count">${pack.quotes.length} frases</div>
                 </div>
             </div>
-            <p style="font-size:0.85rem; color:#5a7a6e; margin:0 0 12px; line-height:1.5;">${pack.descripcion}</p>
-            <button class="btn-leer-pack" style="
-                background: ${c.bg};
-                color: ${c.accent};
-                border: 1.5px solid ${c.accent}33;
-                padding: 9px 16px; border-radius: 12px;
-                cursor: pointer; width: 100%;
-                font-weight: 800; font-size: 0.9rem;
-                font-family: inherit; transition: opacity 0.2s;
-            ">Leer →</button>
+            <p class="lectura-card-desc">${pack.descripcion}</p>
+            <button class="btn-leer-pack" style="background:${c.bg}; color:${c.accent}; border-color:${c.accent}33;">Leer →</button>
         `;
 
-        const btn = card.querySelector(".btn-leer-pack");
-        btn.onmouseenter = () => { btn.style.opacity = "0.8"; card.style.transform = "translateY(-2px)"; card.style.boxShadow = "0 6px 18px rgba(0,0,0,0.09)"; };
-        btn.onmouseleave = () => { btn.style.opacity = "1";   card.style.transform = "translateY(0)";   card.style.boxShadow = "0 2px 8px rgba(0,0,0,0.06)"; };
-        btn.onclick = () => {
+        card.querySelector(".btn-leer-pack").onclick = () => {
             document.getElementById("submenu-detalle").classList.add("hidden");
             if (window.showReading) window.showReading(pack);
         };

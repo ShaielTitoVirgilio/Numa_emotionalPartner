@@ -1,10 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+from app.core.auth import get_current_user_id
 from app.repositories.user_repository import UserRepository
 
 router = APIRouter()
 user_repo = UserRepository()
+
+MAX_RESPUESTA_CHARS = 1000
 
 
 class OnboardingAnswer(BaseModel):
@@ -14,25 +17,29 @@ class OnboardingAnswer(BaseModel):
 
 
 class OnboardingRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignorado: el user_id sale del token
     answers: List[OnboardingAnswer]
 
 
 @router.post("/onboarding")
-def onboarding_endpoint(request: OnboardingRequest):
+def onboarding_endpoint(request: OnboardingRequest, user_id: str = Depends(get_current_user_id)):
     try:
-        user_repo.create_profile_if_missing(request.user_id)
+        user_repo.create_profile_if_missing(user_id)
+
+        for a in request.answers:
+            if len(a.respuesta) > MAX_RESPUESTA_CHARS:
+                a.respuesta = a.respuesta[:MAX_RESPUESTA_CHARS]
 
         rows = [
             {
-                "user_id":         request.user_id,
+                "user_id":         user_id,
                 "pregunta_numero": a.pregunta_numero,
                 "pregunta":        a.pregunta,
                 "respuesta":       a.respuesta,
             }
             for a in request.answers
         ]
-        user_repo.save_onboarding_answers(request.user_id, rows)
+        user_repo.save_onboarding_answers(user_id, rows)
 
         resp = {a.pregunta_numero: a.respuesta for a in request.answers}
         perfil_update = {
@@ -44,7 +51,7 @@ def onboarding_endpoint(request: OnboardingRequest):
             "como_reacciona":      resp.get(5),
             "preferencias_extra":  resp.get(6),
         }
-        user_repo.upsert_profile(request.user_id, perfil_update)
+        user_repo.upsert_profile(user_id, perfil_update)
 
         return {"message": "Onboarding guardado correctamente"}
     except Exception as e:

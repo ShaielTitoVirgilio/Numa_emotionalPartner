@@ -35,6 +35,20 @@ class LLMRawResponse(TypedDict):
     memories: List[MemoryItem]
 
 
+# Respuesta de cortesía cuando Groq falla (HTTP 400 por json_validate_failed /
+# max tokens ante input adversarial, timeouts, etc.). Antes ese error subía
+# como 500 y el usuario veía "Error de conexión".
+_FALLBACK_RESPONSE: "LLMRawResponse" = {
+    "message": (
+        "Perdón, me trabé un segundo procesando eso 🐼 "
+        "¿Me lo decís de nuevo, o seguimos por otro lado?"
+    ),
+    "mood": "neutral",
+    "suggested_action": None,
+    "memories": [],
+}
+
+
 class LLMClient:
     def __init__(self):
         self.client = _openai_shared_client
@@ -45,16 +59,20 @@ class LLMClient:
         system_prompt: str,
     ) -> LLMRawResponse:
 
-        completion = self.client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.7,
-            max_tokens=600,  # subido de 400 para que el JSON no se corte
-            response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *conversation,
-            ],
-        )
+        try:
+            completion = self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=600,  # subido de 400 para que el JSON no se corte
+                response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *conversation,
+                ],
+            )
+        except Exception as e:
+            print(f"⚠️ LLM error (fallback graceful): {e}")
+            return dict(_FALLBACK_RESPONSE)
 
         raw = completion.choices[0].message.content or ""
 

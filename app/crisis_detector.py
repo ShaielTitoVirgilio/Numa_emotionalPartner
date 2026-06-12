@@ -1,5 +1,6 @@
 
 import random
+import re
 from typing import Optional, TypedDict
 
 # ══════════════════════════════════════════════════════════════
@@ -16,25 +17,82 @@ class CrisisResult(TypedDict):
 
 
 # ══════════════════════════════════════════════════════════════
+# NORMALIZACIÓN
+# El texto y las frases se comparan sin tildes (pero conservando la ñ),
+# así "como me mato" matchea igual que "cómo me mato".
+# ══════════════════════════════════════════════════════════════
+
+_TABLA_TILDES = str.maketrans("áéíóúüÁÉÍÓÚÜ", "aeiouuAEIOUU")
+
+
+def _normalizar(texto: str) -> str:
+    return texto.lower().strip().translate(_TABLA_TILDES)
+
+
+# ══════════════════════════════════════════════════════════════
+# EXCLUSIONES — expresiones cotidianas que NO son crisis.
+# Se "neutralizan" (se borran del texto) ANTES de evaluar las frases
+# de riesgo, para eliminar los falsos positivos sistemáticos:
+#   "el finde me corto el pelo"            → no es autolesión
+#   "me corto con el cuchillo cocinando"   → no es autolesión
+#   "me lastimo el tobillo jugando"        → no es autolesión
+#   "sobredosis de vitaminas/cafeína"      → no es método suicida
+#   "mi abuela tuvo una sobredosis"        → tercera persona
+#   "me quiero morir de la vergüenza"      → hipérbole
+#   "este mundo de hipócritas"             → figurativo
+#   "me mato estudiando"                   → hipérbole de esfuerzo
+# Escritas ya normalizadas (sin tildes, con ñ).
+# ══════════════════════════════════════════════════════════════
+
+_EXCLUSIONES = [re.compile(p) for p in [
+    # Cortes cotidianos (pelo, uñas...) — lista cerrada de objetos benignos
+    # para NO neutralizar "me corto las venas" / "los brazos".
+    r"\bme cort(o|e|aba) (el|la|las|los) (pelo|cabello|flequillo|barba|uñas|puntas|jopo|rulos)\b",
+    r"\bme cort(o|e|aba) con (el|la|un|una) \w+",
+    # Lesiones accidentales con parte del cuerpo (excluida la muñeca)
+    r"\bme golpe(o|e|aba|teo) (el|la|las|los) \w+",
+    r"\bme lastim(o|e|aba) (el|la|los|las|un|una) (tobillo|pie|pies|rodilla|rodillas|mano|manos|dedo|dedos|codo|hombro|espalda|cuello|brazo|pierna|piernas)\b",
+    r"\bme quem(o|e|aba) (con|el|la|las|los) \w+",
+    # Hipérboles cotidianas de "morir"
+    r"\b(me quiero morir|quiero morirme|quiero morir|me muero|me estoy muriendo)( de| del| de la| de el)? (risa|verguenza|hambre|frio|calor|sueño|amor|ganas|aburrimiento|ternura|ansiedad por verte|curiosidad)\w*",
+    r"\bno doy mas de (la )?risa\b",
+    # Sobredosis inocuas o de terceros
+    r"\bsobredosis de (vitamina\w*|azucar|cafeina|cafe|mate|chocolate|trabajo|series|futbol|netflix)\b",
+    r"\b(mi|tu|su) \w+( \w+)? (tuvo|tomo|toma|sufrio|sufre|tiene|tenia) (una )?sobredosis\b",
+    # "este mundo de hipócritas" y similares — figurativo, no ideación
+    r"\b(en )?(este|un) mundo de \w+",
+    # Hipérbole de esfuerzo
+    r"\bme mat(o|e) (estudiando|trabajando|entrenando|laburando|limpiando|cocinando|en el gimnasio|en el gym)\b",
+]]
+
+
+def _neutralizar_exclusiones(texto: str) -> str:
+    for patron in _EXCLUSIONES:
+        texto = patron.sub(" ", texto)
+    return texto
+
+
+# ══════════════════════════════════════════════════════════════
 # FRASES DE DETECCIÓN
-# Ordenadas de más a menos específicas.
-# Se evalúan en orden: la primera que matchea gana.
+# Ordenadas de más a menos específicas. Se evalúan en orden:
+# la primera categoría que matchea gana.
+# Escritas ya normalizadas (sin tildes, con ñ).
 # ══════════════════════════════════════════════════════════════
 
 # ── Nivel CRÍTICO: métodos concretos ──────────────────────────
-# Preguntas sobre cómo hacerlo — requieren respuesta inmediata + recurso
 
 SUICIDE_METHOD_PHRASES = [
     # pastillas / medicamentos
-    "qué pastillas me matan", "cuántas pastillas", "pastillas para morir",
-    "pastillas para matarme", "qué medicamento mata", "sobredosis de",
-    "cuántas me tomo para", "con qué me mato", "cómo me mato",
-    "cómo suicidarme", "cómo quitarme la vida", "método para suicidarme",
-    "manera de suicidarme", "forma de matarme", "cómo terminar con mi vida",
-    "qué puedo tomar para morir", "qué me puedo tomar para morir",
-    "cómo colgarme", "cómo ahorcarme", "cómo cortarme las venas",
-    "dónde cortarme", "cómo tirarme", "de qué altura me tiro",
-    "con qué me puedo cortar", "cómo hacerlo sin que duela",
+    "que pastillas me matan", "cuantas pastillas", "pastillas para morir",
+    "pastillas para matarme", "que medicamento mata", "sobredosis de",
+    "cuantas me tomo para", "con que me mato", "como me mato",
+    "como suicidarme", "como quitarme la vida", "metodo para suicidarme",
+    "manera de suicidarme", "forma de matarme", "como terminar con mi vida",
+    "que puedo tomar para morir", "que me puedo tomar para morir",
+    "como colgarme", "como ahorcarme", "como cortarme las venas",
+    "como me corto las venas", "me corto las venas", "cortarme las venas",
+    "donde cortarme", "como tirarme", "de que altura me tiro",
+    "con que me puedo cortar", "como hacerlo sin que duela",
 ]
 
 # ── Nivel CRÍTICO: ideación suicida directa ───────────────────
@@ -48,19 +106,27 @@ SUICIDAL_IDEATION_PHRASES = [
     "quiero dejar de existir", "quiero desaparecer para siempre",
     "no quiero seguir viviendo", "no quiero seguir en este mundo",
     "no quiero estar en este mundo", "no quiero seguir existiendo",
-    "preferiría estar muerto", "preferiría no existir",
-    "estaría mejor muerto", "estarían mejor sin mí",
-    "todos estarían mejor sin mí", "sería mejor si no existiera",
-    "mejor si no hubiera nacido", "desearía no haber nacido",
+    "preferiria estar muerto", "preferiria estar muerta", "preferiria no existir",
+    "estaria mejor muerto", "estaria mejor muerta", "estarian mejor sin mi",
+    "todos estarian mejor sin mi", "seria mejor si no existiera",
+    "mejor si no hubiera nacido", "desearia no haber nacido",
     "ya no quiero seguir", "ya no puedo seguir",
-    "no tiene sentido seguir viviendo", "para qué seguir viviendo",
+    "no tiene sentido seguir viviendo", "para que seguir viviendo",
+    "no le encuentro razon para seguir", "no encuentro razon para seguir",
+    "no tengo razon para seguir", "no hay razon para seguir",
+    "no tengo razones para seguir",
+    # Conjugaciones en pasado: si además hay marcador de tiempo pasado
+    # ("cuando era...", "hace años...") se degradan a señal media.
+    "pensaba en matarme", "pensaba en suicidarme",
+    "queria matarme", "queria morirme", "me queria matar",
+    "me quise matar", "intente matarme", "intente suicidarme",
 ]
 
 # ── Nivel ALTO: autolesión ────────────────────────────────────
 
 SELF_HARM_PHRASES = [
     "me corto", "me lastimo", "me hago daño", "me autolesiono",
-    "empecé a cortarme", "volví a cortarme", "quiero cortarme",
+    "empece a cortarme", "volvi a cortarme", "quiero cortarme",
     "quiero hacerme daño", "quiero lastimarme", "me quemo",
     "me golpeo", "me arranco", "me pellizco fuerte para sentir",
     "me hago daño para sentir algo",
@@ -70,13 +136,13 @@ SELF_HARM_PHRASES = [
 # No ideación directa pero señal de que la persona está al límite
 
 CRISIS_OVERFLOW_PHRASES = [
-    "no aguanto más", "no puedo más con esto", "ya no puedo más",
-    "estoy al límite", "llegué al límite", "toqué fondo",
+    "no aguanto mas", "no puedo mas con esto", "ya no puedo mas",
+    "estoy al limite", "llegue al limite", "toque fondo",
     "no veo salida", "no hay salida", "no encuentro salida",
     "siento que me voy a quebrar", "me estoy quebrando",
     "me estoy destruyendo", "me quiero desaparecer",
     "quiero desaparecer", "quisiera no despertar",
-    "ojalá no despierte", "ojalá me durmiera y no despertara",
+    "ojala no despierte", "ojala me durmiera y no despertara",
 ]
 
 # ── Nivel MEDIO: señales implícitas de riesgo ─────────────────
@@ -85,16 +151,18 @@ CRISIS_OVERFLOW_PHRASES = [
 # el módulo de crisis implícita en el prompt (el LLM responde).
 
 IMPLICIT_RISK_PHRASES = [
-    "ya lo decidí", "ya lo decidi",
+    "ya lo decidi",
     "no tiene caso seguir", "no tiene caso ya",
     "ya me voy de este mundo",
-    "este es mi último mensaje", "este es mi ultimo mensaje",
-    "no quiero hablar más, solo voy a hacerlo", "solo voy a hacerlo",
-    "nadie me va a extrañar", "nadie me extrañaría", "nadie me extranaria",
+    "este es mi ultimo mensaje",
+    "no quiero hablar mas, solo voy a hacerlo", "solo voy a hacerlo",
+    "nadie me va a extrañar", "nadie me extrañaria",
     "ya no importa nada", "nada va a cambiar nunca",
-    "adiós a todos", "adios a todos",
-    "ya está todo dicho", "ya esta todo dicho",
-    "es la última vez que hablo", "es la ultima vez que hablo",
+    "adios a todos",
+    "ya esta todo dicho",
+    "es la ultima vez que hablo",
+    "pensando en desaparecer",
+    "no se si quiero estar", "no se si quiero seguir",
 ]
 
 # Score por categoría — alimenta el routing de módulos del prompt:
@@ -106,6 +174,58 @@ SCORE_POR_CATEGORIA = {
     "CRISIS_OVERFLOW":   0.45,
     "IMPLICIT_RISK":     0.40,
 }
+
+
+# ══════════════════════════════════════════════════════════════
+# MATCHING — límites de palabra + negación + tiempo pasado
+# ══════════════════════════════════════════════════════════════
+
+def _compilar_frases(frases: list[str]) -> list[re.Pattern]:
+    # Límites de palabra: "me corto" NO matchea dentro de "me cortocircuito".
+    return [
+        re.compile(r"(?<![\wñ])" + re.escape(f) + r"(?![\wñ])")
+        for f in frases
+    ]
+
+
+_PATRONES = {
+    "SUICIDE_METHOD":    _compilar_frases(SUICIDE_METHOD_PHRASES),
+    "SUICIDAL_IDEATION": _compilar_frases(SUICIDAL_IDEATION_PHRASES),
+    "SELF_HARM":         _compilar_frases(SELF_HARM_PHRASES),
+    "CRISIS_OVERFLOW":   _compilar_frases(CRISIS_OVERFLOW_PHRASES),
+    "IMPLICIT_RISK":     _compilar_frases(IMPLICIT_RISK_PHRASES),
+}
+
+# Negación inmediatamente antes del match: "no me quiero matar",
+# "nunca me cortaria"... (no afecta frases que ya empiezan con "no")
+_NEGACION_RE = re.compile(r"\b(no|nunca|jamas|tampoco|ni)\s+(es que\s+)?$")
+
+# Marcadores de tiempo pasado: una mención de crisis pasada no debe disparar
+# la respuesta hardcodeada de emergencia. Se degrada a señal media → el LLM
+# responde con el módulo de crisis activado (y se loguea igual).
+_MARCADORES_PASADO = [
+    "hace años", "hace un año", "hace meses", "hace un tiempo", "hace tiempo",
+    "cuando era", "cuando tenia", "en aquella epoca", "en aquel momento",
+    "en su momento", "el año pasado", "de chico", "de chica", "de adolescente",
+    "en mi adolescencia", "llegue a pensar", "llegaba a pensar",
+    "en el pasado", "antes pensaba", "antes queria", "una epoca", "ya no pienso",
+    "ya supere", "lo supere",
+]
+
+
+def _hay_match(texto: str, patrones: list[re.Pattern]) -> bool:
+    """True si alguna frase matchea sin estar negada justo antes."""
+    for patron in patrones:
+        for m in patron.finditer(texto):
+            contexto_previo = texto[max(0, m.start() - 20):m.start()]
+            if _NEGACION_RE.search(contexto_previo):
+                continue
+            return True
+    return False
+
+
+def _es_contexto_pasado(texto: str) -> bool:
+    return any(marca in texto for marca in _MARCADORES_PASADO)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -221,20 +341,28 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
     """
     Analiza el último mensaje del usuario.
 
-    Orden de evaluación (de más a menos crítico):
+    Pipeline:
+      0. Normalizar (minúsculas, sin tildes) y neutralizar exclusiones
+         (hipérboles, cortes de pelo, tercera persona, figurativo).
       1. SUICIDE_METHOD    → crítico  (detected=True, respuesta hardcodeada)
       2. SUICIDAL_IDEATION → crítico  (detected=True, respuesta hardcodeada)
       3. SELF_HARM         → alto     (detected=True, respuesta hardcodeada)
       4. CRISIS_OVERFLOW   → medio    (detected=False — va al LLM con módulo de crisis implícita)
       5. IMPLICIT_RISK     → medio    (detected=False — ídem)
 
+    Si un match crítico/alto viene en contexto de tiempo pasado ("hace años
+    me quería matar") se degrada a señal media: lo maneja el LLM con el
+    módulo de crisis activado, sin la respuesta de emergencia hardcodeada.
+
     El campo `score` siempre se devuelve y alimenta el routing de módulos
     del prompt, incluso cuando no hay early-return.
     """
-    texto = mensaje.lower().strip()
+    texto = _neutralizar_exclusiones(_normalizar(mensaje))
 
     # ── 1. Método suicida ────────────────────────────────────
-    if _contiene(texto, SUICIDE_METHOD_PHRASES):
+    if _hay_match(texto, _PATRONES["SUICIDE_METHOD"]):
+        if _es_contexto_pasado(texto):
+            return _resultado_medio("SUICIDE_METHOD")
         resp = random.choice(RESPONSES_METHOD)
         return CrisisResult(
             detected=True,
@@ -246,7 +374,9 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
         )
 
     # ── 2. Ideación suicida ──────────────────────────────────
-    if _contiene(texto, SUICIDAL_IDEATION_PHRASES):
+    if _hay_match(texto, _PATRONES["SUICIDAL_IDEATION"]):
+        if _es_contexto_pasado(texto):
+            return _resultado_medio("SUICIDAL_IDEATION")
         resp = random.choice(RESPONSES_IDEATION)
         return CrisisResult(
             detected=True,
@@ -258,7 +388,9 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
         )
 
     # ── 3. Autolesión ────────────────────────────────────────
-    if _contiene(texto, SELF_HARM_PHRASES):
+    if _hay_match(texto, _PATRONES["SELF_HARM"]):
+        if _es_contexto_pasado(texto):
+            return _resultado_medio("SELF_HARM")
         resp = random.choice(RESPONSES_SELF_HARM)
         return CrisisResult(
             detected=True,
@@ -270,7 +402,7 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
         )
 
     # ── 4. Desborde emocional severo → al LLM con M19 ────────
-    if _contiene(texto, CRISIS_OVERFLOW_PHRASES):
+    if _hay_match(texto, _PATRONES["CRISIS_OVERFLOW"]):
         return CrisisResult(
             detected=False,
             category="CRISIS_OVERFLOW",
@@ -281,7 +413,7 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
         )
 
     # ── 5. Señales implícitas → al LLM con M19 ───────────────
-    if _contiene(texto, IMPLICIT_RISK_PHRASES):
+    if _hay_match(texto, _PATRONES["IMPLICIT_RISK"]):
         return CrisisResult(
             detected=False,
             category="IMPLICIT_RISK",
@@ -302,14 +434,22 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
     )
 
 
+def _resultado_medio(category: str) -> CrisisResult:
+    """Señal degradada: el LLM responde con módulo de crisis (M19/M20),
+    sin respuesta hardcodeada. Se usa para menciones en tiempo pasado."""
+    return CrisisResult(
+        detected=False,
+        category=category,
+        message="",
+        resources=[],
+        log_level="medium",
+        score=0.45,
+    )
+
+
 # ══════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════
-
-def _contiene(texto: str, frases: list[str]) -> bool:
-    """Retorna True si el texto contiene alguna de las frases."""
-    return any(frase in texto for frase in frases)
-
 
 def _formatear(resp: dict, recursos: list[str]) -> str:
     """
@@ -349,7 +489,7 @@ def log_crisis_event(
             "categoria":       category,
             "log_level":       log_level,
         }).execute()
-        print(f"🚨 Crisis log: [{log_level}] {category} — user:{user_id}")
+        print(f"🚨 Crisis log: [{log_level}] {category}")
     except Exception as e:
         # Nunca romper el flujo por un error de logging
         print(f"⚠️ No se pudo loguear crisis: {e}")

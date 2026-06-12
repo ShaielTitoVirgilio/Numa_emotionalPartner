@@ -1,9 +1,10 @@
 # app/routes/dashboard_router.py
 from datetime import date, timedelta, datetime
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from openai import OpenAI
 import os
+from app.core.auth import get_current_user_id
 from app.core.db import supabase
 from app.memory_service import get_topic_patterns_cached
 
@@ -49,8 +50,13 @@ def _normalizar_mood(raw: Optional[str]) -> Optional[str]:
     return MOOD_LABEL.get(raw.lower().strip())
 
 
+# El check-in explícito (1-4) es la señal de ánimo más confiable; el mood que
+# infiere el LLM es ruidoso ("neutral"/"calm" inflaban los días buenos).
+CHECKIN_TO_LABEL = {1: "Mal", 2: "Regular", 3: "Bien", 4: "Bien"}
+
+
 @router.get("")
-def get_dashboard(user_id: str):
+def get_dashboard(user_id: str = Depends(get_current_user_id)):
     """Devuelve todos los datos necesarios para el dashboard del usuario."""
     try:
         from collections import Counter, defaultdict
@@ -78,11 +84,32 @@ def get_dashboard(user_id: str):
             if mood_norm:
                 dias_mood[dia][mood_norm] += 1
 
+        # Check-ins de las últimas 2 semanas: pisan al mood inferido por el LLM
+        res_checkins_14 = (
+            supabase.table("daily_checkins")
+            .select("mood_value, checkin_date")
+            .eq("user_id", user_id)
+            .gte("checkin_date", hace_14)
+            .execute()
+        )
+        checkin_por_dia = {
+            r["checkin_date"]: CHECKIN_TO_LABEL.get(r["mood_value"])
+            for r in (res_checkins_14.data or [])
+            if r.get("checkin_date") and CHECKIN_TO_LABEL.get(r.get("mood_value"))
+        }
+
         def _semana_valores(offset_inicio: int, offset_fin: int) -> list:
             resultado = []
             for i in range(offset_inicio, offset_fin + 1):
                 dia = (hoy - timedelta(days=offset_fin - (i - offset_inicio))).isoformat()
-                if dia in dias_mood:
+                if dia in checkin_por_dia:
+                    mood_dia = checkin_por_dia[dia]
+                    resultado.append({
+                        "fecha": dia,
+                        "mood":  mood_dia,
+                        "value": MOOD_VALUE.get(mood_dia, 2),
+                    })
+                elif dia in dias_mood:
                     mood_ganador = dias_mood[dia].most_common(1)[0][0]
                     resultado.append({
                         "fecha": dia,
@@ -131,6 +158,16 @@ def get_dashboard(user_id: str):
         )
         checkins = res_checkins.data or []
 
+        # ── 2.b Racha de check-ins (días seguidos registrando el ánimo) ──────
+        # Hábito suave, sin gamificación agresiva. La racha sigue viva si el
+        # último check-in fue ayer (hoy todavía puede hacerlo).
+        fechas_checkin = {c["checkin_date"] for c in checkins if c.get("checkin_date")}
+        racha_checkins = 0
+        dia_racha = hoy if hoy.isoformat() in fechas_checkin else hoy - timedelta(days=1)
+        while dia_racha.isoformat() in fechas_checkin:
+            racha_checkins += 1
+            dia_racha -= timedelta(days=1)
+
         # ── 3. Patrones del último mes ────────────────────────────────────────
         patrones = get_topic_patterns_cached(user_id=user_id)
 
@@ -158,6 +195,7 @@ def get_dashboard(user_id: str):
             "patrones":             patrones,
             "resumen":              resumen,
             "insight_ia":           insight_ia,
+            "racha_checkins":       racha_checkins,
         }
 
     except Exception as e:

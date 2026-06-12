@@ -1,9 +1,10 @@
 // modules/chat.js
 import { CATALOGO_EJERCICIOS } from '../ejerciciosData.js';
-import { iniciarEjercicio } from './utils.js';
+import { iniciarEjercicio, authHeaders } from './utils.js';
 import { TIEMPO_ENFRIAMIENTO } from './utils.js';
 import { verificarCheckinDiario, consumirFlagCheckin } from './checkin.js';
 import { getRespuestaNuma, VALOR_A_RATING } from './feedbackPost.js';
+import { showAuthScreen } from './auth.js';
 import { setFeedbackCallback as setFeedbackRespiracion } from './motorRespiracion.js';
 import { setFeedbackCallback as setFeedbackGuiado } from './motorGuiado.js';
 // ============================================
@@ -93,17 +94,55 @@ const MOOD_LABELS = {
 
 export async function inicializarChat() {
   const numaUser = localStorage.getItem('numa_user');
-  if (!numaUser) return;
+  if (!numaUser) return false;
 
   const user = JSON.parse(numaUser);
 
   try {
-    const res = await fetch(`/profile/${user.user_id}`);
+    const res = await fetch(`/profile/${user.user_id}`, { headers: authHeaders() });
     if (res.ok) {
       perfilCacheado = await res.json();
     }
   } catch (e) {
     console.warn('No se pudo cargar el perfil:', e);
+  }
+
+  // Rehidratar el chat: antes el historial vivía solo en memoria de la página
+  // y al reabrir la PWA aparecía vacío ("Numa se olvidó de todo").
+  return await _rehidratarHistorial();
+}
+
+async function _rehidratarHistorial() {
+  try {
+    const res = await fetch('/chat/history?limit=12', { headers: authHeaders() });
+    if (!res.ok) return false;
+
+    const data = await res.json();
+    const mensajes = data.messages || [];
+    if (!mensajes.length) return false;
+
+    for (const m of mensajes) {
+      if (m.role === 'user') {
+        agregarMensaje(m.content, 'user');
+        historialConversacion.push({ role: 'user', content: m.content });
+      } else {
+        agregarMensaje(m.content, 'oso', m.mood || null);
+        historialConversacion.push({ role: 'assistant', content: m.content });
+        if (m.mood) ultimoMood = m.mood;
+      }
+    }
+    _trimHistorial();
+
+    // Separador visual entre la charla anterior y la sesión nueva
+    const sep = document.createElement('div');
+    sep.className = 'chat-separador';
+    sep.innerHTML = `<span>charla anterior</span>`;
+    chat.appendChild(sep);
+    chat.scrollTop = chat.scrollHeight;
+
+    return true;
+  } catch (e) {
+    return false; // el historial no es crítico
   }
 }
 
@@ -162,7 +201,7 @@ export async function recibirFeedbackEjercicio(textoOpcion, valor, ejercicio) {
   if (userId && ejercicio?.id && VALOR_A_RATING[valor]) {
     fetch("/exercise-rating", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         user_id: userId,
         exercise_id: ejercicio.id,
@@ -214,6 +253,9 @@ function _prepararEnvio() {
 
 
 
+// Timeout del chat: una request colgada dejaba el typing infinito
+const CHAT_TIMEOUT_MS = 25000;
+
 async function _llamarBackend(texto) {
   // Limitar historial antes de enviar
   const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
@@ -228,17 +270,26 @@ async function _llamarBackend(texto) {
 
   const checkinRecienHecho = consumirFlagCheckin();
 
-  const res = await fetch("/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      conversation: conversationToSend,
-      user_id: userId,
-      perfil: perfilCacheado,
-      ultimo_mood: ultimoMood,
-      checkin_recien_hecho: checkinRecienHecho,
-    })
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch("/chat", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      signal: controller.signal,
+      body: JSON.stringify({
+        conversation: conversationToSend,
+        user_id: userId,
+        perfil: perfilCacheado,
+        ultimo_mood: ultimoMood,
+        checkin_recien_hecho: checkinRecienHecho,
+      })
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (res.status === 401) {
     localStorage.removeItem('numa_user');
@@ -247,7 +298,6 @@ async function _llamarBackend(texto) {
 }
 
 if (!res.ok) {
-    const errorText = await res.text();
     throw new Error("Error en respuesta HTTP");
 }
 
@@ -257,12 +307,23 @@ if (!res.ok) {
 
 
 function _procesarRespuesta(data, textoUsuario) {
- 
+
   const mood = data.mood || 'neutral';
   ultimoMood = mood;
   const textoLimpio = _limpiarMensaje(data.message);
 
   ocultarTyping();
+
+  // Respuesta de crisis: tarjeta especial con teléfonos/links clicables.
+  // En una emergencia, copiar un número a mano es fricción innecesaria.
+  if (data.risk_level === 'high') {
+    _agregarMensajeCrisis(textoLimpio);
+    if (window.setBearState) window.setBearState('sad');
+    actualizarMoodIndicator(mood);
+    _actualizarHistorial(textoUsuario, textoLimpio);
+    return;
+  }
+
   agregarMensaje(textoLimpio, "oso", mood);
 
   if (window.setBearState) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
@@ -302,43 +363,70 @@ function _trimHistorial() {
 }
 
 function _manejarSugerencia(data, mood) {
-  console.log("🔍 _manejarSugerencia llamada con:", { data, mood });
   const regexEjercicio = /\[EJERCICIO:\s*(\w+)\]/;
   const ejercicioId = (data.suggested_action && data.suggested_action !== 'none')
       ? data.suggested_action
       : data.message.match(regexEjercicio)?.[1] ?? null;
-    console.log("🎯 ejercicioId detectado:", ejercicioId);
-    console.log("📦 suggested_action del backend:", data.suggested_action);
-    console.log("📝 mensaje crudo del backend:", data.message);
-  if (!ejercicioId){
-    console.log("⛔ Sin ejercicio — se corta acá");
-    return;
-  }
+  if (!ejercicioId) return;
 
   // Si el ejercicio requiere espacio físico y el usuario parece estar ocupado/en trabajo
   const ejerciciosFisicos = ['yoga_cuello', 'yoga_ansiedad', 'meditacion_bodyscan', 'meditacion_mindfulness'];
   const ultimoMensajeUsuario = historialConversacion.filter(m => m.role === 'user').slice(-1)[0]?.content?.toLowerCase() || '';
   const contextoCupado = /trabajo|ocupado|cansad|sin tiempo|jefe|reunión|oficina/i.test(ultimoMensajeUsuario);
 
-  if (contextoCupado && ejerciciosFisicos.includes(ejercicioId)) {
-      console.log("Ejercicio físico suprimido por contexto de trabajo/ocupación.");
-      return;
-  }
+  if (contextoCupado && ejerciciosFisicos.includes(ejercicioId)) return;
 
   const ahora = Date.now();
   if (ahora - ultimoEjercicioSugeridoTime > TIEMPO_ENFRIAMIENTO) {
       mostrarBotonSugerencia(ejercicioId, mood);
       ultimoEjercicioSugeridoTime = ahora;
-  } else {
-      console.log("Sugerencia suprimida por enfriamiento (anti-spam).");
   }
 }
 
 function _manejarError(error) {
   ocultarTyping();
   console.error("❌ Error:", error);
-  agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
+  if (error?.name === 'AbortError') {
+    agregarMensaje("Me quedé pensando demasiado 🐼 ¿Me lo mandás de nuevo?", "oso");
+  } else {
+    agregarMensaje("Estoy acá contigo. (Error de conexión)", "oso");
+  }
   if (window.setBearState) window.setBearState('calm');
+}
+
+// ============================================
+// TARJETA DE CRISIS — recursos clicables
+// ============================================
+
+function _escaparHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _linkificarCrisis(texto) {
+  return _escaparHtml(texto).split('\n').map(linea => {
+    // URLs tipo www.x.org → link
+    let out = linea.replace(
+      /(www\.[^\s]+)/g,
+      '<a href="https://$1" target="_blank" rel="noopener" class="crisis-link">$1</a>'
+    );
+    // Teléfonos en líneas de recursos (📞) → enlaces tel:
+    if (linea.includes('📞')) {
+      out = out.replace(
+        /(\d[\d\s]{1,13}\d|\b\d{3}\b)/,
+        (m) => `<a href="tel:${m.replace(/\s+/g, '')}" class="crisis-tel">${m}</a>`
+      );
+    }
+    return out;
+  }).join('<br>');
+}
+
+function _agregarMensajeCrisis(texto) {
+  const bubble = document.createElement("div");
+  bubble.className = "bubble oso crisis-card";
+  bubble.innerHTML = _linkificarCrisis(texto);
+  chat.appendChild(bubble);
+  chat.scrollTop = chat.scrollHeight;
+  messageCount++;
 }
 
 // ============================================
@@ -393,34 +481,43 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
   if (!ejercicioEncontrado) return;
 
   const frase = FRASES_POR_MOOD[mood] || FRASES_POR_MOOD.default;
+  const duracion = _duracionEjercicio(tipoEncontrado, ejercicioEncontrado);
 
   const bubble = document.createElement("div");
   bubble.className = `bubble oso mood-${mood}`;
 
   const div = document.createElement("div");
   div.innerHTML = `
-    <p style="font-size: 0.9em; margin-bottom: 8px;">${frase}</p>
+    <p class="sugerencia-frase">${frase}</p>
     <button class="exercise-suggestion-btn">
-        ✨ ${ejercicioEncontrado.nombre}
+        ✨ ${ejercicioEncontrado.nombre}${duracion ? ` · ${duracion}` : ''}
     </button>
-    <p style="font-size: 0.75em; opacity: 0.8; margin-top: 6px; font-style: italic;">
+    <p class="sugerencia-cientifico">
        "${ejercicioEncontrado.cientifico || 'Técnica recomendada'}"
     </p>
+    <button class="sugerencia-ahora-no">Ahora no</button>
   `;
 
-  const btn = div.querySelector('button');
-  btn.style.cssText = `
-    background: #a6c7b8; border: none; padding: 12px; width: 100%;
-    border-radius: 12px; cursor: pointer; color: #2f4f45;
-    font-weight: bold; transition: transform 0.2s;
-  `;
-  btn.onmouseover = () => btn.style.transform = "scale(1.02)";
-  btn.onmouseout = () => btn.style.transform = "scale(1)";
+  const btn = div.querySelector('.exercise-suggestion-btn');
   btn.onclick = () => iniciarEjercicio(tipoEncontrado, ejercicioEncontrado);
+
+  // "Ahora no": descarta la sugerencia sin perder el hilo de la charla
+  div.querySelector('.sugerencia-ahora-no').onclick = () => bubble.remove();
 
   bubble.appendChild(div);
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
+}
+
+function _duracionEjercicio(tipo, data) {
+  if (tipo === 'respiracion') return '1 min';
+  if (tipo === 'meditacion' || tipo === 'yoga') {
+    const segundos = (data.pasos?.length || 0) * (data.tiempoPorPaso || 20);
+    if (!segundos) return '';
+    const min = Math.max(1, Math.round(segundos / 60));
+    return `${min} min`;
+  }
+  return ''; // lectura: a su ritmo
 }
 
 
@@ -431,35 +528,18 @@ function mostrarBotonSugerencia(id, mood = 'neutral') {
 
 export function getHistorial() { return historialConversacion; }
 export function resetHistorial() { historialConversacion = []; }
-export function mostrarProximamente() {
-  const tarjeta = document.createElement("div");
-  tarjeta.style.cssText = `
-    text-align: center;
-    padding: 16px;
-    margin: 12px auto;
-    background: rgba(166, 199, 184, 0.15);
-    border: 1px solid rgba(166, 199, 184, 0.4);
-    border-radius: 16px;
-    font-size: 0.85rem;
-    color: #6b8e7d;
-    max-width: 80%;
-  `;
-  tarjeta.innerHTML = `
-    <span style="font-size: 1.2rem;">🎙️</span><br>
-    <strong>Modo voz</strong><br>
-    <span style="opacity: 0.8;">Muy pronto vas a poder hablar con Numa.</span>
-  `;
-  chat.appendChild(tarjeta);
-  chat.scrollTop = chat.scrollHeight;
-}
 
 export async function toggleMic() {
   const micBtn = document.getElementById("mic-btn");
 
   if (micDisabled) {
-    mostrarAvisoMic(
-      "🎙️ El micrófono está desactivado por ahora. Podés escribirle a Numa."
-    );
+    // Reset del STT: antes el micrófono quedaba muerto el resto de la sesión
+    // tras 3 errores; ahora un toque lo rehabilita para reintentar.
+    micDisabled = false;
+    sttErrorCount = 0;
+    micBtn.classList.remove("disabled");
+    mostrarAvisoMic("🎙️ Listo, probemos de nuevo. Tocá el micrófono para grabar.");
+    setTimeout(ocultarAvisoMic, 4000);
     return;
   }
 
@@ -583,6 +663,7 @@ async function procesarAudio(blob) {
   try {
     const res = await fetch("/speech-to-text", {
       method: "POST",
+      headers: authHeaders(),
       body: formData,
     });
 
@@ -640,10 +721,11 @@ function desactivarMicUI() {
 
 function deshabilitarMic() {
   const micBtn = document.getElementById("mic-btn");
+  // No usar .disabled real: el botón tiene que seguir recibiendo el toque
+  // que rehabilita el micrófono (ver toggleMic).
   micBtn.classList.add("disabled");
-  micBtn.disabled = true;
 
   mostrarAvisoMic(
-    "🎙️ El micrófono está desactivado por ahora. Podés escribirle a Numa."
+    "🎙️ El micrófono falló varias veces. Tocá de nuevo para reintentar, o escribile a Numa."
   );
 }

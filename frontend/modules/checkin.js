@@ -2,6 +2,8 @@
 // Modal de check-in diario: aparece después del primer mensaje respondido por Numa.
 // Solo para usuarios logueados. Un check-in por día.
 
+import { authHeaders } from './utils.js';
+
 let _checkinVerificado = false; // Evita verificar más de una vez por sesión
 let _checkinHechoEnSesion = false; // Se activa cuando el usuario completa el check-in
 
@@ -29,7 +31,7 @@ export async function verificarCheckinDiario() {
   if (!userId) return;
 
   try {
-    const res = await fetch(`/checkin/today?user_id=${userId}`);
+    const res = await fetch('/checkin/today', { headers: authHeaders() });
     const data = await res.json();
     if (!data.checkin) {
       // No hizo check-in hoy → mostrar modal con pequeño delay para no interrumpir
@@ -76,6 +78,18 @@ function _mostrarModal(userId) {
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) _cerrarModal(overlay);
   });
+
+  // Escape = cerrar sin guardar (accesibilidad)
+  const onEsc = (e) => {
+    if (e.key === "Escape") {
+      _cerrarModal(overlay);
+      document.removeEventListener("keydown", onEsc);
+    }
+  };
+  document.addEventListener("keydown", onEsc);
+
+  // Foco inicial en la primera opción
+  overlay.querySelector(".checkin-btn")?.focus();
 }
 
 async function _guardarCheckin(userId, moodValue, overlay) {
@@ -87,8 +101,8 @@ async function _guardarCheckin(userId, moodValue, overlay) {
   try {
     await fetch("/checkin", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, mood_value: moodValue }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ mood_value: moodValue }),
     });
     _checkinHechoEnSesion = true;
   } catch (e) {

@@ -1,5 +1,7 @@
 // modules/dashboard.js
 
+import { authHeaders } from './utils.js';
+
 let _cargado = false;
 
 export async function initDashboard() {
@@ -22,11 +24,12 @@ export async function initDashboard() {
   contenedor.innerHTML = _htmlCargando();
 
   try {
-    const res = await fetch(`/dashboard?user_id=${userId}`);
+    const res = await fetch('/dashboard', { headers: authHeaders() });
     if (!res.ok) throw new Error("Error al cargar datos");
     const data = await res.json();
 
     contenedor.innerHTML = _htmlDashboard(data);
+    contenedor.querySelector('#db-btn-export')?.addEventListener('click', () => _exportarEstado(data));
     _animarEntrada(contenedor);
     _cargado = true;
   } catch (e) {
@@ -52,7 +55,7 @@ function _animarEntrada(contenedor) {
 // ── HTML principal ────────────────────────────────────────────────────────────
 
 function _htmlDashboard(data) {
-  const { mood_semanal, dias_activos_semana, comparacion_semana, checkins, patrones, resumen, insight_ia } = data;
+  const { mood_semanal, dias_activos_semana, comparacion_semana, checkins, patrones, resumen, insight_ia, racha_checkins } = data;
 
   // Sin ningún dato aún → pantalla vacía con una sola frase
   const hasData = insight_ia !== null || patrones.length > 0 || checkins.length > 0;
@@ -94,6 +97,9 @@ function _htmlDashboard(data) {
       <!-- Check-ins -->
       <div class="db-card">
         <p class="db-card-titulo">¿Cómo llegaste cada día?</p>
+        ${racha_checkins >= 2 ? `
+        <p class="db-racha">🌱 ${racha_checkins} días seguidos registrando cómo llegás</p>
+        ` : ""}
         ${_htmlCheckins(checkins)}
       </div>
 
@@ -119,8 +125,58 @@ function _htmlDashboard(data) {
         `}
       </div>
 
+      <!-- Exportar -->
+      <button class="db-btn-export" id="db-btn-export">📤 Compartir mi estado</button>
+      <p class="db-export-hint">Por ejemplo, para llevárselo a tu terapeuta.</p>
+
     </div>
   `;
+}
+
+// ── Exportar / compartir ──────────────────────────────────────────────────────
+
+function _textoExport(data) {
+  const lineas = [
+    "Mi estado — Numa 🐼",
+    `Generado: ${new Date().toLocaleDateString("es-AR")}`,
+    "",
+    data.resumen || "",
+  ];
+  if (data.insight_ia?.texto) {
+    lineas.push("", `Lo que Numa nota: "${data.insight_ia.texto}"`);
+  }
+  if (data.patrones?.length) {
+    lineas.push("", "Temas recurrentes del mes:");
+    data.patrones.forEach(p => lineas.push(`  • ${_labelPatron(p.topic)} (${p.count} veces)`));
+  }
+  if (data.checkins?.length) {
+    const buenos = data.checkins.filter(c => c.mood_value >= 3).length;
+    lineas.push("", `Check-ins del mes: ${data.checkins.length} (${buenos} días bien)`);
+  }
+  if (data.racha_checkins >= 2) {
+    lineas.push(`Racha actual: ${data.racha_checkins} días seguidos registrando el ánimo`);
+  }
+  return lineas.join("\n");
+}
+
+async function _exportarEstado(data) {
+  const texto = _textoExport(data);
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Mi estado — Numa", text: texto });
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return; // canceló el share
+    }
+  }
+  // Fallback: descargar como .txt
+  const blob = new Blob([texto], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "mi-estado-numa.txt";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Insight IA ────────────────────────────────────────────────────────────────

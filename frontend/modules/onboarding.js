@@ -10,14 +10,17 @@ const PREGUNTAS = [
         numero: 1,
         pregunta: "¿Cómo querés que te llame?",
         tipo: "texto",
-        placeholder: "Tu nombre o apodo..."
+        placeholder: "Tu nombre o apodo...",
+        porque: "Para hablarte como una persona, no como un usuario."
     },
     {
         numero: 2,
         pregunta: "¿Con qué pronombres te sentís más cómodo/a?",
         tipo: "opcion_unica",
         opciones: ["Él", "Ella", "Prefiero que no use pronombres", "Otro"],
-        otroIndex: 3  // índice de la opción "Otro"
+        otroIndex: 3,  // índice de la opción "Otro"
+        porque: "Para dirigirme a vos sin meter la pata.",
+        opcional: true
     },
     {
         numero: 3,
@@ -31,7 +34,9 @@ const PREGUNTAS = [
             "Viviendo solo/a",
             "Otra etapa"
         ],
-        otroIndex: 5
+        otroIndex: 5,
+        porque: "Para entender tu contexto sin que tengas que explicarlo cada vez.",
+        opcional: true
     },
     {
         numero: 4,
@@ -45,7 +50,9 @@ const PREGUNTAS = [
             "Nada en particular por ahora",
             "Otro"
         ],
-        otroIndex: 5
+        otroIndex: 5,
+        porque: "Para acompañarte mejor en lo que de verdad te importa.",
+        opcional: true
     },
     {
         numero: 5,
@@ -57,13 +64,17 @@ const PREGUNTAS = [
             "Me enojo o me frustro fácilmente",
             "Busco distracción (teléfono, series, etc.)",
             "Me cuesta darme cuenta de lo que siento"
-        ]
+        ],
+        porque: "Para saber cuándo darte espacio y cuándo estar más presente.",
+        opcional: true
     },
     {
         numero: 6,
         pregunta: "¿Hay algo que querés que Numa sepa antes de empezar?",
         tipo: "textarea",
-        placeholder: "Ej: estoy pasando un momento difícil, no me gustan los consejos genéricos, prefiero que sea directo..."
+        placeholder: "Ej: estoy pasando un momento difícil, no me gustan los consejos genéricos, prefiero que sea directo...",
+        porque: "Lo que pongas acá pesa más que cualquier otra respuesta.",
+        opcional: true
     }
 ];
 
@@ -170,7 +181,11 @@ function _mostrarPaso(index) {
     // Renderizar pregunta
     container.innerHTML = `
         <h3 class="onboarding-pregunta">${pregunta.pregunta}</h3>
+        ${pregunta.porque ? `<p class="onboarding-porque">${pregunta.porque}</p>` : ''}
         ${_renderInput(pregunta)}
+        ${pregunta.opcional ? `
+            <button class="onboarding-skip" onclick="onboardingSkip()">Prefiero no responder</button>
+        ` : ''}
     `;
 
     // Restaurar respuesta previa si existe
@@ -348,6 +363,17 @@ function _next() {
     _mostrarPaso(pasoActual);
 }
 
+function _skip() {
+    // Transparencia → confianza: ninguna respuesta (salvo el nombre) es obligatoria
+    respuestas[pasoActual] = '';
+    if (pasoActual === PREGUNTAS.length - 1) {
+        _enviarOnboarding();
+        return;
+    }
+    pasoActual++;
+    _mostrarPaso(pasoActual);
+}
+
 function _back() {
     if (pasoActual > 0) {
         // Guardar respuesta actual antes de volver
@@ -451,6 +477,7 @@ function _mostrarToast(mensaje) {
 
 window.onboardingNext = _next;
 window.onboardingBack = _back;
+window.onboardingSkip = _skip;
 window.seleccionarOpcion = (btn, otroIndex) => {
     const contenedor = btn.closest('.onboarding-opciones');
     contenedor.querySelectorAll('.onboarding-opcion').forEach(b => b.classList.remove('selected'));

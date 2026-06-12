@@ -1,8 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Dict, Any
 from app.auth_service import register_user, login_user, get_user_profile, refresh_session, verify_email_otp
-from app.supabase_client import supabase
+from app.core.auth import get_current_user_id
 
 router = APIRouter()
 
@@ -21,10 +20,6 @@ class RefreshRequest(BaseModel):
 class VerifyEmailRequest(BaseModel):
     email: str
     token: str
-
-class SubscriptionRequest(BaseModel):
-    user_id: str
-    subscription_data: Dict[str, Any]
 
 @router.post("/register")
 def register_endpoint(request: RegisterRequest):
@@ -51,7 +46,11 @@ def refresh_endpoint(request: RefreshRequest):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.get("/profile/{user_id}")
-def profile_endpoint(user_id: str):
+def profile_endpoint(user_id: str, auth_user_id: str = Depends(get_current_user_id)):
+    # Solo se puede leer el perfil propio: el user_id del path debe coincidir
+    # con el del token. Antes cualquiera podía leer el perfil de cualquiera.
+    if user_id != auth_user_id:
+        raise HTTPException(status_code=403, detail="No podés acceder a este perfil")
     try:
         profile = get_user_profile(user_id)
         return profile
@@ -63,17 +62,5 @@ def verify_email_endpoint(request: VerifyEmailRequest):
     try:
         result = verify_email_otp(request.email, request.token)
         return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.post("/subscribe")
-def subscribe_endpoint(request: SubscriptionRequest):
-    try:
-        # Guarda o actualiza la suscripción del usuario
-        supabase.table("user_notifications").upsert({
-            "user_id": request.user_id,
-            "subscription_data": request.subscription_data
-        }).execute()
-        return {"message": "Suscripción guardada correctamente"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

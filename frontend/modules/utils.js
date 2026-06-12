@@ -11,6 +11,30 @@ export const TIEMPO_ENFRIAMIENTO = 80000; // ~1 min 20 seg
 
 
 // ============================================
+// AUTH HELPERS
+// El backend ahora valida el token en cada endpoint:
+// todas las llamadas a la API deben mandar Authorization.
+// ============================================
+
+export function getAuthUser() {
+    try {
+        return JSON.parse(localStorage.getItem('numa_user')) || null;
+    } catch {
+        return null;
+    }
+}
+
+export function authHeaders(extra = {}) {
+    const user = getAuthUser();
+    const headers = { ...extra };
+    if (user?.access_token) {
+        headers['Authorization'] = `Bearer ${user.access_token}`;
+    }
+    return headers;
+}
+
+
+// ============================================
 // FUNCIONES PÚBLICAS
 // ============================================
 
@@ -150,6 +174,15 @@ export function mostrarAvisoTesterCada() {
   document.getElementById("tester-ok").onclick = cerrarYMarcar;
   document.getElementById("tester-skip").onclick = cerrarSinMarcar;
   document.getElementById("tester-never").onclick = cerrarYMarcar;
+
+  // Escape = cerrar (accesibilidad)
+  const onEsc = (e) => {
+    if (e.key === 'Escape') {
+      cerrarSinMarcar();
+      document.removeEventListener('keydown', onEsc);
+    }
+  };
+  document.addEventListener('keydown', onEsc);
 }
 
 /**
