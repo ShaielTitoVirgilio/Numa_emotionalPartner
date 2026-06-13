@@ -15,7 +15,7 @@ import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } 
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
 import { mostrarAvisoTesterCada, authHeaders } from './modules/utils.js';
 import { initDashboard } from './modules/dashboard.js';
-import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado } from './modules/profile.js';
+import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternarTemaChat } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 
@@ -40,6 +40,7 @@ window.initDashboard = initDashboard;
 window.initProfile = initProfile;
 window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
+window.alternarTemaChat = alternarTemaChat;
 window.inicializarChat = inicializarChat;
 
 

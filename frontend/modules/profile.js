@@ -238,8 +238,8 @@ function _bindEvents(contenedor, userId) {
     });
   });
 
-  // Tema (auto / claro / oscuro)
-  const temaActual = localStorage.getItem('numa_tema') || 'auto';
+  // Tema (auto / claro / oscuro) — por defecto "claro"
+  const temaActual = localStorage.getItem('numa_tema') || 'claro';
   contenedor.querySelectorAll('.prf-tema-btn').forEach(btn => {
     if (btn.dataset.tema === temaActual) btn.classList.add('activo');
     btn.addEventListener('click', () => {
@@ -286,10 +286,23 @@ export function aplicarTamanoFuenteGuardado() {
 
 const _mediaOscuro = window.matchMedia('(prefers-color-scheme: dark)');
 
+// SVG sol / luna en gris claro para el botón del chat
+const _ICONO_SOL = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>';
+const _ICONO_LUNA = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+
 function _refrescarTema() {
-  const tema = localStorage.getItem('numa_tema') || 'auto';
+  const tema = localStorage.getItem('numa_tema') || 'claro';
   const oscuro = tema === 'oscuro' || (tema === 'auto' && _mediaOscuro.matches);
   document.documentElement.classList.toggle('tema-oscuro', oscuro);
+  _actualizarBotonTemaChat(oscuro);
+}
+
+// Refleja el estado actual en el botón del chat: sol = claro, luna = oscuro
+function _actualizarBotonTemaChat(oscuro) {
+  const btn = document.getElementById('chat-theme-toggle');
+  if (!btn) return;
+  btn.innerHTML = oscuro ? _ICONO_LUNA : _ICONO_SOL;
+  btn.setAttribute('aria-label', oscuro ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro');
 }
 
 _mediaOscuro.addEventListener?.('change', _refrescarTema);
@@ -301,6 +314,12 @@ export function aplicarTema(tema) {
 
 export function aplicarTemaGuardado() {
   _refrescarTema();
+}
+
+// Alterna entre claro y oscuro desde el botón del chat
+export function alternarTemaChat() {
+  const oscuroActual = document.documentElement.classList.contains('tema-oscuro');
+  aplicarTema(oscuroActual ? 'claro' : 'oscuro');
 }
 
 // ── Check-in ──────────────────────────────────────────────────────────────────
