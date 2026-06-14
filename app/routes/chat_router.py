@@ -76,6 +76,45 @@ def _quitar_pregunta_final(texto: str) -> str:
     return " ".join(partes).strip()
 
 
+def _quitar_che(texto: str) -> str:
+    """Saca por completo la muletilla "che" del mensaje del LLM.
+
+    El prompt (M02) ya pide usarla con cuentagotas, pero llama-3.3-70b la mete
+    por inercia en casi cada mensaje (suena a guión). Este filtro la elimina de
+    forma determinística y recompone la puntuación y las mayúsculas afectadas.
+    No toca "noche", "leche", "coche", etc. (usa límites de palabra).
+    """
+    if "che" not in texto.lower():
+        return texto
+
+    original = texto
+    t = texto
+
+    # "che" al inicio de una frase (arranque del texto o tras . ! ? …):
+    # "Che, parece..." → "Parece...";  ". Che, ¿estás?" → ". ¿Estás?"
+    t = re.sub(
+        r"(^|[.!?…]\s+)che\b\s*[,:;]?\s*([¿¡]*)([a-záéíóúñ])",
+        lambda m: m.group(1) + m.group(2) + m.group(3).upper(),
+        t, flags=re.IGNORECASE,
+    )
+    # "..., che, ..." en el medio → una sola coma
+    t = re.sub(r"\s*,\s*che\b\s*,", ",", t, flags=re.IGNORECASE)
+    # "..., che." / "..., che!" al cierre → quita ", che", deja la puntuación
+    t = re.sub(r"\s*,\s*che\b", "", t, flags=re.IGNORECASE)
+    # cualquier "che" suelto que haya quedado
+    t = re.sub(r"\s*\bche\b\s*", " ", t, flags=re.IGNORECASE)
+
+    # Recomponer espacios, puntuación y comas/espacios sueltos al inicio
+    t = re.sub(r"\s+([,.;:!?…])", r"\1", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    t = re.sub(r"^[\s,;:]+", "", t)
+
+    # Si el recorte dejó algo degenerado, mejor el original
+    if len(t) < 2:
+        return original
+    return t
+
+
 def _validar_priority(value) -> int:
     try:
         n = int(value)
@@ -395,6 +434,11 @@ def chat_endpoint(
             conversation=[m.model_dump() for m in conversation],
             system_prompt=system_prompt,
         )
+
+        # Filtro determinístico del "che": el modelo lo repite como muletilla
+        # en casi cada mensaje a pesar del M02; se elimina acá.
+        if result.get("message"):
+            result["message"] = _quitar_che(result["message"])
 
         # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
         # prohibió preguntar; si el modelo desobedece igual, se recorta la

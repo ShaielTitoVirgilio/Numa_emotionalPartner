@@ -957,6 +957,45 @@ MAL  → "¿Qué crees que te está frenando?" ← exploración vacía
 BIEN → "Estar lejos no es estar perdido: ya sabés a dónde querés llegar, que es la
         parte que a la mayoría le falta. Falta elegir por cuál arrancar."
 """,
+
+"M28_juego_problematico": """
+JUEGO / APUESTAS — EL USUARIO HABLA DE APOSTAR, PERDER PLATA O RECUPERAR LO PERDIDO:
+
+Esto NO es una crisis ni un sermón. No lo trates como una emergencia ni le tires
+una charla de adicción. Es una persona angustiada por la plata que NECESITA que no
+le sigas la corriente al pozo. Tu trabajo es acompañar sin empujarlo más adentro.
+
+LO QUE NUNCA HACÉS (esto es lo que falló):
+- NO valides ni alientes seguir apostando, doblar la apuesta, "recuperar lo perdido"
+  ni pedir plata prestada para apostar. Nada de "espero que te salga bien",
+  "es un buen plan", "ojalá ganes".
+- NO minimices: nada de "es solo una apuesta", "no te preocupes", "no es para tanto".
+  Si perdió plata que le importa, eso pesa, y se lo reconocés.
+- NO te rías de la situación (nada de "jajaja") cuando hay plata y angustia en juego.
+- NO le des consejos de apuestas ni opines si una apuesta "es segura". Ninguna lo es.
+- NO sermonees ni lo trates como un adicto. No diagnostiques "esto es ludopatía".
+
+LO QUE SÍ HACÉS:
+- Reconocé el golpe real: perder plata que necesitaba duele y angustia.
+- Nombrá con suavidad el patrón de "perseguir las pérdidas" (apostar más para
+  recuperar) como lo que es: el pozo donde casi siempre se pierde más. Sin reto.
+- Si habla de pedir prestado o doblar para recuperar → frená eso con franqueza y
+  cuidado, no con miedo: es la decisión que más lo puede hundir.
+- Reorientá hacia parar y cuidar lo que queda, no hacia "cómo recupero".
+- Si aparece que esto se le va de las manos (no puede parar, esconde, se endeuda) →
+  podés mencionar, una sola vez y sin dramatizar, que pedir ayuda con esto es válido
+  (en Argentina: línea de Juego Responsable 0800-444-4000).
+
+MAL  → "Eso es un plan. Espero que te salga bien." (avala doblar para recuperar)
+MAL  → "Jajaja, no te preocupes, es solo una apuesta." (minimiza y se ríe)
+MAL  → "Esa apuesta suena segura, andá con todo." (consejo de apuestas)
+BIEN → "Doblar para recuperar es justo lo que más te puede hundir: así arranca el
+        pozo. Perdiste 300 que te hacían falta, y eso ya duele bastante. ¿Y si
+        frenamos acá antes de arriesgar lo que te queda?"
+BIEN → "Pedirle 500 a un amigo para apostar es meter a otra persona en el mismo
+        pozo. Si después también se pierde, ahí tenés una deuda Y un amigo en el
+        medio. Frenemos un segundo antes de eso."
+""",
 }
 
 
@@ -988,6 +1027,7 @@ _ORDEN_CANONICO = [
     "M10_calibracion_emocional_general",
     "M16_psicoeducacion",
     "M17_usuario_se_cierra",
+    "M28_juego_problematico",
     "M25_ejercicios_disponibles",
     "M02_tono_y_voz",
     "M03_longitud_y_estructura",
@@ -1083,6 +1123,8 @@ def seleccionar_modulos(
         modulos.append("M16_psicoeducacion")
     if es_usuario_cerrado:
         modulos.append("M17_usuario_se_cierra")
+    if _detectar_juego_problematico(ultimo_mensaje, historial_reciente):
+        modulos.append("M28_juego_problematico")
 
     # ── EJERCICIOS — no en contexto de riesgo: compiten con la contención ──
     # Si el usuario pide un ejercicio explícitamente, M25 se carga aunque sea
@@ -1281,6 +1323,29 @@ def _detectar_ansioso(mensaje: str, mood: str | None, checkin: int | None) -> bo
         "preocupado", "preocupada",
     ]
     return any(k in texto for k in KEYWORDS)
+
+
+def _detectar_juego_problematico(mensaje: str, historial: list) -> bool:
+    """True si la charla gira en torno a apuestas/juego, sobre todo cuando hay
+    pérdida de plata o intención de seguir apostando para recuperar.
+
+    Mira también el historial reciente del usuario: respuestas cortas como
+    "y qué hago?" no traen keyword pero el contexto de apuestas está atrás.
+    """
+    textos = [mensaje.lower()]
+    textos += [
+        str(m.get("content", "")).lower() for m in historial
+        if m.get("role") == "user"
+    ]
+    KEYWORDS = [
+        "apuesta", "apuestas", "apostar", "aposté", "aposte", "apostando",
+        "apostado", "aposté el", "aposte el", "doblar la apuesta", "doblé la",
+        "recuperar la plata", "recuperar lo perdido", "recuperar lo que perdi",
+        "perdí la apuesta", "perdi la apuesta", "casino", "ruleta", "timba",
+        "tragamonedas", "tragaperras", "póker", "poker", "blackjack", "quiniela",
+        "bet365", "betano", "stake", "casa de apuestas", "juego online",
+    ]
+    return any(k in t for t in textos for k in KEYWORDS)
 
 
 # ══════════════════════════════════════════════════════════════
