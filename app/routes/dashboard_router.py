@@ -6,6 +6,7 @@ from openai import OpenAI
 import os
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
+from app.core.llm import get_model, reasoning_extra_body, max_tokens_for
 from app.memory_service import get_topic_patterns_cached
 
 # Cliente Groq para generar el insight (reutiliza la misma key)
@@ -277,11 +278,12 @@ Devolvé JSON con este formato exacto:
 
     try:
         resp = _groq.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=get_model(),
             temperature=0.75,
-            max_tokens=200,
+            max_tokens=max_tokens_for(200),
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
+            extra_body=reasoning_extra_body(),
         )
         import json
         data = json.loads(resp.choices[0].message.content or "{}")

@@ -980,20 +980,39 @@ BIEN → "Estar lejos no es estar perdido: ya sabés a dónde querés llegar, qu
 """,
 
 "M28_juego_problematico": """
-JUEGO / APUESTAS — EL USUARIO HABLA DE APOSTAR, PERDER PLATA O RECUPERAR LO PERDIDO:
+JUEGO / APUESTAS — EL USUARIO QUIERE APOSTAR, TE PIDE UN PRONÓSTICO PARA APOSTAR,
+PERDIÓ PLATA O QUIERE RECUPERAR LO PERDIDO:
 
-Esto NO es una crisis ni un sermón. No lo trates como una emergencia ni le tires
-una charla de adicción. Es una persona angustiada por la plata que NECESITA que no
-le sigas la corriente al pozo. Tu trabajo es acompañar sin empujarlo más adentro.
+Apostar no es un pecado ni una crisis, y NO le tirás un sermón ni una charla de adicción.
+Pero hay una línea que no cruzás NUNCA: vos no sos el que lo empuja a poner plata.
 
-LO QUE NUNCA HACÉS (esto es lo que falló):
+⛔ REGLA DURA (vale siempre, aunque te lo pida directo y en tono liviano):
+NUNCA des un pronóstico para apostar, NUNCA le digas a quién o a qué apostarle, NUNCA lo
+mandes a apostar, NUNCA digas que una apuesta "es segura". Ninguna lo es: la casa gana
+siempre, no el que apuesta. Podés tener charla de deporte (quién juega mejor, quién es
+favorito) como OPINIÓN, pero apenas aparece la plata dejás de ser pronosticador y reorientás.
+
+─── CASO A — QUIERE APOSTAR O TE PIDE UN PICK (liviano, sin angustia) ───
+- Opiná del partido si querés, pero no lo conviertas en una recomendación de apuesta.
+- Reorientá con cariño, sin reto: disfrutarlo sin arriesgar plata; y si igual va a jugar,
+  que sea plata que no le duela perder y con un límite puesto de antemano. Con responsabilidad,
+  nunca empujado por vos.
+MAL  → Usuario: "decime uno concreto así le apuesto plata" → "Apostale a Brasil." ← lo mandás a apostar
+BIEN → "Si es para mirar el partido, le tengo fe a Argentina. Pero no te tiro un pick para
+        poner plata: las casas de apuestas ganan siempre, no vos. Disfrutalo por el gusto,
+        y si igual vas a jugar algo, que sea plata que no te cambie el mes."
+
+─── CASO B — YA APOSTÓ, PERDIÓ O QUIERE RECUPERAR (hay plata y angustia en juego) ───
+Es una persona angustiada por la plata que NECESITA que no le sigas la corriente al pozo.
+Tu trabajo es acompañar sin empujarla más adentro.
+
+LO QUE NUNCA HACÉS:
 - NO valides ni alientes seguir apostando, doblar la apuesta, "recuperar lo perdido"
   ni pedir plata prestada para apostar. Nada de "espero que te salga bien",
   "es un buen plan", "ojalá ganes".
 - NO minimices: nada de "es solo una apuesta", "no te preocupes", "no es para tanto".
   Si perdió plata que le importa, eso pesa, y se lo reconocés.
 - NO te rías de la situación (nada de "jajaja") cuando hay plata y angustia en juego.
-- NO le des consejos de apuestas ni opines si una apuesta "es segura". Ninguna lo es.
 - NO sermonees ni lo trates como un adicto. No diagnostiques "esto es ludopatía".
 
 LO QUE SÍ HACÉS:
@@ -1402,6 +1421,9 @@ def _detectar_juego_problematico(mensaje: str, historial: list) -> bool:
     KEYWORDS = [
         "apuesta", "apuestas", "apostar", "aposté", "aposte", "apostando",
         "apostado", "aposté el", "aposte el", "doblar la apuesta", "doblé la",
+        # formas que faltaban: el usuario que PIDE un pronóstico para apostar
+        "apuesto", "apuestes", "apostarle", "apostale", "apostás", "apostas",
+        "le apuesto", "apostar plata", "le juego plata", "le meto plata",
         "recuperar la plata", "recuperar lo perdido", "recuperar lo que perdi",
         "perdí la apuesta", "perdi la apuesta", "casino", "ruleta", "timba",
         "tragamonedas", "tragaperras", "póker", "poker", "blackjack", "quiniela",

@@ -84,8 +84,8 @@ def _quitar_pregunta_final(texto: str) -> str:
 def _quitar_che(texto: str) -> str:
     """Saca por completo la muletilla "che" del mensaje del LLM.
 
-    El prompt (M02) ya pide usarla con cuentagotas, pero llama-3.3-70b la mete
-    por inercia en casi cada mensaje (suena a guión). Este filtro la elimina de
+    El prompt (M02) ya pide usarla con cuentagotas, pero el LLM la mete por
+    inercia en casi cada mensaje (suena a guión). Este filtro la elimina de
     forma determinística y recompone la puntuación y las mayúsculas afectadas.
     No toca "noche", "leche", "coche", etc. (usa límites de palabra).
     """

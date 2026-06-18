@@ -20,6 +20,8 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from app.core.llm import get_model, reasoning_extra_body, max_tokens_for
+
 load_dotenv()
 
 _client = OpenAI(
@@ -27,9 +29,7 @@ _client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
 )
 
-# El 8B era demasiado conservador (decía "riesgo real" a todo y no filtraba
-# nada); el 70B discrimina bien y en Groq sigue siendo rápido para ~30 tokens.
-_VERIFIER_MODEL = "llama-3.3-70b-versatile"
+# Mismo modelo de texto que el resto del backend (config.GROQ_MODEL).
 _TIMEOUT_SECONDS = 5
 
 _PROMPT = """Sos un clasificador de seguridad para una app de apoyo emocional en español rioplatense.
@@ -61,15 +61,18 @@ def confirmar_riesgo_real(mensaje: str, categoria: str) -> bool:
     """
     try:
         resp = _client.chat.completions.create(
-            model=_VERIFIER_MODEL,
+            model=get_model(),
             temperature=0.0,
-            max_tokens=40,
+            # 40 alcanza para el JSON, pero gpt-oss gasta tokens en reasoning:
+            # con headroom el clasificador no se trunca (si no, 400 → fail-safe).
+            max_tokens=max_tokens_for(40),
             timeout=_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
                 "content": _PROMPT.format(categoria=categoria, mensaje=mensaje[:1000]),
             }],
+            extra_body=reasoning_extra_body(),
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         valor = data.get("riesgo_real")

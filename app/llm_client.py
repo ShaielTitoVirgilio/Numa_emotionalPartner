@@ -7,6 +7,8 @@ import json
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
+from app.core.llm import get_model, reasoning_extra_body, max_tokens_for, strip_reasoning
+
 load_dotenv()
 
 _openai_shared_client = OpenAI(
@@ -61,20 +63,33 @@ class LLMClient:
 
         try:
             completion = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=get_model(),
                 temperature=0.7,
-                max_tokens=600,  # subido de 400 para que el JSON no se corte
+                # 600 base; los modelos de razonamiento (gpt-oss) reciben headroom
+                # extra para que el reasoning no trunque el JSON.
+                max_tokens=max_tokens_for(600),
                 response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
                 messages=[
                     {"role": "system", "content": system_prompt},
                     *conversation,
                 ],
+                extra_body=reasoning_extra_body(),  # reasoning_effort=low en gpt-oss
             )
+            raw = completion.choices[0].message.content or ""
         except Exception as e:
-            print(f"⚠️ LLM error (fallback graceful): {e}")
-            return dict(_FALLBACK_RESPONSE)
+            # gpt-oss a veces responde texto plano sin el wrapper JSON → Groq lo
+            # rechaza con json_validate_failed, pero el texto real (que suele ser
+            # una buena respuesta) viene en error.failed_generation. Lo recuperamos
+            # en vez de mostrar el fallback genérico.
+            raw = _recuperar_failed_generation(e)
+            if raw is None:
+                print(f"⚠️ LLM error (fallback graceful): {e}")
+                return dict(_FALLBACK_RESPONSE)
+            print("ℹ️ Groq json_validate_failed: recuperado failed_generation")
 
-        raw = completion.choices[0].message.content or ""
+        # Defensa: si el modelo de razonamiento filtró el <think> al content,
+        # lo quitamos antes de parsear (con json_object normalmente ya viene limpio).
+        raw = strip_reasoning(raw)
 
         # ─────────────────────────────────────────────────────────────
         # PASO 1: intentar parsear el raw completo como JSON puro
@@ -165,6 +180,33 @@ class LLMClient:
             "suggested_action": parsed.get("suggested_action"),
             "memories":         memories,
         }
+
+
+def _recuperar_failed_generation(e) -> Optional[str]:
+    """Extrae `failed_generation` de un error de Groq (json_validate_failed).
+
+    Cuando el modelo (sobre todo gpt-oss) devuelve texto que no es JSON válido,
+    Groq tira 400 pero incluye el texto generado en error.failed_generation.
+    Lo devolvemos para parsearlo/rescatarlo en vez de perder la respuesta.
+    Devuelve None si el error no trae ese campo (otro tipo de fallo → fallback).
+    """
+    # 1) openai SDK suele exponer el body parseado en e.body
+    for body in (getattr(e, "body", None), getattr(e, "response", None)):
+        data = body
+        if hasattr(body, "json"):
+            try:
+                data = body.json()
+            except Exception:
+                data = None
+        if isinstance(data, dict):
+            fg = data.get("failed_generation")
+            if not fg and isinstance(data.get("error"), dict):
+                fg = data["error"].get("failed_generation")
+            if fg:
+                return str(fg)
+    # 2) último recurso: rascar el string del error
+    m = re.search(r"failed_generation['\"]?\s*[:=]\s*['\"](.+?)['\"]\s*\}?\s*$", str(e), re.DOTALL)
+    return m.group(1) if m else None
 
 
 def _reparar_json_truncado(texto: str) -> str:
