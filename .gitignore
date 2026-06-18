@@ -19,6 +19,9 @@ Chats/
 # Claude Code internals
 .claude/
 
+# Scripts de prueba locales
+test_proactiva.py
+
 reportar_bugs.txt
 # Informe de auditoría interna
 Analizis-Completo.txt
