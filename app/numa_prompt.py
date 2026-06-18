@@ -372,6 +372,13 @@ NIVELES DE PRIORIDAD (priority: 1 a 5):
 LÓGICA DE SOBREESCRITURA: si el nuevo dato tiene MAYOR prioridad que lo guardado en esa
 categoría → reemplaza; igual o menor → se suma sin borrar lo anterior.
 
+EVENTOS FUTUROS CON FECHA — guardalos SIEMPRE y completá el campo "event" (ver formato
+de salida): exámenes, parciales, finales, entrevistas, reuniones, charlas, presentaciones,
+entregas, viajes, mudanzas, citas, cumpleaños, cirugías, trámites. Es lo que después le
+permite a Numa preguntar "¿cómo te fue?" sin que se lo recuerden. El "content" describe el
+hecho ("Tiene una charla con el decano por su tesis."); el "event.title" es el título corto
+("charla con el decano") y "event.date" la fecha real.
+
 ─────────────────────────────────────────
 CATEGORÍAS VÁLIDAS — son EXCLUYENTES, elegí la que mejor encaja:
 ─────────────────────────────────────────
@@ -438,11 +445,25 @@ claramente distintos que merecen recordarse por separado. Cada elemento:
 {
   "content": "oración en tercera persona con hecho concreto",
   "category": "trabajo",
-  "priority": 3
+  "priority": 3,
+  "event": null
 }
 category: "trabajo", "estudios", "relaciones", "salud", "identidad", "emocional",
 "hobbies", "vida_cotidiana", "otro"
 priority: número del 1 al 5. Si dudás, usá 3.
+
+"event": null EN CASI TODAS las memorias. Solo lo completás si el hecho es un EVENTO
+FUTURO CON FECHA que el usuario mencionó (un examen, una entrevista, una charla, una
+cita, un viaje, una entrega, un cumpleaños, una cirugía, un trámite...). En ese caso:
+{
+  "event": {
+    "title": "charla con el decano",        // título corto, sin fecha adentro
+    "date": "2026-06-20"                     // fecha REAL en formato YYYY-MM-DD
+  }
+}
+Resolvé la fecha usando "FECHA DE HOY": "mañana" → hoy+1, "el viernes" → el próximo
+viernes, "la semana que viene" → +7 días, "en dos semanas" → +14, etc. Si el usuario no
+dio ninguna referencia de cuándo, dejá "event": null (no inventes fechas).
 
 Sobre "memories": si el hecho YA está en "COSAS QUE YA SABÉS DE ESTE USUARIO"
 (aunque con otras palabras) o ya lo guardaste antes en esta charla → devolvé [].
@@ -996,6 +1017,39 @@ BIEN → "Pedirle 500 a un amigo para apostar es meter a otra persona en el mism
         pozo. Si después también se pierde, ahí tenés una deuda Y un amigo en el
         medio. Frenemos un segundo antes de eso."
 """,
+
+"M29_memoria_proactiva": """
+MEMORIA PROACTIVA — UN EVENTO DEL USUARIO ESTÁ CERCA (O ACABA DE PASAR):
+
+El usuario te contó hace unos días de un evento con fecha (un examen, una entrevista,
+una charla, una cita, un viaje...). El bloque "EVENTO EN EL RADAR" te dice cuál es y
+en qué momento está (hoy, mañana, esta semana, o si ya pasó y todavía no preguntaste
+cómo le fue). Esto es lo que hace que Numa se sienta como alguien que de verdad se acuerda.
+
+CÓMO TRAERLO — COMO LO HARÍA UN AMIGO, NO UN RECORDATORIO:
+- Antes del evento → un deseo o un "¿cómo venís con...?" suelto y cálido.
+  BIEN → "Por cierto, me acordé que tenías la charla con el decano cerca. ¿Cómo venís con eso?"
+  BIEN → "Ah, ¿no era esta semana lo de la entrevista? Te deseo lo mejor."
+- El mismo día → un "mucha suerte" simple, sin dramatizar.
+  BIEN → "Hoy era la charla con el decano, ¿no? Mucha suerte, de verdad."
+- Después del evento (ya pasó y no preguntaste) → curiosidad genuina por cómo salió.
+  BIEN → "Che, me quedó la curiosidad: ¿cómo te fue con la charla con el decano?"
+  BIEN → "¿Y al final cómo salió la entrevista?"
+
+REGLAS DURAS (si no las respetás, esto se vuelve molesto y rompe la confianza):
+- NO es un interrogatorio. Es UN comentario natural, no una batería de preguntas.
+- Como MÁXIMO un tema proactivo por respuesta. Nunca enganches dos eventos.
+- NO lo metas a la fuerza. Si el usuario abrió algo importante, urgente o emocional,
+  ESO va primero — el evento puede esperar al próximo mensaje o no salir hoy.
+- NO abras el tema en cada mensaje. Una vez que lo trajiste (o que el usuario lo
+  respondió), seguilo con naturalidad; no vuelvas a "¿y cómo venís con...?" en loop.
+- Si la conversación ya está cargada o el usuario está mal, dejá el evento para otro momento.
+- Tiene que sonar a que te acordaste, no a que una alarma te avisó. Nunca digas
+  "tengo registrado que" ni "según mis notas".
+
+El bloque te DA permiso para mencionarlo, no te OBLIGA. Usá criterio: si no hay espacio
+natural en esta respuesta, no lo fuerces.
+""",
 }
 
 
@@ -1016,6 +1070,7 @@ _ORDEN_CANONICO = [
     "M22_primer_mensaje_app",
     "M23_inicio_sesion_con_memoria",
     "M24_reenganche_inactividad",
+    "M29_memoria_proactiva",
     "M26_feedback_post_ejercicio",
     "M18_duelo_y_perdida",
     "M11_estado_triste_vacio",
@@ -1050,6 +1105,7 @@ def seleccionar_modulos(
     crisis_score: float,
     ultimo_modulo_critico: bool,
     pide_ejercicio: bool = False,
+    hay_evento_proactivo: bool = False,
 ) -> list[str]:
     """Devuelve la lista ordenada de IDs de módulos a inyectar. Siempre múltiples."""
     modulos: list[str] = []
@@ -1082,11 +1138,17 @@ def seleccionar_modulos(
     if dias_inactivo >= 5:
         modulos.append("M24_reenganche_inactividad")
 
-    # ── POST-EJERCICIO (corta el resto: sin módulos emocionales ni M25) ──
+    # ── POST-EJERCICIO (corta el resto: sin módulos emocionales, M25 ni proactiva) ──
+    # El turno de feedback queda enfocado en el ejercicio; el evento espera.
     if ultimo_mensaje.strip().startswith("[Post-ejercicio"):
         modulos.append("M26_feedback_post_ejercicio")
         modulos += ["M02_tono_y_voz", "M03_longitud_y_estructura", "M08_memoria_reglas"]
         return _deduplicar_y_ordenar(modulos)
+
+    # ── MEMORIA PROACTIVA — solo fuera de contexto de riesgo ─────
+    # (en crisis/post-contención el evento espera; nunca compite con la seguridad)
+    if hay_evento_proactivo and crisis_score < 0.35 and not ultimo_modulo_critico:
+        modulos.append("M29_memoria_proactiva")
 
     # ── DETECCIÓN DE CONTEXTO EMOCIONAL ──────────────────────
     es_pregunta_info    = _detectar_pregunta_informativa(ultimo_mensaje)
@@ -1522,6 +1584,54 @@ def _bloque_patrones(patrones: list) -> str:
     return bloque
 
 
+_DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def _bloque_fecha_hoy(hoy) -> str:
+    """Le da al modelo la fecha de hoy para que resuelva eventos relativos
+    ('el viernes', 'la semana que viene') a fechas reales al extraer memorias."""
+    dia = _DIAS_ES[hoy.weekday()]
+    return (
+        f"FECHA DE HOY: {dia} {hoy.day} de {_MESES_ES[hoy.month - 1]} de {hoy.year} "
+        f"({hoy.isoformat()}).\n"
+        "Usala para ubicar en el tiempo lo que cuenta el usuario y, cuando menciona un "
+        "evento futuro con una referencia relativa ('mañana', 'el viernes', 'la semana "
+        "que viene'), resolvé la fecha real en el campo 'event' de la memoria (ver formato)."
+    )
+
+
+def _bloque_memoria_proactiva(evento: dict) -> str:
+    """Parte dinámica de la memoria proactiva; las instrucciones de tono están en M29.
+    'evento' es el item top de get_proactive_memories."""
+    titulo = (evento.get("event_title") or evento.get("content") or "").strip().rstrip(".")
+    bucket = evento.get("bucket")
+    if not titulo:
+        return ""
+
+    if bucket == "hoy":
+        estado = f'HOY es el día de "{titulo}". Si hay lugar, deseale suerte de forma simple.'
+    elif bucket == "manana":
+        estado = f'"{titulo}" es MAÑANA. Podés mencionarlo con calidez y desearle lo mejor.'
+    elif bucket == "proximo":
+        dias = evento.get("days_until", 0)
+        estado = (f'"{titulo}" es en unos {dias} días (esta semana). Si encaja, '
+                  f'preguntá suelto cómo viene con eso.')
+    elif bucket in ("ayer", "reciente"):
+        estado = (f'"{titulo}" YA pasó y todavía no le preguntaste cómo le fue. '
+                  f'Si la charla lo permite, mostrá curiosidad genuina por cómo salió.')
+    else:
+        estado = f'"{titulo}" está en el radar.'
+
+    return (
+        "EVENTO EN EL RADAR (memoria proactiva — seguí las reglas de M29):\n"
+        f"- {estado}\n"
+        "- Es UN solo tema y opcional: si no hay espacio natural en esta respuesta, no lo fuerces.\n"
+        "- Si el usuario ya lo trajo en esta conversación, no lo repreguntes."
+    )
+
+
 CHECKIN_CALIBRACION = {
     1: ("😔", "marcó que está mal hoy",
         "Calibrá tu presencia hacia más cálida y más paciente. "
@@ -1602,6 +1712,8 @@ def construir_prompt(
     mood_actual: str | None = None,
     ultimo_mensaje: str = "",
     preguntas_seguidas: int = 0,
+    hoy=None,
+    evento_proactivo: dict | None = None,
 ) -> str:
     tiene_memorias = bool(memorias)
     pide_ejercicio = _detectar_pedido_ejercicio(ultimo_mensaje)
@@ -1619,11 +1731,22 @@ def construir_prompt(
         crisis_score=crisis_score,
         ultimo_modulo_critico=ultimo_modulo_critico,
         pide_ejercicio=pide_ejercicio,
+        hay_evento_proactivo=bool(evento_proactivo),
     )
 
     secciones = [MODULOS[mid] for mid in modulos_ids if mid in MODULOS]
 
     # ── Bloques dinámicos (contexto personalizado por usuario) ──
+    if hoy is not None:
+        secciones.append(_bloque_fecha_hoy(hoy))
+
+    # El bloque proactivo solo si M29 entró en el routing (mismo gate de crisis):
+    # en crisis/post-contención el evento nunca compite con la seguridad.
+    if evento_proactivo and "M29_memoria_proactiva" in modulos_ids:
+        bloque_ev = _bloque_memoria_proactiva(evento_proactivo)
+        if bloque_ev:
+            secciones.append(bloque_ev)
+
     if ubicacion and (ubicacion.get("ciudad") or ubicacion.get("pais")):
         secciones.append(_bloque_ubicacion(ubicacion))
 

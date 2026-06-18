@@ -49,8 +49,14 @@ class ConversationRepository:
             {"user_id": user_id, "role": "assistant", "content": assistant_msg, "mood": mood},
         ]).execute()
 
-        rows = [
-            {
+        rows = []
+        for m in (memorias or []):
+            tiene_evento = bool(m.get("event_date") and m.get("event_title"))
+            # Las memorias de evento valen por su fecha aunque el content sea corto
+            # ("Tiene examen."); el resto pasa por el filtro anti-basura habitual.
+            if not tiene_evento and not _es_memoria_valida(m.get("content") or ""):
+                continue
+            row = {
                 "user_id":   user_id,
                 "content":   m["content"],
                 "category":  m.get("category") or "otro",
@@ -58,9 +64,11 @@ class ConversationRepository:
                 "is_active": True,
                 "priority":  m.get("priority") or 3,
             }
-            for m in (memorias or [])
-            if _es_memoria_valida(m.get("content") or "")
-        ]
+            # Memoria proactiva: si trae un evento con fecha, persistimos sus campos.
+            if m.get("event_date") and m.get("event_title"):
+                row["event_date"] = m["event_date"]
+                row["event_title"] = m["event_title"]
+            rows.append(row)
         if rows:
             supabase.table("memories").insert(rows).execute()
 

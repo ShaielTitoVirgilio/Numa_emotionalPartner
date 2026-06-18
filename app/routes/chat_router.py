@@ -1,4 +1,5 @@
 import re
+from datetime import date, timedelta
 from difflib import SequenceMatcher
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Depends
@@ -13,8 +14,12 @@ from app.memory_service import (
     get_recent_memories,
     get_topic_patterns_cached,
     invalidate_patterns_cache,
-    deactivate_event_memories,
-    detectar_evento_proximo,
+    get_proactive_memories,
+    marcar_evento_followup,
+    marcar_proactivo_insertado,
+    detectar_evento_con_fecha,
+    resolver_fecha_relativa,
+    parse_fecha_llm,
     get_dias_inactivo,
     get_checkin_hoy_cached,
     MEMORY_WINDOW_DAYS_DEFAULT,
@@ -113,6 +118,36 @@ def _quitar_che(texto: str) -> str:
     if len(t) < 2:
         return original
     return t
+
+
+# Ventana de validez de un event_date: desde ayer (tolerancia) hasta ~13 meses.
+_EVENT_MAX_DIAS_FUTURO = 400
+
+
+def _validar_evento(raw_event, content: str, hoy: date):
+    """Devuelve (event_title, event_date_iso) o (None, None).
+
+    Toma el objeto 'event' que el LLM puso en una memoria, valida la fecha y, si
+    no parsea o queda fuera de rango, intenta resolverla heurísticamente desde el
+    texto. Así el evento se persiste con fecha real aunque el modelo falle."""
+    if not isinstance(raw_event, dict):
+        return None, None
+    titulo = (raw_event.get("title") or "").strip().rstrip(".")
+    if not titulo or len(titulo) < 3:
+        return None, None
+
+    fecha = parse_fecha_llm(raw_event.get("date"))
+    if fecha is None:
+        fecha = resolver_fecha_relativa(content, hoy)
+    if fecha is None:
+        return None, None
+
+    # Descartar fechas absurdas (pasado lejano o demasiado futuro).
+    dias = (fecha - hoy).days
+    if dias < -2 or dias > _EVENT_MAX_DIAS_FUTURO:
+        return None, None
+
+    return titulo[:120], fecha.isoformat()
 
 
 def _validar_priority(value) -> int:
@@ -362,6 +397,18 @@ def chat_endpoint(
         except Exception as e:
             print(f"⚠️ No se pudieron cargar patrones: {e}")
 
+        # ── Memoria proactiva: evento relevante para el contexto de hoy ──
+        # Se elige UNO solo (el más urgente) para no saturar (req. 8: máx 1 por
+        # conversación). Solo se ofrece fuera de contexto de riesgo.
+        hoy = date.today()
+        evento_proactivo: Optional[Dict[str, Any]] = None
+        if crisis_score < 0.35:
+            try:
+                eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
+                evento_proactivo = eventos[0] if eventos else None
+            except Exception as e:
+                print(f"⚠️ No se pudieron cargar eventos proactivos: {e}")
+
         es_inicio_sesion = len(conversation) == 1
         num_interacciones = len(conversation)
 
@@ -428,6 +475,8 @@ def chat_endpoint(
             mood_actual=body.ultimo_mood,
             ultimo_mensaje=ultimo_mensaje,
             preguntas_seguidas=preguntas_seguidas,
+            hoy=hoy,
+            evento_proactivo=evento_proactivo,
         )
 
         result = llm.generate_response(
@@ -476,27 +525,36 @@ def chat_endpoint(
                 crisis_score,
                 es_post_ejercicio,
             )
-            memorias_validadas.append({
+            mem: Dict[str, Any] = {
                 "content":  content,
                 "category": _validar_category(m.get("category")),
                 "priority": prioridad,
-            })
+            }
+            # Memoria proactiva: si el LLM marcó un evento con fecha, lo validamos.
+            event_title, event_date = _validar_evento(m.get("event"), content, hoy)
+            if event_title and event_date:
+                mem["event_title"] = event_title
+                mem["event_date"] = event_date
+            memorias_validadas.append(mem)
             contenidos_conocidos.append(content)
 
-        # Respaldo: si el LLM no guardó ninguna memoria, intentar detectar evento próximo
+        # Respaldo: si el LLM no guardó ninguna memoria, detectar evento próximo con fecha
         if not memorias_validadas:
-            evento = detectar_evento_proximo(ultimo_mensaje)
+            evento = detectar_evento_con_fecha(ultimo_mensaje, hoy)
             if evento:
-                content_ev, cat_ev, prio_ev = evento
-                memorias_validadas.append({"content": content_ev, "category": cat_ev, "priority": prio_ev})
+                memorias_validadas.append(evento)
 
         # Sin early-return: reportar el nivel real de señal detectada
         risk_level = "medium" if crisis_score >= 0.35 else "none"
 
-        # El usuario ya respondió al primer mensaje de Numa (que preguntó por el evento)
-        # → desactivar memorias de eventos para que no vuelvan a aparecer
-        if len(conversation) == 3:
-            background_tasks.add_task(deactivate_event_memories, user_id)
+        # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
+        # marcarlo followed_up para no volver a preguntar cómo le fue.
+        background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
+
+        # Cooldown de mención proactiva (req. 8): si este turno trajo un evento al prompt,
+        # registramos cuándo, para no insistir en cada mensaje con el mismo tema.
+        if evento_proactivo and evento_proactivo.get("id"):
+            background_tasks.add_task(marcar_proactivo_insertado, evento_proactivo["id"])
 
         if conversation:
             background_tasks.add_task(

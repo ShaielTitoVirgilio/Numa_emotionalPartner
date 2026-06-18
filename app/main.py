@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.core.config import config
 from app.core.auth import get_current_user_id
 from app.core.ratelimit import client_ip
+from app.memory_service import construir_push_contextual, marcar_push_enviado
 from app.routes.auth_router import router as auth_router
 from app.routes.chat_router import router as chat_router
 from app.routes.onboarding_router import router as onboarding_router
@@ -119,27 +120,52 @@ def send_daily_push(x_admin_key: str = Header(None)):
         subscriptions = res.data or []
 
         success_count = 0
+        contextual_count = 0
         vapid_private = os.getenv("VAPID_PRIVATE_KEY")
 
         if not vapid_private:
             raise HTTPException(status_code=500, detail="Falta VAPID_PRIVATE_KEY en las variables de entorno")
 
+        GENERICO = {
+            "title": "Numa 🐼",
+            "body": "Hola, ¿querés contarme cómo te está yendo estos días?",
+        }
+
         for sub in subscriptions:
+            user_id = sub.get("user_id")
+
+            # Push contextual: si el usuario tiene un evento relevante (hoy/mañana/ayer),
+            # el mensaje habla de ESE evento; si no, cae al genérico. (req. 7)
+            push = None
+            if user_id:
+                try:
+                    push = construir_push_contextual(user_id)
+                except Exception as ex:
+                    print(f"⚠️ construir_push_contextual falló para {user_id}: {ex}")
+
+            payload = {"title": push["title"], "body": push["body"]} if push else GENERICO
+
             try:
                 webpush(
                     subscription_info=sub["subscription_data"],
-                    data=json.dumps({
-                        "title": "Numa 🐼",
-                        "body": "Hola, ¿querés contarme cómo te está yendo estos días?"
-                    }),
+                    data=json.dumps(payload),
                     vapid_private_key=vapid_private,
                     vapid_claims={"sub": "mailto:shaieltv@gmail.com"}
                 )
                 success_count += 1
+                # Marcar el push como enviado SOLO tras el envío exitoso (anti-spam, req. 8)
+                if push:
+                    contextual_count += 1
+                    marcar_push_enviado(push["memory_id"], push["push_type"])
             except WebPushException as ex:
                 print(f"Error enviando push a una suscripción: {ex}")
 
-        return {"message": f"Se enviaron {success_count} notificaciones de {len(subscriptions)}."}
+        return {
+            "message": (
+                f"Se enviaron {success_count} notificaciones de {len(subscriptions)} "
+                f"({contextual_count} contextuales)."
+            )
+        }
     except HTTPException:
         raise
     except Exception as e:
