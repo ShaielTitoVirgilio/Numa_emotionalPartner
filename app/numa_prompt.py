@@ -1069,6 +1069,62 @@ REGLAS DURAS (si no las respetás, esto se vuelve molesto y rompe la confianza):
 El bloque te DA permiso para mencionarlo, no te OBLIGA. Usá criterio: si no hay espacio
 natural en esta respuesta, no lo fuerces.
 """,
+
+"M30_ayuda_app": """
+AYUDA SOBRE LA APP — EL USUARIO PREGUNTA CÓMO USAR NUMA O UNA FUNCIÓN:
+
+El usuario está preguntando algo sobre la app en sí (cómo agrandar la letra, si Numa
+habla, cómo mandar un audio, cómo cambiar el modo oscuro, cómo borrar algo que recordás…).
+Guialo con calidez, como un amigo que ya conoce la app, no como un manual. Pasos cortos y claros.
+
+⚠️ REGLA MÁS IMPORTANTE — NO INVENTES NADA:
+- Solo podés guiar sobre las funciones de la lista de abajo. Son TODAS las que existen hoy.
+- Si te preguntan por algo que NO está en la lista, NO te lo inventes ni improvises pasos.
+  Decí con honestidad que esa función todavía no está, que Numa está en desarrollo y que
+  más adelante / próximamente se va a implementar. Nunca des una ruta o un botón que no exista.
+- Si dudás de si algo existe, asumí que NO y respondé como en el punto anterior.
+
+USÁ ESTE BLOQUE SOLO si el usuario está realmente preguntando cómo usar la app. Si la
+palabra apareció en otro sentido (ej. "hoy no tengo voz de tanto llorar"), ignorá este
+bloque por completo y respondé a lo emocional.
+
+DÓNDE ESTÁ CADA COSA (rutas reales):
+
+Abajo de todo hay 4 pestañas: 💬 Chat · 🧘 Ejercicios · 📊 Mi estado · 👤 Perfil.
+Casi todos los ajustes están en 👤 Perfil (la última pestaña, abajo a la derecha).
+
+- Tamaño de texto / "no veo bien" / "letra chica":
+  Perfil → sección "Tamaño de texto" → tres botones A (chico, normal, grande). Que toque el A más grande.
+
+- Modo oscuro / modo claro / tema:
+  Perfil → sección "Tema" → 📱 Auto · ☀️ Claro · 🌙 Oscuro.
+  Atajo: en la pantalla de Chat, arriba, hay un botoncito de sol/luna para cambiar claro/oscuro al toque.
+
+- Mandar un audio / "¿cómo te hablo?":
+  En el Chat, al lado de donde escribís, está el ícono del micrófono 🎤. Lo tocás para empezar
+  a grabar y lo volvés a tocar para frenar y mandar el audio.
+
+- ¿Numa habla? / ¿tiene voz?:
+  Por ahora Numa NO tiene voz propia: te responde por mensajes de texto. Sí puede ESCUCHARTE:
+  le podés mandar audios con el micrófono 🎤. Una voz para Numa es algo que está en desarrollo
+  y que más adelante puede llegar — hoy todavía no.
+
+- Borrar algo que Numa recuerda / "que te olvides de esto":
+  Perfil → "🧠 Lo que Numa recuerda de vos" → cada recuerdo tiene una ✕ para borrarlo.
+
+- Check-in del día / registrar cómo estoy:
+  Perfil → "¿Cómo estás hoy?" (también podés ver tu evolución en la pestaña 📊 Mi estado).
+
+- Ejercicios (respiración, meditación, yoga, lectura):
+  Pestaña 🧘 Ejercicios.
+
+- Cerrar sesión: Perfil → "Cerrar sesión".
+- Eliminar la cuenta: Perfil → "Eliminar mi cuenta".
+
+TONO: corto y humano. No recites toda la lista; respondé solo lo que preguntó.
+BIEN → "Sí, podés agrandarla: andá a Perfil (abajo a la derecha) y en 'Tamaño de texto' tocá la A más grande. ¿Mejor así?"
+MAL  → un párrafo enorme con todas las funciones, o inventarse un menú de "Configuración" que no existe.
+""",
 }
 
 
@@ -1102,6 +1158,7 @@ _ORDEN_CANONICO = [
     "M16_psicoeducacion",
     "M17_usuario_se_cierra",
     "M28_juego_problematico",
+    "M30_ayuda_app",
     "M25_ejercicios_disponibles",
     "M02_tono_y_voz",
     "M03_longitud_y_estructura",
@@ -1171,6 +1228,7 @@ def seleccionar_modulos(
 
     # ── DETECCIÓN DE CONTEXTO EMOCIONAL ──────────────────────
     es_pregunta_info    = _detectar_pregunta_informativa(ultimo_mensaje)
+    es_pregunta_app     = _detectar_pregunta_app(ultimo_mensaje)
     es_usuario_cerrado  = _detectar_usuario_cerrado(historial_reciente)
     es_duelo            = _detectar_duelo(ultimo_mensaje, historial_reciente)
     hay_buenas_noticias = _detectar_buenas_noticias(ultimo_mensaje, mood_actual, checkin_hoy)
@@ -1202,6 +1260,9 @@ def seleccionar_modulos(
     # ── SITUACIONALES DE CONTEXTO ────────────────────────────
     if es_pregunta_info:
         modulos.append("M16_psicoeducacion")
+    # Ayuda sobre la app — fuera de crisis (en riesgo no explicamos botones)
+    if es_pregunta_app and crisis_score < 0.35 and not ultimo_modulo_critico:
+        modulos.append("M30_ayuda_app")
     if es_usuario_cerrado:
         modulos.append("M17_usuario_se_cierra")
     if _detectar_juego_problematico(ultimo_mensaje, historial_reciente):
@@ -1263,6 +1324,44 @@ def _detectar_pregunta_informativa(mensaje: str) -> bool:
         "cuál es la diferencia", "cual es la diferencia",
     ]
     return any(t in texto for t in TRIGGERS)
+
+
+def _detectar_pregunta_app(mensaje: str) -> bool:
+    """True si el usuario pregunta cómo usar la app o una de sus funciones.
+    Las frases inequívocas disparan solas; el resto requiere intención
+    (cómo/dónde/puedo) + una keyword de función, para no activarse cuando la
+    palabra aparece en sentido emocional (ej. 'hoy no tengo voz de tanto llorar').
+    El módulo M30 igual tiene un guard interno por si entra un falso positivo."""
+    texto = mensaje.lower()
+
+    FRASES_APP = [
+        "modo oscuro", "modo claro", "tamaño de texto", "tamano de texto",
+        "agrandar la letra", "agrandar el texto", "achicar la letra",
+        "letra chica", "letra más grande", "letra mas grande",
+        "mandar un audio", "mandarte un audio", "enviarte un audio",
+        "nota de voz", "el micrófono", "el microfono",
+        "numa habla", "numa tiene voz", "tenés voz", "tenes voz",
+        "borrar la conversación", "borrar la conversacion", "borrar conversaciones",
+        "borrar lo que recordás", "borrar lo que recordas",
+        "eliminar mi cuenta", "cerrar sesión", "cerrar sesion",
+    ]
+    if any(f in texto for f in FRASES_APP):
+        return True
+
+    INTENCION = [
+        "cómo", "como", "dónde", "donde", "puedo", "se puede", "hay forma",
+        "hay manera", "no veo", "no logro ver", "no se ve", "se ve mal",
+        "configurar", "configuración", "configuracion", "ajustes", "ajustar",
+        "cambiar", "activar", "dónde está", "donde esta",
+    ]
+    FEATURES = [
+        "letra", "texto", "fuente", "tema", "modo",
+        "audio", "micrófono", "microfono", "grabar", "voz", "hablar", "hablás", "hablas",
+        "borrar", "eliminar", "olvides", "recuerda", "recordás", "recordas",
+        "notificación", "notificacion", "la app", "esta app", "aplicación",
+        "aplicacion", "perfil", "pestaña", "pestana", "botón", "boton",
+    ]
+    return any(t in texto for t in INTENCION) and any(t in texto for t in FEATURES)
 
 
 def _detectar_usuario_cerrado(historial: list) -> bool:

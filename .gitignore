@@ -22,6 +22,9 @@ Chats/
 # Scripts de prueba locales
 test_proactiva.py
 
+# Registro de migración (ya aplicada en Supabase; se mantiene local como doc)
+memories_event_migration.sql
+
 reportar_bugs.txt
 # Informe de auditoría interna
 Analizis-Completo.txt
