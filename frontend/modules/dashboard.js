@@ -98,7 +98,7 @@ function _htmlDashboard(data) {
       <div class="db-card">
         <p class="db-card-titulo">¿Cómo llegaste cada día?</p>
         ${racha_checkins >= 2 ? `
-        <p class="db-racha">🌱 ${racha_checkins} días seguidos registrando cómo llegás</p>
+        <p class="db-racha">${racha_checkins} días seguidos registrando cómo llegás</p>
         ` : ""}
         ${_htmlCheckins(checkins)}
       </div>
@@ -126,7 +126,7 @@ function _htmlDashboard(data) {
       </div>
 
       <!-- Exportar -->
-      <button class="db-btn-export" id="db-btn-export">📤 Compartir mi estado</button>
+      <button class="db-btn-export" id="db-btn-export">Compartir mi estado</button>
       <p class="db-export-hint">Por ejemplo, para llevárselo a tu terapeuta.</p>
 
     </div>
@@ -245,11 +245,11 @@ function _htmlSemana(moodSemanal, diasActivos, comparacion) {
 
   // Comparación con semana anterior
   const COMP_TEXTO = {
-    muy_mejor:      "📈 Tu estado de ánimo fue muy superior al de la semana pasada",
-    un_poco_mejor:  "📈 Tu estado de ánimo fue un poco mejor que la semana pasada",
-    similar:        "➡️ Similar a la semana pasada",
-    un_poco_peor:   "📉 Tu estado de ánimo fue un poco menor que la semana pasada",
-    muy_peor:       "📉 Tu estado de ánimo fue bastante menor que la semana pasada",
+    muy_mejor:      "Tu estado de ánimo fue muy superior al de la semana pasada",
+    un_poco_mejor:  "Tu estado de ánimo fue un poco mejor que la semana pasada",
+    similar:        "Similar a la semana pasada",
+    un_poco_peor:   "Tu estado de ánimo fue un poco menor que la semana pasada",
+    muy_peor:       "Tu estado de ánimo fue bastante menor que la semana pasada",
   };
   const textoComp = comparacion ? COMP_TEXTO[comparacion] : null;
 
@@ -295,13 +295,13 @@ function _htmlCheckins(checkins) {
 
 function _labelPatron(topic) {
   const MAP = {
-    trabajo:    "💼 Trabajo",
-    relaciones: "❤️ Relaciones",
-    salud:      "🌿 Salud",
-    identidad:  "🪞 Identidad",
-    emocional:  "💙 Emocional",
+    trabajo:    "Trabajo",
+    relaciones: "Relaciones",
+    salud:      "Salud",
+    identidad:  "Identidad",
+    emocional:  "Emocional",
   };
-  return MAP[topic] || topic;
+  return MAP[topic] || (topic.charAt(0).toUpperCase() + topic.slice(1));
 }
 
 // ── Estados ───────────────────────────────────────────────────────────────────

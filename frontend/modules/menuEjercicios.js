@@ -27,9 +27,8 @@ export function irAEjercicios() {
     const btnSonido = document.createElement("button");
     btnSonido.className = "btn-ambient-sound";
     btnSonido.innerHTML = `
-        <span class="bam-icon">⚙️</span>
         <span class="bam-label">Sonido de fondo</span>
-        <span class="bam-current" id="bam-current-label">${sonidoActual.label.split(' ')[0]} ${sonidoActual.label.split(' ').slice(1).join(' ')}</span>
+        <span class="bam-current" id="bam-current-label">${sonidoActual.label}</span>
     `;
     btnSonido.onclick = () => mostrarSelectorSonido();
     lista.appendChild(btnSonido);
@@ -39,7 +38,7 @@ export function irAEjercicios() {
         const label = document.getElementById("bam-current-label");
         if (!label) return;
         const s = SONIDOS_AMBIENTE.find(s => s.id === e.detail.id);
-        if (s) label.textContent = `${s.label.split(' ')[0]} ${s.label.split(' ').slice(1).join(' ')}`;
+        if (s) label.textContent = s.label;
     };
     window.addEventListener("numa:soundChanged", _onSoundChange);
 
@@ -58,28 +57,28 @@ export function irAEjercicios() {
     // ── Categorías ──────────────────────────────────
     const categorias = [
         {
-            key: "respiracion", label: "Respiración", emoji: "🌬️",
+            key: "respiracion", label: "Respiración",
             desc: "Calma el sistema nervioso",
             badge: `${CATALOGO_EJERCICIOS.respiracion.length} ejercicios · desde 1 min`,
-            iconBg: "rgba(125,184,158,0.18)"
+            iconBg: "rgba(125,184,158,0.55)"
         },
         {
-            key: "meditacion", label: "Meditación", emoji: "🧘",
+            key: "meditacion", label: "Meditación",
             desc: "Claridad y pausa mental",
             badge: `${CATALOGO_EJERCICIOS.meditacion.length} ejercicios · 1-3 min`,
-            iconBg: "rgba(107,142,197,0.18)"
+            iconBg: "rgba(107,142,197,0.55)"
         },
         {
-            key: "yoga", label: "Cuerpo y Movimiento", emoji: "🕉️",
+            key: "yoga", label: "Cuerpo y Movimiento",
             desc: "Soltar tensión física",
             badge: `${CATALOGO_EJERCICIOS.yoga.length} ejercicios · 3-5 min`,
-            iconBg: "rgba(197,168,107,0.18)"
+            iconBg: "rgba(197,168,107,0.55)"
         },
         {
-            key: "lectura", label: "Lectura", emoji: "📖",
+            key: "lectura", label: "Lectura",
             desc: "Frases para reflexionar",
             badge: "Motivación · Espiritualidad · Diaria",
-            iconBg: "rgba(158,125,184,0.18)"
+            iconBg: "rgba(158,125,184,0.55)"
         }
     ];
 
@@ -87,7 +86,7 @@ export function irAEjercicios() {
         const btn = document.createElement("button");
         btn.className = "menu-cat-btn";
         btn.innerHTML = `
-            <div class="menu-cat-icon" style="background:${cat.iconBg};">${cat.emoji}</div>
+            <div class="menu-cat-icon" style="background:${cat.iconBg};"></div>
             <div class="menu-cat-info">
                 <div class="menu-cat-label">${cat.label}</div>
                 <div class="menu-cat-desc">${cat.desc}</div>
@@ -116,10 +115,10 @@ export function abrirSubmenu(categoriaKey) {
     lista.innerHTML = "";
 
     const titulos = {
-        respiracion: "🌬️ Respiración",
-        meditacion:  "🧘 Meditación",
-        yoga:        "🕉️ Cuerpo y Movimiento",
-        lectura:     "📖 Lectura"
+        respiracion: "Respiración",
+        meditacion:  "Meditación",
+        yoga:        "Cuerpo y Movimiento",
+        lectura:     "Lectura"
     };
     titulo.innerText = titulos[categoriaKey] || (categoriaKey.charAt(0).toUpperCase() + categoriaKey.slice(1));
 
@@ -141,7 +140,7 @@ export function abrirSubmenu(categoriaKey) {
                 ${duracion ? `<span class="ej-card-duracion">${duracion}</span>` : ''}
             </div>
             <p class="ej-card-desc">${ej.descripcion}</p>
-            ${ej.cientifico ? `<p class="ej-card-cientifico">💡 ${ej.cientifico}</p>` : '<div class="ej-card-spacer"></div>'}
+            ${ej.cientifico ? `<p class="ej-card-cientifico">${ej.cientifico}</p>` : '<div class="ej-card-spacer"></div>'}
             <button class="btn-start-ejercicio">Comenzar →</button>
         `;
         card.querySelector(".btn-start-ejercicio").onclick = () => iniciarEjercicio(categoriaKey, ej);
@@ -175,7 +174,7 @@ function _renderPacksLectura(lista, packs) {
         card.className = "lectura-card";
         card.innerHTML = `
             <div class="lectura-card-head">
-                <div class="lectura-card-icon" style="background:${c.bg};">${pack.emoji}</div>
+                <div class="lectura-card-icon" style="background:${c.accent}88;"></div>
                 <div class="lectura-card-info">
                     <div class="lectura-card-nombre">${pack.nombre}</div>
                     <div class="lectura-card-count">${pack.quotes.length} frases</div>

@@ -2447,6 +2447,31 @@ html.tema-oscuro .chat-separador::after {
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* Top bar + menú desplegable */
+html.tema-oscuro .menu-toggle { background: #242f2a; color: #e6efe9; }
+html.tema-oscuro .menu-toggle:active { background: #2c3a33; }
+html.tema-oscuro .nav-menu-panel {
+  background: #242f2a;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+html.tema-oscuro .nav-menu-item { color: #e6efe9; }
+html.tema-oscuro .nav-menu-item:hover { background: #2c3a33; }
+html.tema-oscuro .nav-menu-item.active { background: #35514a; }
+
+/* Tu opinión (feedback) */
+html.tema-oscuro .fb-title,
+html.tema-oscuro .fb-label,
+html.tema-oscuro .fb-success h3 { color: #e6efe9; }
+html.tema-oscuro .fb-subtitle,
+html.tema-oscuro .fb-success p { color: #aec4ba; }
+html.tema-oscuro .fb-textarea,
+html.tema-oscuro .fb-rating-num,
+html.tema-oscuro .fb-new-btn {
+  background: #242f2a;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e6efe9;
+}
+
 /* ============================================
    SELECTOR DE TEMA (Perfil)
    ============================================ */

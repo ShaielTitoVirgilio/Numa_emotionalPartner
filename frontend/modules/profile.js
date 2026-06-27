@@ -84,7 +84,7 @@ function _htmlPerfil(nombre, email, checkin, userId) {
 
       <!-- Lo que Numa recuerda -->
       <div class="prf-card" id="prf-memorias-card">
-        <p class="prf-card-titulo">🧠 Lo que Numa recuerda de vos</p>
+        <p class="prf-card-titulo">Lo que Numa recuerda de vos</p>
         <p class="prf-card-subtexto">Podés borrar lo que no quieras que recuerde.</p>
         <div id="prf-memorias-list"></div>
       </div>

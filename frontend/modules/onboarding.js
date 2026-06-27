@@ -441,6 +441,12 @@ async function _enviarOnboarding() {
                 `Hola ${nombre} 🐼 Gracias por contarme un poco sobre vos. Estoy acá cuando quieras hablar.`,
                 "oso"
             );
+            window.agregarMensaje(
+                `Una cosa antes de arrancar: todavía estoy en desarrollo, así que a veces puedo equivocarme. ` +
+                `Si algo te gusta, te molesta o se te ocurre cómo mejorar, podés contármelo desde el menú (arriba a la izquierda) → "Tu opinión". ` +
+                `Cada comentario me ayuda a seguir mejorando.`,
+                "oso"
+            );
         }
         mostrarAvisoTesterCada();
 

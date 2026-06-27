@@ -16,65 +16,91 @@
     /* ============================================
        TABS — Chat / Mi estado
        ============================================ */
-    .tab-bar {
+    /* ── Top bar: botón de menú + tema ── */
+    .top-bar {
       width: 100%;
       display: flex;
-      background: #dceee7;
-      border-radius: 20px;
-      padding: 4px;
-      gap: 4px;
+      align-items: center;
+      justify-content: space-between;
       margin-bottom: 8px;
       flex-shrink: 0;
+      min-height: 40px;
     }
-    .tab-btn {
-      flex: 1;
-      padding: 10px 4px;
-      border: none;
-      border-radius: 16px;
-      background: transparent;
-      color: #6b8e7d;
-      font-size: 0.78rem;
-      font-family: inherit;
-      font-weight: 700;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      display: flex;
+    .menu-toggle {
+      display: inline-flex;
       align-items: center;
-      justify-content: center;
-      gap: 4px;
-      white-space: nowrap;
-      overflow: hidden;
-    }
-    .tab-btn.active {
-      flex: 1.6;
-      background: white;
+      gap: 8px;
+      padding: 9px 16px;
+      border: none;
+      border-radius: 14px;
+      background: #dceee7;
       color: #2f4f45;
-      font-size: 0.88rem;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-    }
-    .tab-btn .tab-icon {
-      font-size: 1rem;
-      flex-shrink: 0;
-    }
-    /* Label oculto en tabs inactivos, visible en activo */
-    .tab-btn .tab-label {
-      display: none;
-    }
-    .tab-btn.active .tab-label {
-      display: inline;
-    }
-    /* Badge "Próximamente" */
-    .tab-badge {
-      font-size: 0.6rem;
-      background: #b7d3c6;
-      color: #2f4f45;
-      padding: 2px 6px;
-      border-radius: 20px;
+      font-family: inherit;
+      font-size: 0.9rem;
       font-weight: 800;
-      letter-spacing: 0.02em;
-      text-transform: uppercase;
-      margin-left: 2px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      -webkit-tap-highlight-color: transparent;
     }
+    .menu-toggle:active { background: #cbe5db; }
+    .menu-toggle-icon { font-size: 1.15rem; line-height: 1; }
+
+    /* ── Menú desplegable ── */
+    .nav-menu {
+      position: fixed;
+      inset: 0;
+      z-index: 400;
+      display: flex;
+      justify-content: center;
+    }
+    .nav-menu.hidden { display: none; }
+    .nav-menu-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(47, 79, 69, 0.18);
+    }
+    .nav-menu-inner {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 430px;
+      padding: 0 20px;
+      pointer-events: none;
+    }
+    .nav-menu-panel {
+      position: absolute;
+      top: 58px;
+      left: 20px;
+      min-width: 210px;
+      pointer-events: auto;
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 12px 32px rgba(47, 79, 69, 0.18);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      animation: navMenuIn 0.18s ease;
+    }
+    @keyframes navMenuIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .nav-menu-item {
+      text-align: left;
+      padding: 13px 16px;
+      border: none;
+      border-radius: 12px;
+      background: transparent;
+      color: #2f4f45;
+      font-family: inherit;
+      font-size: 0.98rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .nav-menu-item:hover { background: #f0f8f4; }
+    .nav-menu-item.active { background: #dceee7; font-weight: 800; }
     /* Vistas */
     .tab-view {
       display: none;
@@ -88,12 +114,7 @@
     .tab-view.active {
       display: flex;
     }
-    #view-chat { position: relative; }
     .chat-theme-toggle {
-      position: absolute;
-      top: 4px;
-      left: 0;
-      z-index: 5;
       width: 38px;
       height: 38px;
       display: flex;
@@ -105,6 +126,7 @@
       color: #b9c6bf;          /* gris claro */
       cursor: pointer;
       border-radius: 50%;
+      flex-shrink: 0;
       -webkit-tap-highlight-color: transparent;
       transition: color 0.2s ease, background 0.2s ease;
     }
@@ -256,33 +278,44 @@
 <div class="app">
 
   <!-- ============================================
-       TAB BAR — Chat / Ejercicios / Mi estado / Perfil
+       TOP BAR — botón de menú + tema
        ============================================ -->
-  <div class="tab-bar">
-    <button class="tab-btn active" id="tab-chat-btn" onclick="switchMainTab('chat')">
-      <span class="tab-icon">💬</span><span class="tab-label"> Chat</span>
+  <div class="top-bar">
+    <button
+      class="menu-toggle"
+      id="menu-toggle"
+      onclick="toggleNavMenu()"
+      aria-label="Abrir menú"
+      aria-expanded="false">
+      <span class="menu-toggle-icon">☰</span><span>Menú</span>
     </button>
-    <button class="tab-btn" id="tab-ejercicios-btn" onclick="irAEjercicios()">
-      <span class="tab-icon">🧘</span><span class="tab-label"> Ejercicios</span>
-    </button>
-    <button class="tab-btn" id="tab-dashboard-btn" onclick="switchMainTab('dashboard')">
-      <span class="tab-icon">📊</span><span class="tab-label"> Mi estado</span>
-    </button>
-    <button class="tab-btn" id="tab-profile-btn" onclick="switchMainTab('profile')">
-      <span class="tab-icon">👤</span><span class="tab-label"> Perfil</span>
-    </button>
+    <button
+      class="chat-theme-toggle"
+      id="chat-theme-toggle"
+      onclick="alternarTemaChat()"
+      aria-label="Cambiar tema"></button>
+  </div>
+
+  <!-- ============================================
+       MENÚ DESPLEGABLE — navegación principal
+       ============================================ -->
+  <div class="nav-menu hidden" id="nav-menu">
+    <div class="nav-menu-backdrop" onclick="cerrarNavMenu()"></div>
+    <div class="nav-menu-inner">
+      <nav class="nav-menu-panel" role="menu" aria-label="Navegación">
+        <button class="nav-menu-item active" data-sec="chat"       onclick="navTo('chat')">Chat</button>
+        <button class="nav-menu-item"        data-sec="ejercicios" onclick="navTo('ejercicios')">Ejercicios</button>
+        <button class="nav-menu-item"        data-sec="dashboard"  onclick="navTo('dashboard')">Mi estado</button>
+        <button class="nav-menu-item"        data-sec="feedback"   onclick="navTo('feedback')">Tu opinión</button>
+        <button class="nav-menu-item"        data-sec="profile"    onclick="navTo('profile')">Perfil</button>
+      </nav>
+    </div>
   </div>
 
   <!-- ============================================
        VISTA: CHAT
        ============================================ -->
   <div class="tab-view active" id="view-chat">
-
-    <button
-      class="chat-theme-toggle"
-      id="chat-theme-toggle"
-      onclick="alternarTemaChat()"
-      aria-label="Cambiar tema"></button>
 
     <div class="bear-container" id="bear-container"></div>
     <div id="mood-indicator"></div>
@@ -321,6 +354,13 @@
        ============================================ -->
   <div class="tab-view" id="view-profile">
     <!-- Contenido cargado dinámicamente por profile.js -->
+  </div>
+
+  <!-- ============================================
+       VISTA: TU OPINIÓN (feedback)
+       ============================================ -->
+  <div class="tab-view" id="view-feedback">
+    <!-- Contenido cargado dinámicamente por feedbackTab.js -->
   </div>
 
   <!-- ============================================
@@ -569,23 +609,45 @@
 
 <script>
   // ============================================
-  // LÓGICA DE PESTAÑAS
+  // MENÚ DESPLEGABLE — navegación principal
   // ============================================
-  function switchMainTab(tab) {
-    document.getElementById('tab-chat-btn').classList.toggle('active', tab === 'chat');
-    document.getElementById('tab-dashboard-btn').classList.toggle('active', tab === 'dashboard');
-    document.getElementById('tab-profile-btn').classList.toggle('active', tab === 'profile');
+  const NAV_VIEWS = ['chat', 'dashboard', 'profile', 'feedback'];
 
-    document.getElementById('view-chat').classList.toggle('active', tab === 'chat');
-    document.getElementById('view-dashboard').classList.toggle('active', tab === 'dashboard');
-    document.getElementById('view-profile').classList.toggle('active', tab === 'profile');
+  function toggleNavMenu() {
+    document.getElementById('nav-menu').classList.contains('hidden')
+      ? abrirNavMenu()
+      : cerrarNavMenu();
+  }
 
-    if (tab === 'dashboard' && window.initDashboard) {
-      window.initDashboard();
+  function abrirNavMenu() {
+    document.getElementById('nav-menu').classList.remove('hidden');
+    document.getElementById('menu-toggle').setAttribute('aria-expanded', 'true');
+  }
+
+  function cerrarNavMenu() {
+    document.getElementById('nav-menu').classList.add('hidden');
+    document.getElementById('menu-toggle').setAttribute('aria-expanded', 'false');
+  }
+
+  function navTo(sec) {
+    cerrarNavMenu();
+
+    // Ejercicios es un overlay: se abre encima de la vista actual.
+    if (sec === 'ejercicios') {
+      if (window.irAEjercicios) window.irAEjercicios();
+      return;
     }
-    if (tab === 'profile' && window.initProfile) {
-      window.initProfile();
-    }
+
+    NAV_VIEWS.forEach(s => {
+      document.getElementById('view-' + s)?.classList.toggle('active', s === sec);
+    });
+    document.querySelectorAll('.nav-menu-item').forEach(b => {
+      b.classList.toggle('active', b.dataset.sec === sec);
+    });
+
+    if (sec === 'dashboard' && window.initDashboard) window.initDashboard();
+    if (sec === 'profile'   && window.initProfile)   window.initProfile();
+    if (sec === 'feedback'  && window.initFeedback)  window.initFeedback();
   }
 
   if ('serviceWorker' in navigator) {

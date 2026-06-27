@@ -18,6 +18,7 @@ import { initDashboard } from './modules/dashboard.js';
 import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternarTemaChat } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
+import { initFeedbackTab } from './modules/feedbackTab.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -42,6 +43,7 @@ window.mostrarSelectorSonido = mostrarSelectorSonido;
 window.toggleMic = toggleMic;
 window.alternarTemaChat = alternarTemaChat;
 window.inicializarChat = inicializarChat;
+window.initFeedback = initFeedbackTab;
 
 
 

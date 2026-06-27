@@ -6,11 +6,11 @@
 // CATÁLOGO DE SONIDOS
 // ============================================
 export const SONIDOS_AMBIENTE = [
-  { id: "lluvia", label: "🌧️ Lluvia", desc: "Gotas suaves y constantes" },
-  { id: "olas", label: "🌊 Olas del mar", desc: "Mar tranquilo y rítmico" },
-  { id: "fuego", label: "🔥 Fuego", desc: "Crepitar de leña" },
-  { id: "viento", label: "🍃 Bosque", desc: "Brisa entre los árboles" },
-  { id: "ninguno", label: "🔇 Sin sonido", desc: "Solo silencio" },
+  { id: "lluvia", label: "Lluvia", desc: "Gotas suaves y constantes" },
+  { id: "olas", label: "Olas del mar", desc: "Mar tranquilo y rítmico" },
+  { id: "fuego", label: "Fuego", desc: "Crepitar de leña" },
+  { id: "viento", label: "Bosque", desc: "Brisa entre los árboles" },
+  { id: "ninguno", label: "Sin sonido", desc: "Solo silencio" },
 ];
 
 const AUDIO_FILES = {
@@ -108,7 +108,7 @@ export function mostrarSelectorSonido() {
     <div class="as-backdrop"></div>
     <div class="as-sheet">
       <div class="as-header">
-        <span class="as-title">🎵 Sonido de fondo</span>
+        <span class="as-title">Sonido de fondo</span>
         <span class="as-subtitle">Para meditación, yoga y lectura</span>
         <button class="as-close" id="as-close-btn">✕</button>
       </div>
@@ -116,9 +116,8 @@ export function mostrarSelectorSonido() {
         ${SONIDOS_AMBIENTE.map(
           s => `
           <button class="as-item ${s.id === actual ? "as-item--active" : ""}" data-id="${s.id}">
-            <span class="as-icon">${s.label.split(" ")[0]}</span>
             <div class="as-info">
-              <span class="as-name">${s.label.slice(s.label.indexOf(" ") + 1)}</span>
+              <span class="as-name">${s.label}</span>
               <span class="as-desc">${s.desc}</span>
             </div>
             <span class="as-check">${s.id === actual ? "✓" : ""}</span>
