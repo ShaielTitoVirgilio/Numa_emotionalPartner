@@ -145,6 +145,33 @@ CRISIS_OVERFLOW_PHRASES = [
     "ojala no despierte", "ojala me durmiera y no despertara",
 ]
 
+# ── Nivel MEDIO: desesperanza crónica / anhedonia vital ───────
+# Expresiones de hartazgo de vivir o vacío existencial sostenido.
+# No son ideación activa, pero indican sufrimiento crónico profundo
+# y requieren que el LLM responda con módulo de crisis implícita (M19).
+
+HOPELESSNESS_PHRASES = [
+    # Anhedonia vital directa
+    "aburrida de vivir", "aburrido de vivir",
+    "cansada de vivir", "cansado de vivir",
+    "harta de vivir", "harto de vivir",
+    "tanta de vivir", "agotada de vivir", "agotado de vivir",
+    # "no quiero seguir viviendo así" (distinción de la ideación directa "no quiero seguir viviendo")
+    "no quiero seguir viviendo asi", "no quiero seguir viviendo así",
+    "no quiero seguir existiendo asi", "no quiero seguir existiendo así",
+    # Sin sentido / vacío vital
+    "no le encuentro sentido a la vida", "no le veo sentido a la vida",
+    "no tiene sentido vivir", "para que vivir", "para qué vivir",
+    "vivir no vale la pena", "la vida no vale la pena",
+    "no vale la pena seguir", "no vale nada la vida",
+    # Sufrimiento sostenido largo plazo (con marcadores de duración)
+    "años sintiendome asi", "años sintiéndome así",
+    "toda la vida sintiendome", "toda la vida así",
+    "siempre me senti asi", "siempre me sentí así",
+    "nunca voy a estar bien", "jamas voy a estar bien",
+    "nunca cambia nada", "nunca va a cambiar",
+]
+
 # ── Nivel MEDIO: señales implícitas de riesgo ─────────────────
 # Frases que en una conversación pesada indican riesgo sin usar
 # las palabras directas. No tienen respuesta hardcodeada: activan
@@ -172,6 +199,7 @@ SCORE_POR_CATEGORIA = {
     "SUICIDAL_IDEATION": 0.85,
     "SELF_HARM":         0.65,
     "CRISIS_OVERFLOW":   0.45,
+    "HOPELESSNESS":      0.42,
     "IMPLICIT_RISK":     0.40,
 }
 
@@ -193,6 +221,7 @@ _PATRONES = {
     "SUICIDAL_IDEATION": _compilar_frases(SUICIDAL_IDEATION_PHRASES),
     "SELF_HARM":         _compilar_frases(SELF_HARM_PHRASES),
     "CRISIS_OVERFLOW":   _compilar_frases(CRISIS_OVERFLOW_PHRASES),
+    "HOPELESSNESS":      _compilar_frases(HOPELESSNESS_PHRASES),
     "IMPLICIT_RISK":     _compilar_frases(IMPLICIT_RISK_PHRASES),
 }
 
@@ -421,6 +450,20 @@ def detectar_crisis(mensaje: str) -> CrisisResult:
             resources=[],
             log_level="medium",
             score=SCORE_POR_CATEGORIA["IMPLICIT_RISK"],
+        )
+
+    # ── 6. Desesperanza crónica / anhedonia vital → LLM con M19 ──
+    # "aburrida de vivir", "cansada de vivir", "nunca voy a estar bien"...
+    # Sufrimiento sostenido sin ideación activa: no bypassea el LLM,
+    # pero sí activa los módulos de crisis implícita para respuesta cálida.
+    if _hay_match(texto, _PATRONES["HOPELESSNESS"]):
+        return CrisisResult(
+            detected=False,
+            category="HOPELESSNESS",
+            message="",
+            resources=[],
+            log_level="medium",
+            score=SCORE_POR_CATEGORIA["HOPELESSNESS"],
         )
 
     # ── Sin crisis ───────────────────────────────────────────

@@ -120,6 +120,42 @@ def _quitar_che(texto: str) -> str:
     return t
 
 
+# ── Anti-tic de apertura repetida ─────────────────────────────────────────
+# El modelo, sobre todo al reflejar, se engancha con una misma fórmula de
+# apertura ("Sentís que...", "Es como que...") y abre varios mensajes seguidos
+# igual. M05 ya lo prohíbe, pero cuando lo desobedece se aplana acá: se quita
+# la fórmula y el resto queda como afirmación ("Sentís que todo te pesa." →
+# "Todo te pesa."). Solo se aplana si el mensaje ANTERIOR de Numa abrió con la
+# MISMA familia — un único uso es una herramienta válida de reflejo.
+# "Es como si..." queda afuera a propósito: al sacarlo deja subjuntivo colgado.
+_APERTURAS_REPETIBLES = [
+    ("sentis_que",  re.compile(r"^\s*sent[ií]s\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
+    ("siento_que",  re.compile(r"^\s*siento\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
+    ("es_como_que", re.compile(r"^\s*es\s+como\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
+    ("parece_que",  re.compile(r"^\s*parece\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
+]
+
+
+def _familia_apertura(texto: str) -> Optional[str]:
+    """Clave de familia si el texto abre con una fórmula repetible, o None."""
+    for clave, rx in _APERTURAS_REPETIBLES:
+        if rx.match(texto or ""):
+            return clave
+    return None
+
+
+def _aplanar_apertura(texto: str) -> str:
+    """Quita la fórmula de apertura y capitaliza el resto.
+    'Sentís que todo te pesa.' → 'Todo te pesa.'"""
+    for _clave, rx in _APERTURAS_REPETIBLES:
+        m = rx.match(texto or "")
+        if m:
+            resto = m.group(1).lstrip()
+            if resto:
+                return resto[0].upper() + resto[1:]
+    return texto
+
+
 # Ventana de validez de un event_date: desde ayer (tolerancia) hasta ~13 meses.
 _EVENT_MAX_DIAS_FUTURO = 400
 
@@ -488,6 +524,23 @@ def chat_endpoint(
         # en casi cada mensaje a pesar del M02; se elimina acá.
         if result.get("message"):
             result["message"] = _quitar_che(result["message"])
+
+        # Anti-tic de apertura: si el modelo abre con la misma fórmula
+        # ("Sentís que...", "Es como que...") que su mensaje anterior, la
+        # aplanamos a una afirmación. M05 ya lo prohíbe; esto es la red
+        # determinística. Solo aplica cuando se repite respecto del turno previo.
+        mensaje_actual = result.get("message") or ""
+        familia_actual = _familia_apertura(mensaje_actual)
+        if familia_actual:
+            apertura_previa = None
+            for m in reversed(conversation[:-1]):
+                if m.role == "assistant":
+                    apertura_previa = _familia_apertura(m.content)
+                    break
+            if apertura_previa == familia_actual:
+                aplanado = _aplanar_apertura(mensaje_actual)
+                if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
+                    result["message"] = aplanado
 
         # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
         # prohibió preguntar; si el modelo desobedece igual, se recorta la
