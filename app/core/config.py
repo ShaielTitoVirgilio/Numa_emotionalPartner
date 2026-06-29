@@ -11,10 +11,11 @@ class Config:
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "")
     # Modelo de texto de Groq usado en todo el backend (chat, verificador de
     # crisis, insight del dashboard). Se cambia solo acá / en el .env.
-    # llama-3.3-70b (y 3.1-8b, llama-4-scout) se decomisionan en Groq. El default
-    # es el reemplazo elegido: qwen3-32b → natural/rioplatense, JSON confiable
-    # (reasoning_effort="none"), voseo correcto y ~mitad del costo del 70B.
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "qwen/qwen3-32b")
+    # qwen/qwen3-32b se decomisiona en Groq el 17/07/2026. Migramos a
+    # llama-3.3-70b-versatile: sigue activo en Groq, mejor en rioplatense
+    # (menos escapes al tuteo) y NO es modelo de razonamiento, así que core/llm.py
+    # no le aplica reasoning_effort ni headroom — JSON limpio sin ajustes extra.
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
 config = Config()
