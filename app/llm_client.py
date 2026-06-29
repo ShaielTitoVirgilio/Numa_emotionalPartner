@@ -7,7 +7,7 @@ import json
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
-from app.core.llm import get_model, reasoning_extra_body, max_tokens_for, strip_reasoning
+from app.core.llm import get_model, get_fallback_model, reasoning_extra_body, max_tokens_for, strip_reasoning
 
 load_dotenv()
 
@@ -61,31 +61,52 @@ class LLMClient:
         system_prompt: str,
     ) -> LLMRawResponse:
 
-        try:
-            completion = self.client.chat.completions.create(
-                model=get_model(),
-                temperature=0.7,
-                # 600 base; los modelos de razonamiento (gpt-oss) reciben headroom
-                # extra para que el reasoning no trunque el JSON.
-                max_tokens=max_tokens_for(600),
-                response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *conversation,
-                ],
-                extra_body=reasoning_extra_body(),  # reasoning_effort=low en gpt-oss
-            )
-            raw = completion.choices[0].message.content or ""
-        except Exception as e:
-            # gpt-oss a veces responde texto plano sin el wrapper JSON → Groq lo
-            # rechaza con json_validate_failed, pero el texto real (que suele ser
-            # una buena respuesta) viene en error.failed_generation. Lo recuperamos
-            # en vez de mostrar el fallback genérico.
-            raw = _recuperar_failed_generation(e)
-            if raw is None:
-                print(f"⚠️ LLM error (fallback graceful): {e}")
-                return dict(_FALLBACK_RESPONSE)
-            print("ℹ️ Groq json_validate_failed: recuperado failed_generation")
+        # Modelo primario + backup (si está configurado y es distinto). Si el
+        # primario se cae (outage, rate limit, modelo decomisionado), reintentamos
+        # con el backup antes de rendirnos al mensaje genérico.
+        modelos = [get_model()]
+        backup = get_fallback_model()
+        if backup and backup != modelos[0]:
+            modelos.append(backup)
+
+        raw = None
+        ultimo_error = None
+        for i, modelo in enumerate(modelos):
+            try:
+                completion = self.client.chat.completions.create(
+                    model=modelo,
+                    temperature=0.7,
+                    # 600 base; los modelos de razonamiento (gpt-oss/qwen) reciben
+                    # headroom extra para que el reasoning no trunque el JSON.
+                    max_tokens=max_tokens_for(600, modelo),
+                    response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *conversation,
+                    ],
+                    extra_body=reasoning_extra_body(modelo),  # reasoning_effort según familia
+                )
+                raw = completion.choices[0].message.content or ""
+                if i > 0:
+                    print(f"ℹ️ LLM: respondió el modelo de backup ({modelo})")
+                break
+            except Exception as e:
+                # Caso especial (NO es caída): gpt-oss/qwen a veces responde texto
+                # plano sin el wrapper JSON → Groq lo rechaza con json_validate_failed,
+                # pero el texto real viene en error.failed_generation. Lo recuperamos
+                # en vez de saltar al backup (el modelo SÍ respondió).
+                recuperado = _recuperar_failed_generation(e)
+                if recuperado is not None:
+                    print(f"ℹ️ Groq json_validate_failed ({modelo}): recuperado failed_generation")
+                    raw = recuperado
+                    break
+                # Caída real (timeout, rate limit, 5xx, modelo caído): probamos el backup.
+                ultimo_error = e
+                print(f"⚠️ LLM error con {modelo}: {e}")
+
+        if raw is None:
+            print(f"⚠️ LLM: fallaron todos los modelos. Último error: {ultimo_error}")
+            return dict(_FALLBACK_RESPONSE)
 
         # Defensa: si el modelo de razonamiento filtró el <think> al content,
         # lo quitamos antes de parsear (con json_object normalmente ya viene limpio).

@@ -16,6 +16,10 @@ class Config:
     # (menos escapes al tuteo) y NO es modelo de razonamiento, así que core/llm.py
     # no le aplica reasoning_effort ni headroom — JSON limpio sin ajustes extra.
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    # Modelo de respaldo: si el primario falla (outage, rate limit, modelo caído),
+    # el chat reintenta automáticamente con este antes de rendirse.
+    # ⚠️ qwen/qwen3-32b se apaga en Groq el 17/07/2026 — cambiar este backup antes de esa fecha.
+    GROQ_MODEL_FALLBACK: str = os.getenv("GROQ_MODEL_FALLBACK", "qwen/qwen3-32b")
 
 
 config = Config()

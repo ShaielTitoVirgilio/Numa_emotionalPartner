@@ -34,6 +34,11 @@ def get_model() -> str:
     return config.GROQ_MODEL
 
 
+def get_fallback_model() -> str:
+    """Modelo de respaldo si el primario falla (de config / .env)."""
+    return config.GROQ_MODEL_FALLBACK
+
+
 def _reasoning_key(model: str | None = None) -> str | None:
     """Devuelve la familia razonadora a la que pertenece el modelo, o None."""
     m = (model or config.GROQ_MODEL or "").lower()
