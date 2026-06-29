@@ -2371,6 +2371,22 @@ html.tema-oscuro .bubble.oso.crisis-card {
   color: #f0e4d8;
 }
 
+/* Barra de navegación */
+html.tema-oscuro .nav-bar {
+  background: #242f2a;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+html.tema-oscuro .nav-bar-item {
+  color: #7a9387;
+}
+html.tema-oscuro .nav-bar-item.active {
+  background: #35514a;
+  color: #e6efe9;
+}
+html.tema-oscuro .nav-bar-item .nav-bar-label {
+  color: #e6efe9;
+}
+
 /* Superficies y tarjetas */
 html.tema-oscuro .db-card,
 html.tema-oscuro .prf-card,
@@ -2446,17 +2462,6 @@ html.tema-oscuro .chat-separador::before,
 html.tema-oscuro .chat-separador::after {
   background: rgba(255, 255, 255, 0.12);
 }
-
-/* Top bar + menú desplegable */
-html.tema-oscuro .menu-toggle { background: #242f2a; color: #e6efe9; }
-html.tema-oscuro .menu-toggle:active { background: #2c3a33; }
-html.tema-oscuro .nav-menu-panel {
-  background: #242f2a;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-html.tema-oscuro .nav-menu-item { color: #e6efe9; }
-html.tema-oscuro .nav-menu-item:hover { background: #2c3a33; }
-html.tema-oscuro .nav-menu-item.active { background: #35514a; }
 
 /* Tu opinión (feedback) */
 html.tema-oscuro .fb-title,
