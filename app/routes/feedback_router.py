@@ -45,7 +45,8 @@ class FeedbackRequest(BaseModel):
     user_id: Optional[str] = None  # ignorado: el user_id sale del token
     texto: Optional[str] = None
     categoria: Optional[str] = "general"
-    rating: Optional[int] = None
+    rating: Optional[int] = Field(None, ge=1, le=5)
+    rating_recomendaria: Optional[int] = Field(None, ge=1, le=5)  # ¿recomendarías/usarías Numa?
     audio_base64: Optional[str] = None
     audio_mime: Optional[str] = None
 
@@ -88,13 +89,14 @@ def feedback_endpoint(req: FeedbackRequest, user_id: str = Depends(get_current_u
         raise HTTPException(status_code=413, detail="Audio demasiado largo")
     try:
         feedback_repo.save_feedback({
-            "user_id":      user_id,
-            "texto":        _truncar(req.texto),
-            "categoria":    req.categoria or "general",
-            "rating":       req.rating,
-            "audio_base64": req.audio_base64,
-            "audio_mime":   req.audio_mime,
-            "app_version":  "mvp-1",
+            "user_id":             user_id,
+            "texto":               _truncar(req.texto),
+            "categoria":           req.categoria or "general",
+            "rating":              req.rating,
+            "rating_recomendaria": req.rating_recomendaria,
+            "audio_base64":        req.audio_base64,
+            "audio_mime":          req.audio_mime,
+            "app_version":         "mvp-1",
         })
         return {"ok": True}
     except Exception as e:

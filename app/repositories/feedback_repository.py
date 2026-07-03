@@ -14,7 +14,7 @@ class FeedbackRepository:
 
     def get_feedback(self, limit: int, categoria: Optional[str]) -> list:
         query = supabase.table("user_feedback") \
-            .select("id, created_at, user_id, texto, categoria, rating, audio_mime, app_version") \
+            .select("id, created_at, user_id, texto, categoria, rating, rating_recomendaria, audio_mime, app_version") \
             .order("created_at", desc=True) \
             .limit(limit)
 
