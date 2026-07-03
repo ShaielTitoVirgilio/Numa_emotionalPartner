@@ -9,9 +9,6 @@ class FeedbackRepository:
         row = {k: v for k, v in data.items() if v is not None}
         supabase.table("user_feedback").insert(row).execute()
 
-    def save_survey(self, data: dict) -> None:
-        supabase.table("surveys").insert(data).execute()
-
     def get_feedback(self, limit: int, categoria: Optional[str]) -> list:
         query = supabase.table("user_feedback") \
             .select("id, created_at, user_id, texto, categoria, rating, rating_recomendaria, audio_mime, app_version") \

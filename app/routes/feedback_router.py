@@ -26,21 +26,6 @@ def _validar_admin_key(provided: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="No autorizado")
 
 
-class SurveyAnswers(BaseModel):
-    nps: int
-    utilidad: Optional[str] = None
-    opinion: Optional[str] = None
-    features: Optional[str] = None
-    fallas: Optional[str] = None
-
-
-class SurveyRequest(BaseModel):
-    user_id: Optional[str] = None  # ignorado: el user_id sale del token
-    session_length_s: int
-    message_count: int
-    answers: SurveyAnswers
-
-
 class FeedbackRequest(BaseModel):
     user_id: Optional[str] = None  # ignorado: el user_id sale del token
     texto: Optional[str] = None
@@ -62,25 +47,6 @@ def _truncar(valor: Optional[str], max_chars: int = MAX_TEXTO_CHARS) -> Optional
     if valor is None:
         return None
     return valor[:max_chars]
-
-
-@router.post("/survey")
-def survey_endpoint(req: SurveyRequest, user_id: str = Depends(get_current_user_id)):
-    try:
-        feedback_repo.save_survey({
-            "user_id":         user_id,
-            "session_length_s": req.session_length_s,
-            "message_count":   req.message_count,
-            "nps":             req.answers.nps,
-            "utilidad":        _truncar(req.answers.utilidad, 2000),
-            "opinion":         _truncar(req.answers.opinion, 2000),
-            "features":        _truncar(req.answers.features, 2000),
-            "fallas":          _truncar(req.answers.fallas, 2000),
-        })
-        return {"ok": True}
-    except Exception as e:
-        print("Survey error:", e)
-        return {"ok": True}
 
 
 @router.post("/feedback")
