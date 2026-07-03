@@ -1,7 +1,5 @@
-import base64
 import hmac
 from fastapi import APIRouter, HTTPException, Header, Depends
-from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.core.auth import get_current_user_id
@@ -13,8 +11,6 @@ router = APIRouter()
 feedback_repo = FeedbackRepository()
 
 MAX_TEXTO_CHARS = 5000
-# ~10 MB de audio en base64 (4/3 de overhead)
-MAX_AUDIO_B64_CHARS = 14_000_000
 
 
 def _validar_admin_key(provided: Optional[str]) -> None:
@@ -29,11 +25,8 @@ def _validar_admin_key(provided: Optional[str]) -> None:
 class FeedbackRequest(BaseModel):
     user_id: Optional[str] = None  # ignorado: el user_id sale del token
     texto: Optional[str] = None
-    categoria: Optional[str] = "general"
     rating: Optional[int] = Field(None, ge=1, le=5)
     rating_recomendaria: Optional[int] = Field(None, ge=1, le=5)  # ¿recomendarías/usarías Numa?
-    audio_base64: Optional[str] = None
-    audio_mime: Optional[str] = None
 
 
 class ExerciseRatingRequest(BaseModel):
@@ -51,18 +44,12 @@ def _truncar(valor: Optional[str], max_chars: int = MAX_TEXTO_CHARS) -> Optional
 
 @router.post("/feedback")
 def feedback_endpoint(req: FeedbackRequest, user_id: str = Depends(get_current_user_id)):
-    if req.audio_base64 and len(req.audio_base64) > MAX_AUDIO_B64_CHARS:
-        raise HTTPException(status_code=413, detail="Audio demasiado largo")
     try:
         feedback_repo.save_feedback({
             "user_id":             user_id,
             "texto":               _truncar(req.texto),
-            "categoria":           req.categoria or "general",
             "rating":              req.rating,
             "rating_recomendaria": req.rating_recomendaria,
-            "audio_base64":        req.audio_base64,
-            "audio_mime":          req.audio_mime,
-            "app_version":         "mvp-1",
         })
         return {"ok": True}
     except Exception as e:
@@ -90,29 +77,12 @@ def exercise_rating_endpoint(req: ExerciseRatingRequest, user_id: str = Depends(
 @router.get("/admin/feedback")
 def admin_feedback(
     limit: int = 50,
-    categoria: Optional[str] = None,
     x_admin_key: Optional[str] = Header(None),
 ):
     _validar_admin_key(x_admin_key)
     try:
-        data = feedback_repo.get_feedback(limit, categoria)
+        data = feedback_repo.get_feedback(limit)
         return {"total": len(data), "feedbacks": data}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/admin/feedback/{feedback_id}/audio")
-def admin_feedback_audio(feedback_id: str, x_admin_key: Optional[str] = Header(None)):
-    _validar_admin_key(x_admin_key)
-    try:
-        data = feedback_repo.get_feedback_audio(feedback_id)
-        if not data or not data.get("audio_base64"):
-            raise HTTPException(status_code=404, detail="Audio no encontrado")
-        audio_bytes = base64.b64decode(data["audio_base64"])
-        mime = data.get("audio_mime", "audio/webm")
-        return Response(content=audio_bytes, media_type=mime)
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

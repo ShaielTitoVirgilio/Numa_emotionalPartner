@@ -9,16 +9,12 @@ class FeedbackRepository:
         row = {k: v for k, v in data.items() if v is not None}
         supabase.table("user_feedback").insert(row).execute()
 
-    def get_feedback(self, limit: int, categoria: Optional[str]) -> list:
-        query = supabase.table("user_feedback") \
-            .select("id, created_at, user_id, texto, categoria, rating, rating_recomendaria, audio_mime, app_version") \
+    def get_feedback(self, limit: int) -> list:
+        return supabase.table("user_feedback") \
+            .select("id, created_at, user_id, texto, rating, rating_recomendaria") \
             .order("created_at", desc=True) \
-            .limit(limit)
-
-        if categoria:
-            query = query.eq("categoria", categoria)
-
-        return query.execute().data
+            .limit(limit) \
+            .execute().data
 
     def save_exercise_rating(self, user_id: str, exercise_id: str, rating: int, valor_texto: Optional[str]) -> None:
         supabase.table("exercise_ratings").insert({
@@ -58,14 +54,6 @@ class FeedbackRepository:
             return bool(res.data)
         except Exception:
             return False
-
-    def get_feedback_audio(self, feedback_id: str) -> dict:
-        res = supabase.table("user_feedback") \
-            .select("audio_base64, audio_mime") \
-            .eq("id", feedback_id) \
-            .single() \
-            .execute()
-        return res.data
 
     def get_crisis_logs(self, limit: int, solo_pendientes: bool) -> list:
         query = supabase.table("crisis_logs") \
