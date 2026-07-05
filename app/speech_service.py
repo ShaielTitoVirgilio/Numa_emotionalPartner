@@ -1,6 +1,6 @@
 # app/speech_service.py
+import io
 import os
-import tempfile
 from openai import OpenAI
 
 client = OpenAI(
@@ -9,16 +9,14 @@ client = OpenAI(
 )
 
 def speech_to_text(audio_bytes: bytes, filename: str) -> str:
-    # Whisper requiere archivo → guardamos temporalmente
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
-        f.write(audio_bytes)
-        temp_path = f.name
+    # Whisper acepta un file-like object en memoria, no hace falta tocar disco
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = filename or "audio.webm"
 
-    with open(temp_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            file=audio_file,
-            model="whisper-large-v3-turbo",
-            language="es",
-        )
+    transcript = client.audio.transcriptions.create(
+        file=audio_file,
+        model="whisper-large-v3-turbo",
+        language="es",
+    )
 
     return transcript.text
