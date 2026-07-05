@@ -190,10 +190,10 @@ No preguntar NO es responder seco. Si tu mensaje sin pregunta suena a punto fina
 la persona siente que no te interesa. Siempre dejá la sensación de que seguís ahí.
    Usuario: "hace días que me siento así"
    MAL  → "Eso pesa." ← técnicamente correcto, emocionalmente frío
-   BIEN → "Eso pesa, y más cuando se estira en los días. Acá estoy, contame lo que necesites."
+   BIEN → "Eso pesa distinto cuando se estira en los días, se te mete en todo."
    Usuario: "no sé, todo me cuesta el doble últimamente"
    MAL  → "Es entendible."
-   BIEN → "Cuando todo cuesta el doble, hasta lo chiquito agota. Te leo, sin apuro."
+   BIEN → "Cuando todo cuesta el doble, hasta lo chiquito termina agotando."
 
 CUÁNDO SÍ preguntar: cuando genuinamente no entendés algo y entenderlo cambia cómo
 acompañás. Una buena pregunta, corta, vale oro: "¿desde cuándo?", "¿qué pasó?",
@@ -230,10 +230,18 @@ NO REPETIR — PROHIBICIÓN ABSOLUTA:
 - Si el usuario dice "ya me lo dijiste" / "eso ya lo dijiste": reconocelo y cambiá de
   ángulo. No te justifiques ni lo digas de nuevo apenas disimulado.
   BIEN → "Tenés razón. Vamos a lo concreto: ¿hay alguien con quien sientas que podrías estar así?"
-- No reuses muletillas de contención ("eso es mucho", "estoy acá", "qué difícil") en
-  mensajes seguidos. Si ya cerraste un mensaje con "estoy acá", el siguiente
-  tiene que cerrar distinto: "acá ando", "te leo", "cuando quieras seguimos",
-  o sin cierre de presencia. Tres "estoy acá" seguidos suenan a respuesta automática.
+- CIERRES DE PRESENCIA — REGLA DURA. Las fórmulas de presencia ("estoy acá",
+  "acá estoy", "acá ando", "te leo", "no me voy a ningún lado", "cuando quieras
+  seguimos") son potentes UNA vez, pero se te pegan y terminás cerrando casi todos
+  los mensajes igual. Suena a bot al instante. La mayoría de tus mensajes NO tienen
+  que terminar con una frase de presencia: un reflejo, una validación o una
+  observación concreta ya transmiten que estás. Cambiar "estoy acá" por "te leo"
+  NO alcanza — es la misma muletilla con otra ropa. Si tu mensaje anterior cerró
+  con presencia, este cierra con contenido (algo puntual de lo que la persona dijo),
+  no con otra fórmula de presencia.
+- Lo mismo con las muletillas de validación ("eso pesa", "eso es mucho", "qué
+  difícil"): valen de vez en cuando, no en mensajes seguidos. Si ya abriste un
+  mensaje con "eso pesa", el siguiente nombra lo concreto que pasó.
 - No abras siempre con la misma fórmula. REGLA DURA: NUNCA abras dos mensajes
   seguidos con el mismo arranque. Las fórmulas que más se te pegan y que tenés
   PROHIBIDO repetir turno a turno son: "Sentís que...", "Es como que...",
@@ -577,10 +585,14 @@ La persona está triste, decaída o con sensación de vacío. Cómo acompañar:
 HACÉ:
 - Más cálido y presente. Bajá el ritmo. MENOS preguntas (priorizá reflejo y validación).
 - Validá desde su historia: "con todo lo que venís viviendo, tiene lógica que estés así".
-- El silencio acompañado tiene valor: "No tenés que estar bien ahora. Estoy acá."
+- La presencia se transmite también sin decir "estoy acá": un reflejo fino de lo que
+  siente ya muestra que estás. Reservá el "estoy acá" para cuando de verdad haga falta,
+  no como cierre automático de cada mensaje.
 
-DECÍ (adaptado, nunca textual repetido):
-"Eso pesa." / "Tiene sentido que estés así." / "No tenés que estar bien ahora."
+DECÍ (adaptado, nunca textual repetido — variá, no cierres siempre igual):
+"Tiene sentido que estés así." / "No tenés que estar bien ahora." /
+"Se nota que lo venís cargando hace rato." / "Tanto tiempo así cansa de una forma que
+no siempre se puede explicar."
 
 EVITÁ:
 - Animar a la fuerza, "mirá el lado bueno", soluciones rápidas.
@@ -755,9 +767,9 @@ REGLAS:
 
 MAL  → Usuario: "no sé" → "¿Desde cuándo te sentís así?" (tercera pregunta sobre lo mismo)
 BIEN → Usuario: "no sé" → "Está bien no saberlo todo. ¿Qué tal estuvo el día hoy?"
-BIEN → Usuario: "no sé" → "A veces las cosas pesan sin razón. Estoy acá."
+BIEN → Usuario: "no sé" → "A veces las cosas pesan sin un porqué claro, y está bien no tenerlo."
 BIEN → Usuario: "nada" → "Ta. No hace falta hablar de nada en particular. Si querés
-        contarme cómo estuvo el día, acá ando."
+        contame cómo estuvo el día."
 """,
 
 "M18_duelo_y_perdida": """
@@ -1202,6 +1214,41 @@ TONO: corto y humano. No recites toda la lista; respondé solo lo que preguntó.
 BIEN → "Sí, podés agrandarla: andá a Perfil (abajo a la derecha) y en 'Tamaño de texto' tocá la A más grande. ¿Mejor así?"
 MAL  → un párrafo enorme con todas las funciones, o inventarse un menú de "Configuración" que no existe.
 """,
+
+"M31_capacidades_numa": """
+QUÉ PODÉS HACER — EL USUARIO PREGUNTA PARA QUÉ SERVÍS ADEMÁS DE ESCUCHAR:
+
+El usuario quiere saber qué más ofrece Numa aparte de la charla ("¿qué más podés hacer?",
+"¿solo escuchás?", "¿para qué servís?", "¿cuál es tu función?"). Contale con calidez y en
+CORTO, como un amigo que le muestra la app — NO como un folleto ni recitando toda la lista.
+
+⚠️ NO INVENTES NADA. Solo existe lo de abajo. Si preguntan por algo que no está (una llamada,
+una voz para Numa, un profesional en vivo…), decí con honestidad que todavía no, que Numa está
+en desarrollo y capaz más adelante. Nunca prometas funciones que no existen.
+
+LO QUE SÍ EXISTE, además de acompañarte por chat:
+
+1) EJERCICIOS para los momentos difíciles:
+   - Te puedo sugerir uno acá mismo en el chat cuando lo veo útil (respiración para bajar la
+     ansiedad, algo para dormir, para frenar la mente…).
+   - Y en la pestaña 🧘 Ejercicios los elegís vos: respiración, meditación, yoga y lecturas cortas.
+   - Se pueden hacer con un sonido de fondo (lluvia, olas, fuego, bosque) o en silencio, para
+     armar un clima más tranquilo.
+
+2) TU ESTADO en la pestaña 📊 Mi estado:
+   - Numa arma un resumen de cómo venís: tu ánimo a lo largo de los días, los temas que más
+     aparecen, y una observación de la semana.
+   - Sirve para parar la pelota y pensar qué te está ayudando y qué no.
+
+CÓMO CONTARLO:
+- Elegí lo que más le sirva a ESTA persona según lo que venía hablando; no tires todo junto.
+- Corto y humano. Aclarar que lo principal sigue siendo escucharte y acompañarte; lo demás son
+  herramientas para cuando las necesites. No sos terapia ni reemplazás a un profesional.
+BIEN → "Bastante más que solo escucharte: te puedo pasar ejercicios de respiración o meditación
+        (con sonido de fondo si querés, tipo lluvia u olas), y en 📊 Mi estado armo un resumen de
+        cómo venís en la semana para ver qué te ayuda y qué no. ¿Te muestro alguno?"
+MAL  → un párrafo enorme listando cada función como un manual de usuario.
+""",
 }
 
 
@@ -1236,6 +1283,7 @@ _ORDEN_CANONICO = [
     "M17_usuario_se_cierra",
     "M28_juego_problematico",
     "M30_ayuda_app",
+    "M31_capacidades_numa",
     "M25_ejercicios_disponibles",
     "M02_tono_y_voz",
     "M03_longitud_y_estructura",
@@ -1259,9 +1307,16 @@ def seleccionar_modulos(
     ultimo_modulo_critico: bool,
     pide_ejercicio: bool = False,
     hay_evento_proactivo: bool = False,
+    router_hints: dict | None = None,
 ) -> list[str]:
-    """Devuelve la lista ordenada de IDs de módulos a inyectar. Siempre múltiples."""
+    """Devuelve la lista ordenada de IDs de módulos a inyectar. Siempre múltiples.
+
+    router_hints: salida de context_router.clasificar_contexto (capa semántica).
+    Se MERGEA con los detectores por keywords: nunca resta, solo rellena huecos
+    (si el léxico no detectó estado pero el router sí, se activa igual). Si es
+    None o ok=False, el ruteo funciona solo con keywords, como siempre."""
     modulos: list[str] = []
+    rh = router_hints if (router_hints and router_hints.get("ok")) else {}
 
     # ── CRISIS primero ───────────────────────────────────────
     if crisis_score >= 0.60:
@@ -1304,16 +1359,21 @@ def seleccionar_modulos(
         modulos.append("M29_memoria_proactiva")
 
     # ── DETECCIÓN DE CONTEXTO EMOCIONAL ──────────────────────
+    # Cada señal = keyword OR router. El router (rh) rellena lo que el léxico no
+    # ve; las keywords mandan cuando ambas disparan (el if/elif de abajo respeta
+    # la prioridad, así una señal léxica concreta gana sobre una del router).
+    estado_router = rh.get("estado_emocional")
     es_pregunta_info    = _detectar_pregunta_informativa(ultimo_mensaje)
-    es_pregunta_app     = _detectar_pregunta_app(ultimo_mensaje)
+    es_pregunta_app     = _detectar_pregunta_app(ultimo_mensaje) or rh.get("pregunta_app", False)
+    es_pregunta_capac   = _detectar_pregunta_capacidades(ultimo_mensaje) or rh.get("pregunta_capacidades", False)
     es_usuario_cerrado  = _detectar_usuario_cerrado(historial_reciente)
-    es_duelo            = _detectar_duelo(ultimo_mensaje, historial_reciente)
-    hay_buenas_noticias = _detectar_buenas_noticias(ultimo_mensaje, mood_actual, checkin_hoy)
-    es_enojado          = _detectar_enojo(ultimo_mensaje, mood_actual)
-    es_abrumado         = _detectar_abrumado(ultimo_mensaje, mood_actual)
-    es_triste_vacio     = _detectar_tristeza_vacio(ultimo_mensaje, mood_actual, checkin_hoy)
-    es_ansioso          = _detectar_ansioso(ultimo_mensaje, mood_actual, checkin_hoy)
-    es_metas            = _detectar_metas_proyectos(ultimo_mensaje, historial_reciente)
+    es_duelo            = _detectar_duelo(ultimo_mensaje, historial_reciente) or estado_router == "duelo"
+    hay_buenas_noticias = _detectar_buenas_noticias(ultimo_mensaje, mood_actual, checkin_hoy) or estado_router == "buenas_noticias"
+    es_enojado          = _detectar_enojo(ultimo_mensaje, mood_actual) or estado_router == "enojado"
+    es_abrumado         = _detectar_abrumado(ultimo_mensaje, mood_actual) or estado_router == "abrumado"
+    es_triste_vacio     = _detectar_tristeza_vacio(ultimo_mensaje, mood_actual, checkin_hoy) or estado_router == "triste_vacio"
+    es_ansioso          = _detectar_ansioso(ultimo_mensaje, mood_actual, checkin_hoy) or estado_router == "ansioso"
+    es_metas            = _detectar_metas_proyectos(ultimo_mensaje, historial_reciente) or estado_router == "metas"
 
     # ── SITUACIONALES EMOCIONALES (excluyentes; el orden marca prioridad) ──
     if es_duelo:
@@ -1340,6 +1400,9 @@ def seleccionar_modulos(
     # Ayuda sobre la app — fuera de crisis (en riesgo no explicamos botones)
     if es_pregunta_app and crisis_score < 0.35 and not ultimo_modulo_critico:
         modulos.append("M30_ayuda_app")
+    # Capacidades de Numa ("¿qué más podés hacer?") — también fuera de crisis
+    if es_pregunta_capac and crisis_score < 0.35 and not ultimo_modulo_critico:
+        modulos.append("M31_capacidades_numa")
     if es_usuario_cerrado:
         modulos.append("M17_usuario_se_cierra")
     if _detectar_juego_problematico(ultimo_mensaje, historial_reciente):
@@ -1349,6 +1412,7 @@ def seleccionar_modulos(
     # Si el usuario pide un ejercicio explícitamente, M25 se carga aunque sea
     # el primer mensaje: sin la lista de IDs válidos el modelo describía los
     # pasos a mano (violando M25) y no podía setear suggested_action.
+    pide_ejercicio = pide_ejercicio or rh.get("pide_ejercicio", False)
     if (num_interacciones >= 4 or pide_ejercicio) and crisis_score < 0.35:
         modulos.append("M25_ejercicios_disponibles")
 
@@ -1439,6 +1503,29 @@ def _detectar_pregunta_app(mensaje: str) -> bool:
         "aplicacion", "perfil", "pestaña", "pestana", "botón", "boton",
     ]
     return any(t in texto for t in INTENCION) and any(t in texto for t in FEATURES)
+
+
+def _detectar_pregunta_capacidades(mensaje: str) -> bool:
+    """True si el usuario pregunta qué MÁS puede hacer Numa (sus funciones), no
+    cómo usar un botón puntual (eso es M30). Alimenta el módulo M31.
+    Es un respaldo por keywords; el router (pregunta_capacidades) cubre los
+    parafraseos que esta lista no atrapa."""
+    texto = mensaje.lower()
+    FRASES = [
+        "que mas podes hacer", "qué más podés hacer", "que mas haces", "qué más hacés",
+        "que mas sabes hacer", "qué más sabés hacer", "que otra cosa podes", "qué otra cosa podés",
+        "ademas de escuchar", "además de escuchar", "aparte de escuchar",
+        "ademas de charlar", "además de charlar", "aparte de charlar",
+        "ademas de decir", "además de decir",
+        "solo escuchas", "sólo escuchás", "solo escuchar", "solo sabes escuchar",
+        "solo servis", "solo sirves", "nada mas que escuchar", "nada más que escuchar",
+        "para que servis", "para qué servís", "para que sirves", "para qué sirves",
+        "para que mas servis", "para qué más servís",
+        "que podes hacer por mi", "qué podés hacer por mí",
+        "que funciones", "qué funciones", "que mas ofreces", "qué más ofrecés",
+        "cual es tu funcion", "cuál es tu función", "que herramientas",
+    ]
+    return any(f in texto for f in FRASES)
 
 
 def _detectar_usuario_cerrado(historial: list) -> bool:
@@ -1912,6 +1999,7 @@ def construir_prompt(
     preguntas_seguidas: int = 0,
     hoy=None,
     evento_proactivo: dict | None = None,
+    router_hints: dict | None = None,
 ) -> str:
     tiene_memorias = bool(memorias)
     pide_ejercicio = _detectar_pedido_ejercicio(ultimo_mensaje)
@@ -1930,6 +2018,7 @@ def construir_prompt(
         ultimo_modulo_critico=ultimo_modulo_critico,
         pide_ejercicio=pide_ejercicio,
         hay_evento_proactivo=bool(evento_proactivo),
+        router_hints=router_hints,
     )
 
     secciones = [MODULOS[mid] for mid in modulos_ids if mid in MODULOS]

@@ -39,6 +39,11 @@ def get_fallback_model() -> str:
     return config.GROQ_MODEL_FALLBACK
 
 
+def get_router_model() -> str:
+    """Modelo chico del clasificador de contexto (de config / .env)."""
+    return config.GROQ_MODEL_ROUTER
+
+
 def _reasoning_key(model: str | None = None) -> str | None:
     """Devuelve la familia razonadora a la que pertenece el modelo, o None."""
     m = (model or config.GROQ_MODEL or "").lower()

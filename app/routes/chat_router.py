@@ -26,6 +26,7 @@ from app.memory_service import (
 )
 from app.crisis_detector import detectar_crisis
 from app.crisis_verifier import confirmar_riesgo_real
+from app.context_router import clasificar_contexto, score_riesgo_router
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
@@ -118,6 +119,45 @@ def _quitar_che(texto: str) -> str:
     if len(t) < 2:
         return original
     return t
+
+
+# ── Anti-repetición de cierres de presencia ───────────────────────────────
+# El modelo cierra casi cada mensaje con una fórmula de presencia ("estoy acá",
+# "te leo", "acá ando"...). Un cierre así está bien de vez en cuando, pero turno
+# a turno suena a bot (el usuario del chat que motivó esto detectó el patrón al
+# instante). M05 lo desaconseja; esta es la red determinística: si el mensaje
+# anterior de Numa YA cerró con presencia y este también, se recorta el cierre
+# de este. NO aplica en crisis (ahí "Estoy acá" es un paso válido y buscado).
+_PRESENCIA_CIERRE_RE = re.compile(
+    r"(?<![\wñ])(?:"
+    r"ac[áa]\s+estoy|estoy\s+ac[áa]|ac[áa]\s+ando|ac[áa]\s+andamos|ac[áa]\s+estamos|"
+    r"aqu[íi]\s+estoy|ac[áa]\s+me\s+ten[ée]s|"
+    r"te\s+leo|te\s+escucho|"
+    r"no\s+me\s+voy\s+a\s+ning[úu]n\s+lado|no\s+me\s+muevo|"
+    r"cuando\s+quieras\s+seguimos|cuando\s+quieras,\s+seguimos"
+    r")(?![\wñ])",
+    re.IGNORECASE,
+)
+
+
+def _cierra_con_presencia(texto: str) -> bool:
+    """True si alguna de las últimas ~2 oraciones es un cierre CORTO de presencia
+    ('Acá estoy.', 'Te leo, sin apuro.'). El límite de longitud evita marcar una
+    oración larga con contenido propio que apenas menciona 'te leo'."""
+    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
+    for p in partes[-2:]:
+        if _PRESENCIA_CIERRE_RE.search(p) and len(p) <= 60:
+            return True
+    return False
+
+
+def _quitar_cierre_presencia(texto: str) -> str:
+    """Saca las oraciones finales que son solo cierre de presencia, dejando el
+    cuerpo con contenido. Devuelve '' si el mensaje era puro cierre."""
+    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
+    while partes and _PRESENCIA_CIERRE_RE.search(partes[-1]) and len(partes[-1]) <= 70:
+        partes.pop()
+    return " ".join(partes).strip()
 
 
 # ── Anti-tic de apertura repetida ─────────────────────────────────────────
@@ -385,14 +425,31 @@ def chat_endpoint(
             crisis_score = 0.45
             crisis_log_level = "medium"
 
-        # Señal media (desborde/implícitas/degradadas): va al LLM con el módulo
-        # de crisis activado. Se loguea igual para trazabilidad del equipo.
-        if crisis_score >= 0.35 and crisis.get("category"):
+        # ── Capa 2: clasificador semántico de contexto ──────────────
+        # Corre en cada turno (salvo cuando arriba ya devolvimos la respuesta
+        # hardcodeada). Lee el contexto que las keywords no ven y devuelve señales
+        # que se mergean en el ruteo de módulos. Puede ESCALAR el riesgo hacia
+        # M19/M20 (nunca bajarlo) — pero NO dispara la respuesta hardcodeada:
+        # ese bypass sigue siendo exclusivo de keyword + crisis_verifier.
+        # Fail-safe: si se cae, router_hints["ok"]=False y el ruteo usa solo keywords.
+        router_hints = clasificar_contexto([m.model_dump() for m in conversation])
+        if router_hints.get("ok"):
+            score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
+            if score_router > crisis_score:
+                crisis_score = score_router
+                # Riesgo que el léxico no había marcado: subimos el nivel de log.
+                if crisis_log_level == "none":
+                    crisis_log_level = "medium"
+
+        # Señal media (desborde/implícitas/degradadas/router): va al LLM con el
+        # módulo de crisis activado. Se loguea igual para trazabilidad del equipo.
+        # category cae a "ROUTER_RISK" cuando la señal la aportó solo el clasificador.
+        if crisis_score >= 0.35:
             background_tasks.add_task(
                 feedback_repo.save_crisis_log,
                 user_id,
                 ultimo_mensaje,
-                crisis["category"],
+                crisis.get("category") or "ROUTER_RISK",
                 crisis_log_level,
             )
 
@@ -513,6 +570,7 @@ def chat_endpoint(
             preguntas_seguidas=preguntas_seguidas,
             hoy=hoy,
             evento_proactivo=evento_proactivo,
+            router_hints=router_hints,
         )
 
         result = llm.generate_response(
@@ -541,6 +599,26 @@ def chat_endpoint(
                 aplanado = _aplanar_apertura(mensaje_actual)
                 if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
                     result["message"] = aplanado
+
+        # Anti-repetición de cierres de presencia: si el turno anterior de Numa
+        # ya cerró con "estoy acá"/"te leo"/etc. y este también, recortamos el
+        # de este para que no suene a plantilla. Fuera de crisis (ahí es válido).
+        mensaje_actual = result.get("message") or ""
+        if (
+            crisis_score < 0.35
+            and not ultimo_modulo_critico
+            and _cierra_con_presencia(mensaje_actual)
+        ):
+            previo_cierre_presencia = False
+            for m in reversed(conversation[:-1]):
+                if m.role == "assistant":
+                    previo_cierre_presencia = _cierra_con_presencia(m.content)
+                    break
+            if previo_cierre_presencia:
+                recortado = _quitar_cierre_presencia(mensaje_actual)
+                # Guardia anti-cortante: solo si queda un cuerpo con sustancia.
+                if recortado and len(recortado) >= 40 and len(recortado) >= 0.4 * len(mensaje_actual):
+                    result["message"] = recortado
 
         # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
         # prohibió preguntar; si el modelo desobedece igual, se recorta la

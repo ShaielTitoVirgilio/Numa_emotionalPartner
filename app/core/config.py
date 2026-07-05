@@ -20,6 +20,17 @@ class Config:
     # el chat reintenta automáticamente con este antes de rendirse.
     # ⚠️ qwen/qwen3-32b se apaga en Groq el 17/07/2026 — cambiar este backup antes de esa fecha.
     GROQ_MODEL_FALLBACK: str = os.getenv("GROQ_MODEL_FALLBACK", "qwen/qwen3-32b")
+    # Modelo del clasificador de contexto (context_router.py): NO responde al
+    # usuario, solo decide qué módulos activar leyendo el contexto semántico que
+    # los detectores por keywords no alcanzan. Corre en cada turno.
+    # ⚠️ Se probó llama-3.1-8b-instant (más barato/rápido) pero FALLA en lo
+    # sensible: escala hipérboles ("me quiero morir de la vergüenza", "me mato
+    # estudiando") a crisis explícita y se come planes velados ("el finde lo hago
+    # y listo" lo leía como buena noticia). Para el core de seguridad de la app se
+    # usa qwen/qwen3-32b, que pasó el 100% de la batería (críticos + trampas de
+    # falso positivo) de forma consistente. Es razonador: core/llm.py le apaga el
+    # thinking (reasoning_effort="none") y suma headroom → JSON limpio y rápido.
+    GROQ_MODEL_ROUTER: str = os.getenv("GROQ_MODEL_ROUTER", "qwen/qwen3-32b")
 
 
 config = Config()

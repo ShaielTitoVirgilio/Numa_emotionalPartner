@@ -21,6 +21,11 @@ Chats/
 
 # Scripts de prueba locales
 test_proactiva.py
+eval_70b_real.py
+eval_router_real.py
+
+# Notas internas de pendientes (doc local)
+falta_implementar.md
 
 # Registro de migración (ya aplicada en Supabase; se mantiene local como doc)
 memories_event_migration.sql
