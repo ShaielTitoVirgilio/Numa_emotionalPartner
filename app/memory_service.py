@@ -500,6 +500,28 @@ def _clasificar_evento(days_until: int, followed_up: bool) -> Optional[Tuple[str
     return None  # futuro lejano (>7) o pasado viejo (<-3)
 
 
+# Un tema/evento que ya se insertó en el prompt no se re-inyecta por esta
+# ventana. Antes last_proactive_at se ESCRIBÍA pero nunca se leía: el mismo
+# evento volvía al prompt en cada turno y solo el criterio del LLM evitaba
+# el loop. Ahora el cooldown es real.
+_COOLDOWN_PROACTIVO_HORAS = 20
+
+
+def _en_cooldown_proactivo(last_proactive_at: Any, ahora: Optional[datetime] = None) -> bool:
+    """True si la memoria se insertó en el prompt hace menos de _COOLDOWN_PROACTIVO_HORAS."""
+    if not last_proactive_at:
+        return False
+    try:
+        marca = datetime.fromisoformat(str(last_proactive_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if marca.tzinfo is None:
+        marca = marca.replace(tzinfo=timezone.utc)
+    if ahora is None:
+        ahora = datetime.now(timezone.utc)
+    return (ahora - marca) < timedelta(hours=_COOLDOWN_PROACTIVO_HORAS)
+
+
 def get_proactive_memories(
     user_id: str,
     hoy: Optional[date] = None,
@@ -514,6 +536,8 @@ def get_proactive_memories(
       hoy → máxima · mañana → alta · 2-7 días → media ·
       ayer (sin follow-up) → máxima · 2-3 días atrás (sin follow-up) → media ·
       evento viejo o ya seguido → se ignora.
+    Cooldown (req. 8): un evento ya insertado en el prompt hace menos de
+    _COOLDOWN_PROACTIVO_HORAS no se vuelve a traer.
     """
     if hoy is None:
         hoy = date.today()
@@ -523,7 +547,7 @@ def get_proactive_memories(
     try:
         res = (
             supabase.table("memories")
-            .select("id, content, event_title, event_date, followed_up, priority, category")
+            .select("id, content, event_title, event_date, followed_up, priority, category, last_proactive_at")
             .eq("user_id", user_id)
             .eq("is_active", True)
             .not_.is_("event_date", "null")
@@ -545,6 +569,8 @@ def get_proactive_memories(
         clasif = _clasificar_evento(days_until, followed_up)
         if not clasif:
             continue
+        if _en_cooldown_proactivo(r.get("last_proactive_at")):
+            continue
         bucket, prioridad = clasif
         eventos.append({
             "id":          r["id"],
@@ -563,10 +589,79 @@ def get_proactive_memories(
     return eventos
 
 
+def _palabras_relevantes(texto: str) -> set:
+    """Palabras de más de 3 letras para matching por solapamiento."""
+    return {
+        w for w in _re.sub(r"[^\wáéíóúñ ]", " ", (texto or "").lower()).split()
+        if len(w) > 3
+    }
+
+
+# Señales de que el evento NO ocurrió todavía (se pospuso / la fecha guardada
+# estaba mal). Con estas señales el evento NO se cierra: se re-fecha si el
+# mensaje trae una referencia temporal nueva, o queda abierto como está.
+# Caso típico: Numa pregunta "¿cómo te fue con el examen?" → "aún no lo tuve,
+# es el martes que viene". Antes esto marcaba followed_up=true (cerrado para
+# siempre, con la fecha vieja mal guardada).
+_RE_AUN_NO = _re.compile(
+    r"(todav[ií]a no|a[uú]n no|no lo (tuve|tuvimos|rend[ií])|no la (tuve|tuvimos)|"
+    r"no fue|no pas[oó] (todav[ií]a|a[uú]n)|se (pospuso|posterg[oó]|suspendi[oó]|cancel[oó])|"
+    # "lo pasaron para", "la movieron al", "me pasaron la entrevista para", "patearon el examen para"
+    r"(me )?(lo |la |los |las )?(movieron|pasaron|cambiaron|patearon|reprogramaron)\b[^.!?]{0,40}\b(para|al)\b|"
+    r"qued[oó] para)",
+    _re.IGNORECASE,
+)
+
+
+def _decidir_followups(
+    rows: List[Dict[str, Any]],
+    mensaje: str,
+    hoy: date,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Decisión pura (sin DB) sobre qué hacer con cada evento según el mensaje.
+
+    Devuelve (ids_a_cerrar, refechados):
+      - ids_a_cerrar: eventos ya ocurridos de los que el usuario habló → followed_up=true
+      - refechados:   [{id, event_date}] eventos que el usuario dijo que AÚN no
+                      pasaron y dio una referencia temporal nueva → actualizar fecha
+                      y mantener abiertos.
+    """
+    palabras_msg = _palabras_relevantes(mensaje)
+    if not palabras_msg:
+        return [], []
+
+    aun_no = bool(_RE_AUN_NO.search(mensaje))
+    nueva_fecha = resolver_fecha_relativa(mensaje, hoy) if aun_no else None
+
+    ids_a_cerrar: List[str] = []
+    refechados: List[Dict[str, Any]] = []
+
+    for r in rows:
+        titulo = (r.get("event_title") or r.get("content") or "")
+        if not (_palabras_relevantes(titulo) & palabras_msg):
+            continue
+
+        ev_date = parse_fecha_llm(r.get("event_date"))
+
+        if aun_no:
+            # El evento no ocurrió: nunca cerrarlo. Si hay fecha nueva futura, re-fechar.
+            if nueva_fecha and nueva_fecha > hoy:
+                refechados.append({"id": r["id"], "event_date": nueva_fecha.isoformat()})
+            continue
+
+        # Sin señal de "aún no": solo se cierran eventos ya ocurridos (o de hoy).
+        if ev_date and ev_date <= hoy:
+            ids_a_cerrar.append(r["id"])
+
+    return ids_a_cerrar, refechados
+
+
 def marcar_evento_followup(user_id: str, mensaje: str, hoy: Optional[date] = None) -> None:
     """
     Si el usuario habló de un evento que ya ocurrió (o de hoy), lo marca como
-    followed_up=true para no volver a preguntar (req. 6). Background-task.
+    followed_up=true para no volver a preguntar (req. 6). Si en cambio dice que
+    el evento AÚN no pasó ("todavía no, es el martes que viene"), lo RE-FECHA y
+    lo deja abierto en vez de cerrarlo. Background-task.
 
     Detección: solapamiento de palabras entre el mensaje y el título del evento.
     """
@@ -580,7 +675,8 @@ def marcar_evento_followup(user_id: str, mensaje: str, hoy: Optional[date] = Non
             .eq("is_active", True)
             .eq("followed_up", False)
             .not_.is_("event_date", "null")
-            .lte("event_date", hoy.isoformat())  # solo eventos ya ocurridos o de hoy
+            # Ventana amplia: incluye eventos futuros para poder re-fecharlos
+            # si el usuario avisa que se pospusieron.
             .gte("event_date", (hoy - timedelta(days=4)).isoformat())
             .execute()
         )
@@ -588,25 +684,26 @@ def marcar_evento_followup(user_id: str, mensaje: str, hoy: Optional[date] = Non
         print(f"⚠️ marcar_evento_followup error: {e}")
         return
 
-    palabras_msg = {
-        w for w in _re.sub(r"[^\wáéíóúñ ]", " ", mensaje.lower()).split()
-        if len(w) > 3
-    }
-    if not palabras_msg:
-        return
+    ids_a_cerrar, refechados = _decidir_followups(res.data or [], mensaje, hoy)
 
-    ids: List[str] = []
-    for r in res.data or []:
-        titulo = (r.get("event_title") or r.get("content") or "").lower()
-        palabras_ev = {w for w in _re.sub(r"[^\wáéíóúñ ]", " ", titulo).split() if len(w) > 3}
-        if palabras_ev and (palabras_ev & palabras_msg):
-            ids.append(r["id"])
-
-    if ids:
+    if ids_a_cerrar:
         try:
-            supabase.table("memories").update({"followed_up": True}).in_("id", ids).execute()
+            supabase.table("memories").update({"followed_up": True}).in_("id", ids_a_cerrar).execute()
         except Exception as e:
             print(f"⚠️ no se pudo marcar followed_up: {e}")
+
+    for ref in refechados:
+        try:
+            supabase.table("memories").update({
+                "event_date":         ref["event_date"],
+                "followed_up":        False,
+                # Fecha nueva → se rehabilitan los push y la mención proactiva.
+                "reminder_push_sent": False,
+                "followup_push_sent": False,
+                "last_proactive_at":  None,
+            }).eq("id", ref["id"]).execute()
+        except Exception as e:
+            print(f"⚠️ no se pudo re-fechar el evento {ref.get('id')}: {e}")
 
 
 def marcar_proactivo_insertado(memory_id: str) -> None:
@@ -696,3 +793,233 @@ def marcar_push_enviado(memory_id: str, push_type: str) -> None:
         supabase.table("memories").update({campo: True}).eq("id", memory_id).execute()
     except Exception as e:
         print(f"⚠️ no se pudo marcar {campo}: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════
+# TEMAS ABIERTOS Y MEMORIAS-RECURSO — selector contextual
+# ════════════════════════════════════════════════════════════════════
+# Un "tema abierto" es una memoria SIN fecha con status='open': algo pendiente
+# de resolución que el usuario contó (una pelea, una decisión que está por
+# tomar, una situación sin desenlace). Se cierra cuando cuenta cómo siguió.
+#
+# Una "memoria-recurso" (helped_before=true) es una estrategia/actividad que el
+# usuario reportó que le hizo bien ("salir a correr me despejó"). En momentos
+# tristes o ansiosos se le puede recordar con suavidad, en vez de preguntarle
+# por un hobby que no viene al caso.
+#
+# elegir_memoria_contextual() combina el estado emocional que ya clasifica el
+# router (Qwen) con lo disponible y decide UNA sola cosa para traer al prompt.
+
+_VENTANA_TEMAS_ABIERTOS_DIAS = 45
+_VENTANA_RECURSOS_DIAS = 90
+
+
+def get_open_topics(user_id: str, max_items: int = 5) -> List[Dict[str, Any]]:
+    """Temas abiertos (sin fecha) del usuario, más importantes/recientes primero.
+    Excluye los que están en cooldown de mención proactiva."""
+    since_ts = _iso_utc(datetime.now(timezone.utc) - timedelta(days=_VENTANA_TEMAS_ABIERTOS_DIAS))
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, content, priority, category, created_at, last_proactive_at")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .eq("status", "open")
+            .is_("event_date", "null")
+            .gte("created_at", since_ts)
+            .order("priority", desc=True)
+            .order("created_at", desc=True)
+            .limit(max_items * 2)
+            .execute()
+        )
+    except Exception as e:
+        print(f"⚠️ get_open_topics error: {e}")
+        return []
+    temas = [
+        r for r in (res.data or [])
+        if not _en_cooldown_proactivo(r.get("last_proactive_at"))
+    ]
+    return temas[:max_items]
+
+
+def get_resource_memories(user_id: str, max_items: int = 3) -> List[Dict[str, Any]]:
+    """Memorias-recurso (helped_before) del usuario, más recientes primero.
+    Excluye las que están en cooldown de mención proactiva."""
+    since_ts = _iso_utc(datetime.now(timezone.utc) - timedelta(days=_VENTANA_RECURSOS_DIAS))
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, content, priority, category, created_at, last_proactive_at")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .eq("helped_before", True)
+            .gte("created_at", since_ts)
+            .order("created_at", desc=True)
+            .limit(max_items * 2)
+            .execute()
+        )
+    except Exception as e:
+        print(f"⚠️ get_resource_memories error: {e}")
+        return []
+    recursos = [
+        r for r in (res.data or [])
+        if not _en_cooldown_proactivo(r.get("last_proactive_at"))
+    ]
+    return recursos[:max_items]
+
+
+def elegir_memoria_contextual(
+    estado_emocional: Optional[str],
+    router_ok: bool,
+    riesgo_score: float,
+    evento: Optional[Dict[str, Any]],
+    temas_abiertos: List[Dict[str, Any]],
+    recursos: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Decide UNA memoria para traer proactivamente al prompt según el contexto
+    emocional (clasificado por el router Qwen). Pura, sin DB → testeable.
+
+    Devuelve {"tipo": "evento"|"tema_abierto"|"recurso", "memoria": {...}} o None.
+
+    Política:
+      riesgo ≥ 0.35        → nada (la seguridad no compite con memorias)
+      router caído          → comportamiento previo: solo evento (conservador)
+      duelo                 → solo evento de importancia alta (ej. cirugía)
+      triste_vacio          → recurso ("correr te despejó, capaz te sirve"), o
+                              evento de importancia alta
+      ansioso / abrumado    → recurso, o evento inminente (hoy/mañana/ayer)
+      enojado               → solo evento de hoy/ayer (nada de hobbies ni temas)
+      neutral / metas /
+      buenas_noticias       → evento si hay, si no un tema abierto para retomar
+    """
+    if riesgo_score >= 0.35:
+        return None
+
+    def _ev() -> Optional[Dict[str, Any]]:
+        return {"tipo": "evento", "memoria": evento} if evento else None
+
+    def _rec() -> Optional[Dict[str, Any]]:
+        return {"tipo": "recurso", "memoria": recursos[0]} if recursos else None
+
+    def _tema() -> Optional[Dict[str, Any]]:
+        return {"tipo": "tema_abierto", "memoria": temas_abiertos[0]} if temas_abiertos else None
+
+    if not router_ok:
+        # Sin clasificación semántica: no arriesgamos recursos/temas fuera de
+        # lugar. Se mantiene el comportamiento histórico (solo eventos).
+        return _ev()
+
+    estado = estado_emocional or "neutral"
+    ev_importancia = (evento or {}).get("importance") or 0
+    ev_bucket = (evento or {}).get("bucket")
+
+    if estado == "duelo":
+        return _ev() if ev_importancia >= 4 else None
+
+    if estado == "triste_vacio":
+        return _rec() or (_ev() if ev_importancia >= 4 else None)
+
+    if estado in ("ansioso", "abrumado"):
+        return _rec() or (_ev() if ev_bucket in ("hoy", "manana", "ayer") else None)
+
+    if estado == "enojado":
+        return _ev() if ev_bucket in ("hoy", "ayer") else None
+
+    # neutral / metas / buenas_noticias: momento relajado → evento primero,
+    # si no hay, retomar un tema abierto.
+    return _ev() or _tema()
+
+
+def cerrar_temas_abiertos(user_id: str, mensaje: str) -> None:
+    """Si el usuario habló de un tema abierto, lo cierra (status='closed') para
+    no volver a preguntarle. Si el mensaje dice que AÚN sigue pendiente
+    ("todavía no hablé con él"), lo deja abierto. Background-task.
+
+    El desenlace en sí queda registrado por la memoria nueva que el LLM extrae
+    de ese mismo mensaje; acá solo se cierra el ciclo del tema viejo.
+    """
+    palabras_msg = _palabras_relevantes(mensaje)
+    if not palabras_msg:
+        return
+    if _RE_AUN_NO.search(mensaje):
+        return  # sigue pendiente: no cerrar
+
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, content")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .eq("status", "open")
+            .is_("event_date", "null")
+            .execute()
+        )
+    except Exception as e:
+        print(f"⚠️ cerrar_temas_abiertos error: {e}")
+        return
+
+    ids = [
+        r["id"]
+        for r in (res.data or [])
+        if _palabras_relevantes(r.get("content") or "") & palabras_msg
+    ]
+    if ids:
+        try:
+            supabase.table("memories").update({"status": "closed"}).in_("id", ids).execute()
+        except Exception as e:
+            print(f"⚠️ no se pudieron cerrar temas abiertos: {e}")
+
+
+def _mismo_evento(titulo_a: str, titulo_b: str) -> bool:
+    """Matching laxo entre títulos de evento ("examen" ↔ "examen de matemática")."""
+    a, b = _palabras_relevantes(titulo_a), _palabras_relevantes(titulo_b)
+    return bool(a and b and (a & b))
+
+
+def upsert_event_memory(user_id: str, mem: Dict[str, Any]) -> bool:
+    """Si el usuario ya tiene un evento activo "parecido" (mismo título aproximado),
+    ACTUALIZA esa fila (fecha nueva, se reabre) en vez de crear un duplicado.
+
+    Devuelve True si actualizó una fila existente (el caller NO debe insertar),
+    False si no encontró nada parecido (el caller inserta normal).
+    """
+    titulo_nuevo = (mem.get("event_title") or "").strip()
+    fecha_nueva = mem.get("event_date")
+    if not titulo_nuevo or not fecha_nueva:
+        return False
+
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, event_title, content, priority")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .not_.is_("event_date", "null")
+            .execute()
+        )
+    except Exception as e:
+        print(f"⚠️ upsert_event_memory error: {e}")
+        return False
+
+    for r in res.data or []:
+        titulo_viejo = r.get("event_title") or r.get("content") or ""
+        if not _mismo_evento(titulo_nuevo, titulo_viejo):
+            continue
+        try:
+            supabase.table("memories").update({
+                "content":            mem.get("content") or r.get("content"),
+                "event_title":        titulo_nuevo,
+                "event_date":         fecha_nueva,
+                "priority":           max(r.get("priority") or 3, mem.get("priority") or 3),
+                # Fecha nueva → el ciclo del evento arranca de nuevo.
+                "followed_up":        False,
+                "reminder_push_sent": False,
+                "followup_push_sent": False,
+                "last_proactive_at":  None,
+            }).eq("id", r["id"]).execute()
+            return True
+        except Exception as e:
+            print(f"⚠️ no se pudo actualizar el evento {r.get('id')}: {e}")
+            return False
+
+    return False

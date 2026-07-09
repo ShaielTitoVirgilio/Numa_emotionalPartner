@@ -1,6 +1,7 @@
 import re
 from typing import List, Dict, Any, Optional
 from app.core.db import supabase
+from app.memory_service import upsert_event_memory
 
 _MINIMO_CHARS = 20
 _MINIMO_PALABRAS = 4
@@ -56,6 +57,11 @@ class ConversationRepository:
             # ("Tiene examen."); el resto pasa por el filtro anti-basura habitual.
             if not tiene_evento and not _es_memoria_valida(m.get("content") or ""):
                 continue
+            # Evento repetido (mismo título aproximado que uno activo) → se
+            # actualiza la fila existente (fecha nueva, ciclo reabierto) en vez
+            # de crear un duplicado. Cubre "al final el examen es el martes".
+            if tiene_evento and upsert_event_memory(user_id, m):
+                continue
             row = {
                 "user_id":   user_id,
                 "content":   m["content"],
@@ -68,6 +74,11 @@ class ConversationRepository:
             if m.get("event_date") and m.get("event_title"):
                 row["event_date"] = m["event_date"]
                 row["event_title"] = m["event_title"]
+            # Tema abierto (pendiente de desenlace) / recurso (le hizo bien).
+            if m.get("status") in ("open", "closed"):
+                row["status"] = m["status"]
+            if m.get("helped_before"):
+                row["helped_before"] = True
             rows.append(row)
         if rows:
             supabase.table("memories").insert(rows).execute()

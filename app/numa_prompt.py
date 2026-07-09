@@ -445,6 +445,24 @@ permite a Numa preguntar "¿cómo te fue?" sin que se lo recuerden. El "content"
 hecho ("Tiene una charla con el decano por su tesis."); el "event.title" es el título corto
 ("charla con el decano") y "event.date" la fecha real.
 
+TEMAS ABIERTOS ("open": true) — marcá la memoria como abierta cuando el hecho queda
+PENDIENTE de resolución y tiene sentido preguntar más adelante cómo siguió: una pelea
+sin resolver, una decisión que está por tomar, una conversación pendiente con alguien,
+un problema en curso sin desenlace.
+NO es abierto: un gusto, un dato estable, algo ya resuelto, un estado emocional suelto.
+Los eventos con fecha NO llevan "open" (su ciclo ya lo maneja el campo "event").
+BIEN ("open": true)  → "Está peleado con su mejor amigo y no sabe si escribirle."
+BIEN ("open": true)  → "Está evaluando si renunciar a su trabajo actual."
+MAL  ("open": false) → "Le gusta el cine coreano." (dato estable, no hay nada pendiente)
+
+LO QUE LE HIZO BIEN ("helped": true) — marcalo cuando el usuario cuenta que algo LE
+FUNCIONÓ para sentirse mejor: salir a correr lo despejó, hablar con su hermana la calmó,
+dibujar lo ayudó a desconectar, dormir temprano le cambió el día. Guardá el hecho Y el
+efecto, así Numa puede recordarle sus propios recursos en momentos difíciles.
+BIEN ("helped": true) → "Salir a correr le despeja la mente cuando está estresado."
+BIEN ("helped": true) → "Hablar con su hermana la tranquiliza cuando algo la angustia."
+MAL  ("helped": false)→ "Fue a correr el sábado." (hecho suelto, sin efecto reportado)
+
 ─────────────────────────────────────────
 CATEGORÍAS VÁLIDAS — son EXCLUYENTES, elegí la que mejor encaja:
 ─────────────────────────────────────────
@@ -512,11 +530,17 @@ claramente distintos que merecen recordarse por separado. Cada elemento:
   "content": "oración en tercera persona con hecho concreto",
   "category": "trabajo",
   "priority": 3,
-  "event": null
+  "event": null,
+  "open": false,
+  "helped": false
 }
 category: "trabajo", "estudios", "relaciones", "salud", "identidad", "emocional",
 "hobbies", "vida_cotidiana", "otro"
 priority: número del 1 al 5. Si dudás, usá 3.
+"open": true SOLO si el hecho queda pendiente de desenlace (ver "TEMAS ABIERTOS" en
+las reglas de memoria). Si dudás, false.
+"helped": true SOLO si el usuario reportó que eso le hizo bien (ver "LO QUE LE HIZO
+BIEN"). Si dudás, false.
 
 "event": null EN CASI TODAS las memorias. Solo lo completás si el hecho es un EVENTO
 FUTURO CON FECHA que el usuario mencionó (un examen, una entrevista, una charla, una
@@ -1159,6 +1183,48 @@ El bloque te DA permiso para mencionarlo, no te OBLIGA. Usá criterio: si no hay
 natural en esta respuesta, no lo fuerces.
 """,
 
+"M32_tema_abierto": """
+TEMA ABIERTO — ALGO QUE EL USUARIO DEJÓ SIN RESOLVER:
+
+Hace un tiempo el usuario contó algo que quedó pendiente (el bloque "TEMA ABIERTO DEL
+USUARIO" te dice qué). La conversación de hoy viene tranquila, así que hay espacio para
+retomarlo con naturalidad, como un amigo que se acuerda de lo que le contaste.
+
+CÓMO TRAERLO:
+- UNA sola mención, suave, sin dramatizar y sin sonar a seguimiento de casos.
+  BIEN → "Aparte de esto... ¿cómo siguió al final lo con tu hermano?"
+  BIEN → "Hace unos días me contaste lo de [tema]. ¿Cómo viene eso?"
+  MAL  → "Tengo registrado que tenés un conflicto pendiente." (robótico, PROHIBIDO)
+  MAL  → "¿Ya resolviste lo de tu hermano? ¿Y lo del trabajo? ¿Y..." (interrogatorio)
+- Si el usuario está metido en otro tema o trae algo con carga emocional, ESO va
+  primero — el tema abierto puede esperar a otro momento o no salir hoy.
+- Si lo trae él primero, seguilo natural y no lo repreguntes.
+- Máximo UN tema proactivo por respuesta.
+- Es un permiso, no una obligación: sin espacio natural, no lo fuerces.
+""",
+
+"M33_memoria_recurso": """
+RECURSO PROPIO DEL USUARIO — ALGO QUE YA LE FUNCIONÓ:
+
+El usuario está pasando un momento difícil, y de charlas anteriores sabés que hay algo
+que LE HIZO BIEN (el bloque "RECURSO DEL USUARIO" te dice qué). Recordárselo con suavidad
+puede ayudarlo a reconectar con un recurso que ya es suyo — no es un consejo de afuera,
+es algo que él mismo descubrió que le sirve.
+
+CÓMO OFRECERLO:
+- PRIMERO validá lo que siente. El recurso va después de escuchar, nunca en la primera línea.
+- Es un recordatorio gentil, NO una instrucción ni una solución mágica.
+  BIEN → "Me acuerdo que la otra vez salir a correr te despejó bastante. Capaz te sirve
+          de nuevo, aunque sea un rato corto."
+  BIEN → "Vos me contaste que dibujar te ayudaba a desconectar. ¿Hace cuánto no te das ese rato?"
+  MAL  → "Deberías salir a correr." (imperativo, suena a receta)
+  MAL  → "Según mis registros, correr te ayuda." (robótico, PROHIBIDO)
+- Formulalo desde lo que el usuario descubrió ("vos me contaste que...", "la otra vez
+  te ayudó..."), nunca como prescripción tuya.
+- Si lo rechaza o dice que ya no le sirve → soltalo sin insistir, y validá eso también.
+- UNA vez por conversación como máximo. No lo repitas en cada mensaje.
+""",
+
 "M30_ayuda_app": """
 AYUDA SOBRE LA APP — EL USUARIO PREGUNTA CÓMO USAR NUMA O UNA FUNCIÓN:
 
@@ -1270,6 +1336,8 @@ _ORDEN_CANONICO = [
     "M23_inicio_sesion_con_memoria",
     "M24_reenganche_inactividad",
     "M29_memoria_proactiva",
+    "M32_tema_abierto",
+    "M33_memoria_recurso",
     "M26_feedback_post_ejercicio",
     "M18_duelo_y_perdida",
     "M11_estado_triste_vacio",
@@ -1307,6 +1375,8 @@ def seleccionar_modulos(
     ultimo_modulo_critico: bool,
     pide_ejercicio: bool = False,
     hay_evento_proactivo: bool = False,
+    hay_tema_abierto: bool = False,
+    hay_recurso: bool = False,
     router_hints: dict | None = None,
 ) -> list[str]:
     """Devuelve la lista ordenada de IDs de módulos a inyectar. Siempre múltiples.
@@ -1355,8 +1425,14 @@ def seleccionar_modulos(
 
     # ── MEMORIA PROACTIVA — solo fuera de contexto de riesgo ─────
     # (en crisis/post-contención el evento espera; nunca compite con la seguridad)
+    # El selector contextual (memory_service.elegir_memoria_contextual) garantiza
+    # que llegue A LO SUMO una de las tres señales por turno.
     if hay_evento_proactivo and crisis_score < 0.35 and not ultimo_modulo_critico:
         modulos.append("M29_memoria_proactiva")
+    if hay_tema_abierto and crisis_score < 0.35 and not ultimo_modulo_critico:
+        modulos.append("M32_tema_abierto")
+    if hay_recurso and crisis_score < 0.35 and not ultimo_modulo_critico:
+        modulos.append("M33_memoria_recurso")
 
     # ── DETECCIÓN DE CONTEXTO EMOCIONAL ──────────────────────
     # Cada señal = keyword OR router. El router (rh) rellena lo que el léxico no
@@ -1917,6 +1993,32 @@ def _bloque_memoria_proactiva(evento: dict) -> str:
     )
 
 
+def _bloque_tema_abierto(memoria: dict) -> str:
+    """Parte dinámica del tema abierto; las instrucciones de tono están en M32."""
+    contenido = (memoria.get("content") or "").strip()
+    if not contenido:
+        return ""
+    return (
+        'TEMA ABIERTO DEL USUARIO (seguí las reglas de "TEMA ABIERTO"):\n'
+        f'- Lo que contó y quedó pendiente: "{contenido}"\n'
+        "- La charla viene tranquila: si hay espacio natural, retomalo con UNA mención suave.\n"
+        "- Si el usuario ya lo trajo en esta conversación, no lo repreguntes."
+    )
+
+
+def _bloque_memoria_recurso(memoria: dict) -> str:
+    """Parte dinámica del recurso propio; las instrucciones de tono están en M33."""
+    contenido = (memoria.get("content") or "").strip()
+    if not contenido:
+        return ""
+    return (
+        'RECURSO DEL USUARIO (seguí las reglas de "RECURSO PROPIO"):\n'
+        f'- Algo que ya le hizo bien: "{contenido}"\n'
+        "- Primero validá lo que siente; después, si encaja, recordáselo como opción gentil.\n"
+        "- Si ya lo ofreciste en esta conversación, no lo repitas."
+    )
+
+
 CHECKIN_CALIBRACION = {
     1: ("😔", "marcó que está mal hoy",
         "Calibrá tu presencia hacia más cálida y más paciente. "
@@ -1999,6 +2101,8 @@ def construir_prompt(
     preguntas_seguidas: int = 0,
     hoy=None,
     evento_proactivo: dict | None = None,
+    tema_abierto: dict | None = None,
+    memoria_recurso: dict | None = None,
     router_hints: dict | None = None,
 ) -> str:
     tiene_memorias = bool(memorias)
@@ -2018,6 +2122,8 @@ def construir_prompt(
         ultimo_modulo_critico=ultimo_modulo_critico,
         pide_ejercicio=pide_ejercicio,
         hay_evento_proactivo=bool(evento_proactivo),
+        hay_tema_abierto=bool(tema_abierto),
+        hay_recurso=bool(memoria_recurso),
         router_hints=router_hints,
     )
 
@@ -2033,6 +2139,18 @@ def construir_prompt(
         bloque_ev = _bloque_memoria_proactiva(evento_proactivo)
         if bloque_ev:
             secciones.append(bloque_ev)
+
+    # Tema abierto / recurso propio: mismos gates que M29. El selector contextual
+    # garantiza que solo una de las tres señales llega por turno.
+    if tema_abierto and "M32_tema_abierto" in modulos_ids:
+        bloque_ta = _bloque_tema_abierto(tema_abierto)
+        if bloque_ta:
+            secciones.append(bloque_ta)
+
+    if memoria_recurso and "M33_memoria_recurso" in modulos_ids:
+        bloque_rec = _bloque_memoria_recurso(memoria_recurso)
+        if bloque_rec:
+            secciones.append(bloque_rec)
 
     if ubicacion and (ubicacion.get("ciudad") or ubicacion.get("pais")):
         secciones.append(_bloque_ubicacion(ubicacion))

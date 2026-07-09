@@ -15,6 +15,10 @@ from app.memory_service import (
     get_topic_patterns_cached,
     invalidate_patterns_cache,
     get_proactive_memories,
+    get_open_topics,
+    get_resource_memories,
+    elegir_memoria_contextual,
+    cerrar_temas_abiertos,
     marcar_evento_followup,
     marcar_proactivo_insertado,
     detectar_evento_con_fecha,
@@ -490,17 +494,56 @@ def chat_endpoint(
         except Exception as e:
             print(f"⚠️ No se pudieron cargar patrones: {e}")
 
-        # ── Memoria proactiva: evento relevante para el contexto de hoy ──
-        # Se elige UNO solo (el más urgente) para no saturar (req. 8: máx 1 por
-        # conversación). Solo se ofrece fuera de contexto de riesgo.
+        # ── Memoria proactiva contextual ─────────────────────────────────
+        # Se elige A LO SUMO UNA cosa para traer al prompt (evento con fecha,
+        # tema abierto sin resolver, o recurso propio del usuario) según el
+        # estado emocional que ya clasificó el router (Qwen). En un momento
+        # triste no se pregunta por el partido del finde; sí se puede recordar
+        # "correr te despejó la última vez". Solo fuera de contexto de riesgo.
         hoy = date.today()
         evento_proactivo: Optional[Dict[str, Any]] = None
+        tema_abierto: Optional[Dict[str, Any]] = None
+        memoria_recurso: Optional[Dict[str, Any]] = None
+        memoria_ctx_id: Optional[str] = None
         if crisis_score < 0.35:
             try:
                 eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
-                evento_proactivo = eventos[0] if eventos else None
+                evento_top = eventos[0] if eventos else None
+
+                router_ok = bool(router_hints.get("ok"))
+                estado_r = router_hints.get("estado_emocional") if router_ok else None
+
+                # Solo se consulta lo que la política puede llegar a usar
+                # (ver elegir_memoria_contextual) para no sumar queries al turno.
+                recursos = (
+                    get_resource_memories(user_id=user_id)
+                    if estado_r in ("triste_vacio", "ansioso", "abrumado")
+                    else []
+                )
+                temas = (
+                    get_open_topics(user_id=user_id)
+                    if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
+                    else []
+                )
+
+                eleccion = elegir_memoria_contextual(
+                    estado_emocional=estado_r,
+                    router_ok=router_ok,
+                    riesgo_score=crisis_score,
+                    evento=evento_top,
+                    temas_abiertos=temas,
+                    recursos=recursos,
+                )
+                if eleccion:
+                    memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
+                    if eleccion["tipo"] == "evento":
+                        evento_proactivo = eleccion["memoria"]
+                    elif eleccion["tipo"] == "tema_abierto":
+                        tema_abierto = eleccion["memoria"]
+                    elif eleccion["tipo"] == "recurso":
+                        memoria_recurso = eleccion["memoria"]
             except Exception as e:
-                print(f"⚠️ No se pudieron cargar eventos proactivos: {e}")
+                print(f"⚠️ No se pudo elegir memoria contextual: {e}")
 
         es_inicio_sesion = len(conversation) == 1
         num_interacciones = len(conversation)
@@ -570,6 +613,8 @@ def chat_endpoint(
             preguntas_seguidas=preguntas_seguidas,
             hoy=hoy,
             evento_proactivo=evento_proactivo,
+            tema_abierto=tema_abierto,
+            memoria_recurso=memoria_recurso,
             router_hints=router_hints,
         )
 
@@ -666,6 +711,13 @@ def chat_endpoint(
             if event_title and event_date:
                 mem["event_title"] = event_title
                 mem["event_date"] = event_date
+            # Tema abierto: solo memorias SIN fecha (el ciclo de los eventos ya
+            # lo maneja followed_up). Recurso: algo que el usuario dijo que le
+            # hizo bien. Ambos son booleanos del LLM → clampeo estricto.
+            if m.get("open") is True and not (event_title and event_date):
+                mem["status"] = "open"
+            if m.get("helped") is True:
+                mem["helped_before"] = True
             memorias_validadas.append(mem)
             contenidos_conocidos.append(content)
 
@@ -679,13 +731,19 @@ def chat_endpoint(
         risk_level = "medium" if crisis_score >= 0.35 else "none"
 
         # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
-        # marcarlo followed_up para no volver a preguntar cómo le fue.
+        # marcarlo followed_up para no volver a preguntar cómo le fue. Si dijo que
+        # AÚN no pasó ("es el martes que viene"), se re-fecha y queda abierto.
         background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
 
-        # Cooldown de mención proactiva (req. 8): si este turno trajo un evento al prompt,
-        # registramos cuándo, para no insistir en cada mensaje con el mismo tema.
-        if evento_proactivo and evento_proactivo.get("id"):
-            background_tasks.add_task(marcar_proactivo_insertado, evento_proactivo["id"])
+        # Ciclo de temas abiertos: si el usuario contó el desenlace de un tema
+        # abierto (sin fecha), se cierra para no volver a preguntarle.
+        background_tasks.add_task(cerrar_temas_abiertos, user_id, ultimo_mensaje)
+
+        # Cooldown de mención proactiva (req. 8): lo que sea que este turno trajo
+        # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
+        # para no insistir en cada mensaje con el mismo tema.
+        if memoria_ctx_id:
+            background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id)
 
         if conversation:
             background_tasks.add_task(
