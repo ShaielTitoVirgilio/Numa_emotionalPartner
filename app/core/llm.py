@@ -1,19 +1,52 @@
 """
-Helpers para llamar a los modelos de texto de Groq de forma uniforme.
+Helpers para llamar a los LLM del backend de forma uniforme.
 
-El modelo se define en una sola variable (`config.GROQ_MODEL`). Algunos modelos
-de Groq son de razonamiento (familia gpt-oss): gastan tokens en un bloque de
-"reasoning" que CUENTA contra max_tokens. Si no se controla, el reasoning se
-come el presupuesto y el JSON sale truncado → Groq devuelve 400
-"Failed to validate JSON". Por eso, para esos modelos:
-  - forzamos reasoning_effort="low" (reasoning corto, ~60 tokens)
-  - sumamos headroom a max_tokens para que el JSON entre completo
+Hay DOS proveedores, ambos OpenAI-compatible (mismo SDK, distinta base_url):
+  - "openrouter" → chat principal (config.CHAT_MODEL, hoy GPT-5.6 Luna)
+  - "groq"       → fallback del chat + clasificadores internos (crisis
+                   verifier, context router, insight del dashboard) + Whisper
+
+`get_client(provider)` devuelve el cliente cacheado; nadie más instancia
+OpenAI(...) a mano.
+
+Sobre el razonamiento (aplica a los dos proveedores): los modelos razonadores
+gastan tokens en un bloque de "reasoning" que CUENTA contra max_tokens. Si no
+se controla, el reasoning se come el presupuesto y el JSON sale truncado.
+  - En Groq (gpt-oss/qwen): reasoning_effort por familia + headroom fijo.
+  - En OpenRouter: algunos modelos (GPT-5.6 Pro, Grok, Claude Fable) tienen el
+    razonamiento OBLIGATORIO — mandar reasoning.enabled=false da 400. Se pide
+    esfuerzo bajo (los no-razonadores lo ignoran) y headroom generoso.
+    Validado en eval_multimodelo (jul 2026).
 """
 from __future__ import annotations
 
 import re
 
+from openai import OpenAI
+
 from app.core.config import config
+
+# ══════════════════════════════════════════════════════════════
+# Registro de clientes por proveedor
+# ══════════════════════════════════════════════════════════════
+
+_BASES: dict[str, tuple[str, str]] = {
+    # provider → (base_url, nombre del atributo de config con la API key)
+    "groq":       ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1",   "OPENROUTER_API_KEY"),
+}
+
+_clients: dict[str, OpenAI] = {}
+
+
+def get_client(provider: str) -> OpenAI:
+    """Cliente OpenAI-compatible cacheado para "groq" u "openrouter"."""
+    cliente = _clients.get(provider)
+    if cliente is None:
+        base_url, key_attr = _BASES[provider]
+        cliente = OpenAI(api_key=getattr(config, key_attr), base_url=base_url)
+        _clients[provider] = cliente
+    return cliente
 
 # Margen extra de tokens para el bloque de reasoning de los modelos razonadores.
 _REASONING_HEADROOM = 320
@@ -29,14 +62,26 @@ _REASONING_EFFORT = {
 }
 
 
-def get_model() -> str:
-    """Modelo de texto activo (de config / .env)."""
+def get_chat_targets() -> list[tuple[OpenAI, str, str]]:
+    """Objetivos del chat principal, en orden de intento.
+
+    Devuelve pares (cliente, proveedor, modelo): primero el primario
+    (CHAT_PROVIDER/CHAT_MODEL) y después el fallback (CHAT_FALLBACK_*) si
+    está configurado y es distinto.
+    """
+    primario = (config.CHAT_PROVIDER, config.CHAT_MODEL)
+    targets = [(get_client(primario[0]), primario[0], primario[1])]
+    respaldo = (config.CHAT_FALLBACK_PROVIDER, config.CHAT_FALLBACK_MODEL)
+    if respaldo[1] and respaldo != primario:
+        targets.append((get_client(respaldo[0]), respaldo[0], respaldo[1]))
+    return targets
+
+
+def get_groq_text_model() -> str:
+    """Modelo de texto en Groq para las piezas internas que NO son el chat
+    (verificador de crisis, insight del dashboard). Desacoplado a propósito
+    del modelo del chat: cambiar CHAT_MODEL no toca estos clasificadores."""
     return config.GROQ_MODEL
-
-
-def get_fallback_model() -> str:
-    """Modelo de respaldo si el primario falla (de config / .env)."""
-    return config.GROQ_MODEL_FALLBACK
 
 
 def get_router_model() -> str:
@@ -69,6 +114,36 @@ def reasoning_extra_body(model: str | None = None) -> dict:
 def max_tokens_for(base: int, model: str | None = None) -> int:
     """Suma headroom de reasoning al max_tokens cuando el modelo lo necesita."""
     return base + _REASONING_HEADROOM if is_reasoning_model(model) else base
+
+
+# ══════════════════════════════════════════════════════════════
+# Variantes por proveedor (para el chat multi-proveedor)
+# ══════════════════════════════════════════════════════════════
+
+# Headroom para OpenRouter: no sabemos a priori cuánto reasoning gasta cada
+# modelo (y varios lo tienen obligatorio), así que es generoso. 600 base +
+# 1000 = 1600, el número validado en eval_multimodelo con GPT-5.6/Grok/Fable.
+_OPENROUTER_HEADROOM = 1000
+
+
+def extra_body_for(provider: str | None, model: str | None = None) -> dict:
+    """extra_body correcto según proveedor.
+
+    OpenRouter: parámetro unificado `reasoning.effort=low` — los modelos con
+    razonamiento obligatorio (Grok, Claude Fable, GPT-5.6 Pro) lo aceptan
+    (enabled=false les da 400) y los no-razonadores lo ignoran.
+    Groq (o proveedor desconocido): la lógica por familia de siempre.
+    """
+    if provider == "openrouter":
+        return {"reasoning": {"effort": "low"}}
+    return reasoning_extra_body(model)
+
+
+def max_tokens_for_provider(base: int, provider: str | None, model: str | None = None) -> int:
+    """max_tokens con el headroom de reasoning que corresponde al proveedor."""
+    if provider == "openrouter":
+        return base + _OPENROUTER_HEADROOM
+    return max_tokens_for(base, model)
 
 
 # Defensa extra: si algún día se cambia reasoning_format a "raw", el modelo

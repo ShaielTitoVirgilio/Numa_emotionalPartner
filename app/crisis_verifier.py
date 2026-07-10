@@ -15,21 +15,11 @@ silenciar una crisis verdadera.
 """
 
 import json
-import os
 
-from dotenv import load_dotenv
-from openai import OpenAI
+from app.core.llm import get_client, get_groq_text_model, reasoning_extra_body, max_tokens_for
 
-from app.core.llm import get_model, reasoning_extra_body, max_tokens_for
-
-load_dotenv()
-
-_client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
-)
-
-# Mismo modelo de texto que el resto del backend (config.GROQ_MODEL).
+# Corre en Groq con config.GROQ_MODEL — desacoplado a propósito del modelo
+# del chat (CHAT_MODEL): es un clasificador de seguridad corto y barato.
 _TIMEOUT_SECONDS = 5
 
 _PROMPT = """Sos un clasificador de seguridad para una app de apoyo emocional en español rioplatense.
@@ -60,8 +50,8 @@ def confirmar_riesgo_real(mensaje: str, categoria: str) -> bool:
     de crisis activados (no se ignora: se acompaña con cuidado y se loguea).
     """
     try:
-        resp = _client.chat.completions.create(
-            model=get_model(),
+        resp = get_client("groq").chat.completions.create(
+            model=get_groq_text_model(),
             temperature=0.0,
             # 40 alcanza para el JSON, pero gpt-oss gasta tokens en reasoning:
             # con headroom el clasificador no se trunca (si no, 400 → fail-safe).

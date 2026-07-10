@@ -1,19 +1,15 @@
 # app/llm_client.py
 
-from dotenv import load_dotenv
-import os
 import re
 import json
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
-from app.core.llm import get_model, get_fallback_model, reasoning_extra_body, max_tokens_for, strip_reasoning
-
-load_dotenv()
-
-_openai_shared_client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
+from app.core.llm import (
+    get_chat_targets,
+    extra_body_for,
+    max_tokens_for_provider,
+    strip_reasoning,
 )
 
 Mood = Literal[
@@ -25,10 +21,14 @@ class ChatMessage(TypedDict):
     role: Literal["user", "assistant"]
     content: str
 
-class MemoryItem(TypedDict):
+class MemoryItem(TypedDict, total=False):
     content: str
     category: str
     priority: int
+    # Opcionales que chat_router valida/clampea antes de persistir:
+    event: Optional[dict]   # {"title": str, "date": "YYYY-MM-DD"} — memoria proactiva
+    open: bool              # tema abierto pendiente de desenlace
+    helped: bool            # recurso que al usuario le hizo bien
 
 class LLMRawResponse(TypedDict):
     message: str
@@ -52,43 +52,65 @@ _FALLBACK_RESPONSE: "LLMRawResponse" = {
 
 
 class LLMClient:
-    def __init__(self):
-        self.client = _openai_shared_client
+    def __init__(
+        self,
+        client: Optional[OpenAI] = None,
+        model: Optional[str] = None,
+        fallback_model: Optional[str] = None,
+    ):
+        # Por default (sin argumentos): los targets de producción de
+        # get_chat_targets() — OpenRouter primario + Groq de respaldo.
+        # Los overrides existen para eval scripts que quieren apuntar un
+        # cliente/modelo específico reusando este mismo parseo/validación
+        # de JSON en vez de reimplementarlo.
+        self._client_override = client
+        self._model_override = model
+        self._fallback_override = fallback_model
+
+    def _targets(self) -> list:
+        """Lista de (cliente, proveedor, modelo) a intentar en orden."""
+        if self._model_override:
+            # Cliente inyectado (evals): proveedor desconocido → None hace que
+            # extra_body/max_tokens caigan a la lógica Groq-legacy, salvo que
+            # el caller los pase explícitos en generate_response.
+            targets = [(self._client_override, None, self._model_override)]
+            if self._fallback_override and self._fallback_override != self._model_override:
+                targets.append((self._client_override, None, self._fallback_override))
+            return targets
+        return get_chat_targets()
 
     def generate_response(
         self,
         conversation: List[ChatMessage],
         system_prompt: str,
+        *,
+        max_tokens_base: int = 600,
+        extra_body: Optional[dict] = None,
     ) -> LLMRawResponse:
 
-        # Modelo primario + backup (si está configurado y es distinto). Si el
-        # primario se cae (outage, rate limit, modelo decomisionado), reintentamos
-        # con el backup antes de rendirnos al mensaje genérico.
-        modelos = [get_model()]
-        backup = get_fallback_model()
-        if backup and backup != modelos[0]:
-            modelos.append(backup)
-
+        # Primario + fallback (proveedor distinto en producción). Si el
+        # primario se cae (outage, rate limit, sin crédito, modelo caído),
+        # reintentamos con el fallback antes de rendirnos al mensaje genérico.
         raw = None
         ultimo_error = None
-        for i, modelo in enumerate(modelos):
+        for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
             try:
-                completion = self.client.chat.completions.create(
+                completion = cliente.chat.completions.create(
                     model=modelo,
                     temperature=0.7,
-                    # 600 base; los modelos de razonamiento (gpt-oss/qwen) reciben
-                    # headroom extra para que el reasoning no trunque el JSON.
-                    max_tokens=max_tokens_for(600, modelo),
+                    # 600 base + headroom según proveedor/modelo para que el
+                    # bloque de reasoning no trunque el JSON.
+                    max_tokens=max_tokens_for_provider(max_tokens_base, proveedor, modelo),
                     response_format={"type": "json_object"},  # Capa 1: fuerza JSON válido a nivel API
                     messages=[
                         {"role": "system", "content": system_prompt},
                         *conversation,
                     ],
-                    extra_body=reasoning_extra_body(modelo),  # reasoning_effort según familia
+                    extra_body=(extra_body if extra_body is not None else extra_body_for(proveedor, modelo)),
                 )
                 raw = completion.choices[0].message.content or ""
                 if i > 0:
-                    print(f"ℹ️ LLM: respondió el modelo de backup ({modelo})")
+                    print(f"ℹ️ LLM: respondió el modelo de backup ({proveedor or '?'}: {modelo})")
                 break
             except Exception as e:
                 # Caso especial (NO es caída): gpt-oss/qwen a veces responde texto
@@ -97,12 +119,12 @@ class LLMClient:
                 # en vez de saltar al backup (el modelo SÍ respondió).
                 recuperado = _recuperar_failed_generation(e)
                 if recuperado is not None:
-                    print(f"ℹ️ Groq json_validate_failed ({modelo}): recuperado failed_generation")
+                    print(f"ℹ️ json_validate_failed ({modelo}): recuperado failed_generation")
                     raw = recuperado
                     break
-                # Caída real (timeout, rate limit, 5xx, modelo caído): probamos el backup.
+                # Caída real (timeout, rate limit, 402, 5xx): probamos el backup.
                 ultimo_error = e
-                print(f"⚠️ LLM error con {modelo}: {e}")
+                print(f"⚠️ LLM error con {proveedor or '?'}: {modelo}: {e}")
 
         if raw is None:
             print(f"⚠️ LLM: fallaron todos los modelos. Último error: {ultimo_error}")
@@ -184,7 +206,18 @@ class LLMClient:
                     prio = max(1, min(5, int(m.get("priority") or 3)))
                 except (TypeError, ValueError):
                     prio = 3
-                memories.append({"content": content, "category": cat, "priority": prio})
+                item: MemoryItem = {"content": content, "category": cat, "priority": prio}
+                # Passthrough de metadata que chat_router valida/clampea antes
+                # de persistir (_validar_evento, checks `is True`). Sin esto,
+                # el LLM marcaba eventos/temas abiertos/recursos y se perdían
+                # acá — solo funcionaba el fallback por keywords.
+                if isinstance(m.get("event"), dict):
+                    item["event"] = m["event"]
+                if m.get("open") is True:
+                    item["open"] = True
+                if m.get("helped") is True:
+                    item["helped"] = True
+                memories.append(item)
         else:
             # Fallback: formato viejo con campos sueltos
             old_content = str(parsed.get("memory") or "").strip()

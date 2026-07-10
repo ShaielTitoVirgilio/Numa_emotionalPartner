@@ -33,3 +33,8 @@ memories_event_migration.sql
 reportar_bugs.txt
 # Informe de auditoría interna
 Analizis-Completo.txt
+
+# Resultados de corridas de eval_multimodelo.py / eval_seguridad_router.py
+eval_multimodelo_resultados.csv
+eval_multimodelo_run*.log
+eval_postrecorte.log

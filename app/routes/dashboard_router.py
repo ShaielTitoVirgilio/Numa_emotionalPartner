@@ -2,18 +2,10 @@
 from datetime import date, timedelta, datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
-from openai import OpenAI
-import os
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
-from app.core.llm import get_model, reasoning_extra_body, max_tokens_for
+from app.core.llm import get_client, get_groq_text_model, reasoning_extra_body, max_tokens_for
 from app.memory_service import get_topic_patterns_cached
-
-# Cliente Groq para generar el insight (reutiliza la misma key)
-_groq = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
-)
 
 # Cache en memoria: { user_id: (fecha_str, insight_dict) }
 _insight_cache: dict = {}
@@ -277,8 +269,8 @@ Devolvé JSON con este formato exacto:
 {{"texto": "...", "tipo": "..."}}"""
 
     try:
-        resp = _groq.chat.completions.create(
-            model=get_model(),
+        resp = get_client("groq").chat.completions.create(
+            model=get_groq_text_model(),
             temperature=0.75,
             max_tokens=max_tokens_for(200),
             response_format={"type": "json_object"},

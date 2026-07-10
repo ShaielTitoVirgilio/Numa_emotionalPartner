@@ -27,19 +27,8 @@ contención — nunca lo bajamos.
 """
 
 import json
-import os
 
-from dotenv import load_dotenv
-from openai import OpenAI
-
-from app.core.llm import get_router_model, reasoning_extra_body, max_tokens_for
-
-load_dotenv()
-
-_client = OpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
-)
+from app.core.llm import get_client, get_router_model, reasoning_extra_body, max_tokens_for
 
 _TIMEOUT_SECONDS = 4
 
@@ -181,7 +170,7 @@ def clasificar_contexto(conversation: list) -> dict:
             return dict(_RESULTADO_VACIO)
 
         modelo = get_router_model()
-        resp = _client.chat.completions.create(
+        resp = get_client("groq").chat.completions.create(
             model=modelo,
             temperature=0.0,
             # Los modelos qwen/gpt-oss habilitados en la org son de razonamiento:

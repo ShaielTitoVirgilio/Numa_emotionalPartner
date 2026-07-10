@@ -9,17 +9,26 @@ class Config:
     SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "")
-    # Modelo de texto de Groq usado en todo el backend (chat, verificador de
-    # crisis, insight del dashboard). Se cambia solo acá / en el .env.
-    # qwen/qwen3-32b se decomisiona en Groq el 17/07/2026. Migramos a
-    # llama-3.3-70b-versatile: sigue activo en Groq, mejor en rioplatense
-    # (menos escapes al tuteo) y NO es modelo de razonamiento, así que core/llm.py
-    # no le aplica reasoning_effort ni headroom — JSON limpio sin ajustes extra.
+
+    # ── Chat principal (la respuesta que ve el usuario) ─────────────────
+    # Corre en OpenRouter (GPT-5.6 Luna: 0/30 fallas de tuteo/eco/comillas en
+    # eval_multimodelo vs 3-4/30 de Llama 70B). Si el primario falla (outage,
+    # rate limit, sin crédito), el chat cae al fallback en Groq — barato,
+    # probado y en otro proveedor, así un outage de OpenRouter no tira el chat.
+    # Rollback instantáneo: CHAT_PROVIDER=groq + CHAT_MODEL=llama-3.3-70b-versatile
+    # en el entorno (Railway) vuelve todo a como estaba, sin deploy.
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    CHAT_PROVIDER: str = os.getenv("CHAT_PROVIDER", "openrouter")
+    CHAT_MODEL: str = os.getenv("CHAT_MODEL", "openai/gpt-5.6-luna")
+    CHAT_FALLBACK_PROVIDER: str = os.getenv("CHAT_FALLBACK_PROVIDER", "groq")
+    CHAT_FALLBACK_MODEL: str = os.getenv("CHAT_FALLBACK_MODEL", "llama-3.3-70b-versatile")
+
+    # ── Piezas internas que se quedan en Groq (no son el chat) ──────────
+    # Modelo de texto de Groq para el verificador de crisis y el insight del
+    # dashboard: clasificaciones cortas y baratas, no vale pagar precio de
+    # GPT-5.6 por ellas. llama-3.3-70b-versatile NO es modelo de razonamiento,
+    # así que core/llm.py no le aplica reasoning_effort ni headroom.
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    # Modelo de respaldo: si el primario falla (outage, rate limit, modelo caído),
-    # el chat reintenta automáticamente con este antes de rendirse.
-    # ⚠️ qwen/qwen3-32b se apaga en Groq el 17/07/2026 — cambiar este backup antes de esa fecha.
-    GROQ_MODEL_FALLBACK: str = os.getenv("GROQ_MODEL_FALLBACK", "qwen/qwen3-32b")
     # Modelo del clasificador de contexto (context_router.py): NO responde al
     # usuario, solo decide qué módulos activar leyendo el contexto semántico que
     # los detectores por keywords no alcanzan. Corre en cada turno.

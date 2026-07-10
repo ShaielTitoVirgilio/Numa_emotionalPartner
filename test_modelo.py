@@ -14,16 +14,18 @@ Uso:
     python test_modelo.py 15         # 15 mensajes
     python test_modelo.py 15 fijo    # primeros 15 (reproducible, no al azar)
 
-Para comparar modelos, exportá GROQ_MODEL antes de correr:
-    GROQ_MODEL=qwen/qwen3-32b           python test_modelo.py 10 fijo
-    GROQ_MODEL=llama-3.3-70b-versatile  python test_modelo.py 10 fijo
+Corre contra los targets de producción (CHAT_PROVIDER/CHAT_MODEL + fallback).
+Para comparar otro modelo, exportá las variables antes de correr:
+    CHAT_MODEL=openai/gpt-5.6-terra python test_modelo.py 10 fijo
+    CHAT_PROVIDER=groq CHAT_MODEL=llama-3.3-70b-versatile python test_modelo.py 10 fijo
+Para comparar varios modelos a la vez, usá eval_multimodelo.py.
 """
 import csv
 import random
 import re
 import sys
 
-from app.core.llm import get_model
+from app.core.llm import get_chat_targets
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
 
@@ -64,7 +66,10 @@ def main():
     seleccion = mensajes[:n] if fijo else random.sample(mensajes, min(n, len(mensajes)))
 
     client = LLMClient()
-    print(f"\n🤖 Modelo activo: {get_model()}")
+    targets = get_chat_targets()
+    primario = f"{targets[0][1]}: {targets[0][2]}"
+    respaldo = f"{targets[1][1]}: {targets[1][2]}" if len(targets) > 1 else "—"
+    print(f"\n🤖 Modelo activo: {primario} (fallback: {respaldo})")
     print(f"📊 Probando {len(seleccion)} mensajes reales\n" + "=" * 70)
 
     fallas = {"tuteo": 0, "eco": 0, "comillas": 0}
