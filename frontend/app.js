@@ -13,7 +13,7 @@ import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, prevReading, closeReading } from './modules/lectura.js';
 import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
-import { mostrarAvisoTesterCada, authHeaders } from './modules/utils.js';
+import { mostrarAvisoTesterCada, mostrarAvisoDescargarApp, authHeaders } from './modules/utils.js';
 import { initDashboard } from './modules/dashboard.js';
 import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternarTemaChat } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
@@ -168,6 +168,8 @@ async function init() {
 
     const profile = await res.json();
 
+    mostrarAvisoDescargarApp();
+
     if (!profile.onboarding_completo) {
       showOnboarding(user.user_id);
     } else {
@@ -179,7 +181,6 @@ async function init() {
         agregarMensaje(`Bienvenido ${user.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, "oso");
       }
       mostrarAvisoTesterCada();
-      mostrarBannerNotificaciones(user.user_id);
     }
   } catch (e) {
     agregarMensaje("Hola 🐼 ¿Cómo estás?", "oso");
