@@ -229,6 +229,63 @@ def invalidate_checkin_cache(user_id: str) -> None:
     _CHECKIN_CACHE.pop((user_id, date.today().isoformat()), None)
 
 
+def _dentro_de_ventana_dias(created_at: Any, dias: int, ahora: Optional[datetime] = None) -> bool:
+    """True si created_at está dentro de los últimos `dias`. Si el timestamp no
+    parsea, devuelve True (conservador: ante la duda, no perder la memoria)."""
+    if not created_at:
+        return True
+    try:
+        marca = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return True
+    if marca.tzinfo is None:
+        marca = marca.replace(tzinfo=timezone.utc)
+    if ahora is None:
+        ahora = datetime.now(timezone.utc)
+    return (ahora - marca) <= timedelta(days=dias)
+
+
+def _protegida_de_desactivacion(row: Dict[str, Any], hoy: Optional[date] = None) -> bool:
+    """True si la memoria NO debe desactivarse por la poda de 3-por-categoría,
+    porque sigue siendo elegible para mención proactiva (el canal que le permite
+    a Numa traerla sin que el usuario la mencione):
+
+      - EVENTO PENDIENTE: fecha futura, o pasada hace <=4 días sin follow-up
+        (la ventana en que get_proactive_memories todavía pregunta "¿cómo te fue?").
+        Un evento ya seguido (followed_up) o viejo vuelve a ser podable.
+      - TEMA ABIERTO: status='open' sin fecha, dentro de la ventana de 45 días
+        que usa get_open_topics. Cerrado el tema, vuelve a ser podable.
+      - RECURSO: helped_before=true, dentro de la ventana de 90 días de
+        get_resource_memories.
+
+    Sin este guard, la poda desactivaba (is_active=false) eventos futuros y
+    temas sin resolver apenas se juntaban 3 memorias más nuevas de la misma
+    categoría — y el canal proactivo se quedaba sin material antes de usarlo."""
+    if hoy is None:
+        hoy = datetime.now(timezone.utc).date()
+
+    ev_date = parse_fecha_llm(row.get("event_date")) if row.get("event_date") else None
+    if ev_date is not None:
+        if ev_date >= hoy:
+            return True  # evento que todavía no ocurrió
+        if not row.get("followed_up") and (hoy - ev_date).days <= 4:
+            return True  # ya pasó pero falta el "¿cómo te fue?"
+
+    if (
+        row.get("status") == "open"
+        and not row.get("event_date")
+        and _dentro_de_ventana_dias(row.get("created_at"), _VENTANA_TEMAS_ABIERTOS_DIAS)
+    ):
+        return True
+
+    if row.get("helped_before") and _dentro_de_ventana_dias(
+        row.get("created_at"), _VENTANA_RECURSOS_DIAS
+    ):
+        return True
+
+    return False
+
+
 def get_recent_memories(
     user_id: str,
     days: int = MEMORY_WINDOW_DAYS_DEFAULT,
@@ -271,12 +328,17 @@ def get_recent_memories(
     unique_rows: List[Dict[str, Any]] = []
     to_deactivate_ids: List[str] = []
 
+    hoy = datetime.now(timezone.utc).date()
     for row in rows:
         cat = (row.get("category") or "").strip().lower()
         if cat in CATEGORIAS_DEDUPLICABLES:
             if category_counts[cat] >= MAX_POR_CATEGORIA:
-                # Ya hay MAX_POR_CATEGORIA memorias mejores de esta categoría
-                if row.get("id"):
+                # Ya hay MAX_POR_CATEGORIA memorias mejores de esta categoría.
+                # Queda fuera del prompt de este turno, pero SOLO se desactiva
+                # si no es material proactivo pendiente (evento futuro, tema
+                # abierto, recurso): eso debe seguir vivo para que Numa pueda
+                # traerlo por sí sola más adelante.
+                if row.get("id") and not _protegida_de_desactivacion(row, hoy):
                     to_deactivate_ids.append(row["id"])
                 continue
             category_counts[cat] += 1
@@ -706,14 +768,31 @@ def marcar_evento_followup(user_id: str, mensaje: str, hoy: Optional[date] = Non
             print(f"⚠️ no se pudo re-fechar el evento {ref.get('id')}: {e}")
 
 
-def marcar_proactivo_insertado(memory_id: str) -> None:
-    """Registra que un evento se insertó en el prompt como mención proactiva (cooldown)."""
+def marcar_proactivo_insertado(memory_id: str, cierre: Optional[str] = None) -> None:
+    """Registra que la memoria se insertó en el prompt como mención proactiva
+    (arranca el cooldown de 20h). `cierre` además CIERRA el ciclo de la memoria
+    una vez mencionada — regla de producto: lo que Numa ya trajo no se vuelve a
+    traer, salvo eventos que todavía no ocurrieron:
+
+      - "followup":    evento YA ocurrido (bucket ayer/reciente) → followed_up=true.
+                       El "¿cómo te fue?" se hace una sola vez; el desenlace queda
+                       registrado por la memoria nueva que el LLM extrae del turno.
+      - "cerrar_tema": tema abierto → status='closed'. Si el tema sigue pendiente
+                       ("sigue igual"), la memoria nueva de ese turno lo re-captura
+                       como abierto (detector/flag) con estado fresco — el ciclo se
+                       renueva solo, sin insistir con la versión vieja.
+      - None:          evento futuro (se menciona de nuevo cuando pase) o recurso
+                       (reutilizable por diseño): solo cooldown.
+    """
     if not memory_id:
         return
+    update: Dict[str, Any] = {"last_proactive_at": _iso_utc(datetime.now(timezone.utc))}
+    if cierre == "followup":
+        update["followed_up"] = True
+    elif cierre == "cerrar_tema":
+        update["status"] = "closed"
     try:
-        supabase.table("memories").update(
-            {"last_proactive_at": _iso_utc(datetime.now(timezone.utc))}
-        ).eq("id", memory_id).execute()
+        supabase.table("memories").update(update).eq("id", memory_id).execute()
     except Exception as e:
         print(f"⚠️ no se pudo marcar last_proactive_at: {e}")
 
@@ -812,6 +891,71 @@ def marcar_push_enviado(memory_id: str, push_type: str) -> None:
 
 _VENTANA_TEMAS_ABIERTOS_DIAS = 45
 _VENTANA_RECURSOS_DIAS = 90
+
+
+# ── Detectores de respaldo de flags proactivos ────────────────────────────
+# El LLM debería marcar "open"/"helped" al guardar cada memoria (M08), pero los
+# sub-produce — y sin esos flags el canal proactivo se queda sin material.
+# Igual que detectar_evento_con_fecha respalda los eventos, estos regex respaldan
+# los otros dos flags leyendo el CONTENT de la memoria. Como el content lo
+# redacta el LLM en tercera persona siguiendo las plantillas de M08, el
+# vocabulario es acotado y los patrones rinden más que sobre texto libre.
+
+# Tema abierto: el hecho quedó PENDIENTE de resolución (decisión por tomar,
+# conflicto en curso, espera de un desenlace).
+_RE_TEMA_ABIERTO_MEM = _re.compile(
+    r"(está (pensando|evaluando|considerando|dudando|viendo|analizando) (en |si |cómo |qué )|"
+    r"no sabe (si |cómo |qué |con quién |por dónde )|"
+    r"duda (entre |si |sobre )|"
+    r"(quedó|queda|tiene|sigue|dejó) pendiente|"
+    r"sin resolver|no (lo|la) resolvió|"
+    r"tiene que (decidir|definir|resolver|hablar con|elegir)|"
+    r"está por (decidir|definir|resolver)|"
+    r"no se anima a|no se decide a?|"
+    r"está pelead[oa] con|sigue pelead[oa]|"
+    r"está esperando (el |la |los |las |una? )?(resultado|respuesta|noticia|confirmación|llamado)|"
+    r"todavía no (sabe|decidió|habló|resolvió|contestó|respondió)|"
+    r"aún no (sabe|decidió|habló|resolvió))",
+    _re.IGNORECASE,
+)
+
+# Recurso: algo que al usuario LE FUNCIONÓ para sentirse mejor (actividad + efecto).
+_RE_RECURSO_MEM = _re.compile(
+    r"(le (hace|hizo|haría) (muy )?bien|"
+    r"l[oae]s? (ayuda|ayudó|ayudaba) a|"
+    r"l[oae]s? (despeja|despejó|calma|calmó|tranquiliza|tranquilizó|relaja|relajó|"
+    r"desconecta|desconectó|centra|centró|ordena|ordenó|alivia|alivió)|"
+    r"le (sirve|sirvió|funciona|funcionó)( para| cuando)?|"
+    r"le cambi(a|ó) el (día|ánimo|humor)|"
+    r"se siente (mejor|más tranquil[oa]|más livian[oa]) (cuando|después|al )|"
+    r"l[oa] hace sentir (mejor|bien|más tranquil[oa]))",
+    _re.IGNORECASE,
+)
+
+# Negaciones: "ya no le sirve", "dejó de ayudarlo" → NO es un recurso vigente.
+_RE_RECURSO_NEGADO = _re.compile(
+    r"((ya )?no (le|lo|la|les) (hace bien|ayuda|sirve|funciona|calma|despeja|relaja|tranquiliza)|"
+    r"dejó de (ayudar|servir|funcionar|hacerle bien)|"
+    r"ya no (le|lo|la))",
+    _re.IGNORECASE,
+)
+
+
+def detectar_tema_abierto(content: str) -> bool:
+    """True si el content describe algo pendiente de desenlace (respaldo del
+    flag "open" que el LLM debería poner). NUNCA aplicar a memorias con fecha:
+    el ciclo de los eventos ya lo maneja followed_up."""
+    return bool(content) and bool(_RE_TEMA_ABIERTO_MEM.search(content))
+
+
+def detectar_recurso(content: str) -> bool:
+    """True si el content describe algo que al usuario le hizo bien (respaldo
+    del flag "helped"). Las negaciones ("ya no le sirve") lo descartan."""
+    if not content:
+        return False
+    if _RE_RECURSO_NEGADO.search(content):
+        return False
+    return bool(_RE_RECURSO_MEM.search(content))
 
 
 def get_open_topics(user_id: str, max_items: int = 5) -> List[Dict[str, Any]]:

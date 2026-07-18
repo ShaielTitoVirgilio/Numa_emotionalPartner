@@ -78,10 +78,22 @@ def get_chat_targets() -> list[tuple[OpenAI, str, str]]:
 
 
 def get_groq_text_model() -> str:
-    """Modelo de texto en Groq para las piezas internas que NO son el chat
-    (verificador de crisis, insight del dashboard). Desacoplado a propósito
-    del modelo del chat: cambiar CHAT_MODEL no toca estos clasificadores."""
+    """Modelo de texto en Groq para el insight del dashboard (única pieza
+    interna que sigue en Groq desde 2026-07-18; el verificador de crisis se
+    movió a OpenRouter, ver get_crisis_verifier_target). Desacoplado a
+    propósito del modelo del chat: cambiar CHAT_MODEL no toca esto."""
     return config.GROQ_MODEL
+
+
+def get_crisis_verifier_target() -> tuple[OpenAI, str, str]:
+    """Objetivo (cliente, proveedor, modelo) del verificador de crisis
+    (confirmar_riesgo_real). Separado de get_chat_targets a propósito: es un
+    clasificador de seguridad, no el chat — puede moverse sin tocar CHAT_*."""
+    return (
+        get_client(config.CRISIS_VERIFIER_PROVIDER),
+        config.CRISIS_VERIFIER_PROVIDER,
+        config.CRISIS_VERIFIER_MODEL,
+    )
 
 
 def get_router_model() -> str:

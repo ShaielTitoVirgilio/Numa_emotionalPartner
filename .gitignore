@@ -38,3 +38,6 @@ Analizis-Completo.txt
 eval_multimodelo_resultados.csv
 eval_multimodelo_run*.log
 eval_postrecorte.log
+
+# Log de envíos del mail de descarga de la app (contiene emails de usuarios)
+scripts/_enviados_descarga_app.log

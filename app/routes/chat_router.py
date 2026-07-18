@@ -22,6 +22,8 @@ from app.memory_service import (
     marcar_evento_followup,
     marcar_proactivo_insertado,
     detectar_evento_con_fecha,
+    detectar_tema_abierto,
+    detectar_recurso,
     resolver_fecha_relativa,
     parse_fecha_llm,
     get_dias_inactivo,
@@ -718,6 +720,14 @@ def chat_endpoint(
                 mem["status"] = "open"
             if m.get("helped") is True:
                 mem["helped_before"] = True
+            # Respaldo server-side de los flags (como detectar_evento_con_fecha
+            # respalda los eventos): el LLM sub-produce open/helped y sin ellos
+            # el canal proactivo se queda sin material. Los detectores leen el
+            # content ya redactado en tercera persona (vocabulario de M08).
+            if "status" not in mem and not (event_title and event_date) and detectar_tema_abierto(content):
+                mem["status"] = "open"
+            if "helped_before" not in mem and detectar_recurso(content):
+                mem["helped_before"] = True
             memorias_validadas.append(mem)
             contenidos_conocidos.append(content)
 
@@ -742,8 +752,17 @@ def chat_endpoint(
         # Cooldown de mención proactiva (req. 8): lo que sea que este turno trajo
         # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
         # para no insistir en cada mensaje con el mismo tema.
+        # Además, lo MENCIONADO cierra su ciclo (regla de producto): un evento ya
+        # ocurrido no se re-pregunta ("followup") y un tema abierto ya traído se
+        # cierra ("cerrar_tema" — si sigue pendiente, la memoria nueva del turno
+        # lo re-captura). Eventos futuros y recursos solo arrancan cooldown.
         if memoria_ctx_id:
-            background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id)
+            cierre = None
+            if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
+                cierre = "followup"
+            elif tema_abierto:
+                cierre = "cerrar_tema"
+            background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id, cierre)
 
         if conversation:
             background_tasks.add_task(

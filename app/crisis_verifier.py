@@ -16,10 +16,12 @@ silenciar una crisis verdadera.
 
 import json
 
-from app.core.llm import get_client, get_groq_text_model, reasoning_extra_body, max_tokens_for
+from app.core.llm import get_crisis_verifier_target, extra_body_for, max_tokens_for_provider
 
-# Corre en Groq con config.GROQ_MODEL — desacoplado a propósito del modelo
-# del chat (CHAT_MODEL): es un clasificador de seguridad corto y barato.
+# Corre en config.CRISIS_VERIFIER_PROVIDER/_MODEL (OpenRouter desde 2026-07-18,
+# antes Llama 70B en Groq — bloqueado en Groq el 17/07) — desacoplado a
+# propósito del modelo del chat (CHAT_MODEL): es un clasificador de seguridad
+# corto y barato, no la respuesta que ve el usuario.
 _TIMEOUT_SECONDS = 5
 
 _PROMPT = """Sos un clasificador de seguridad para una app de apoyo emocional en español rioplatense.
@@ -50,19 +52,21 @@ def confirmar_riesgo_real(mensaje: str, categoria: str) -> bool:
     de crisis activados (no se ignora: se acompaña con cuidado y se loguea).
     """
     try:
-        resp = get_client("groq").chat.completions.create(
-            model=get_groq_text_model(),
+        cliente, proveedor, modelo = get_crisis_verifier_target()
+        resp = cliente.chat.completions.create(
+            model=modelo,
             temperature=0.0,
-            # 40 alcanza para el JSON, pero gpt-oss gasta tokens en reasoning:
-            # con headroom el clasificador no se trunca (si no, 400 → fail-safe).
-            max_tokens=max_tokens_for(40),
+            # 40 alcanza para el JSON, pero los modelos razonadores gastan tokens
+            # en el bloque de reasoning: con headroom el clasificador no se trunca
+            # (si no, 400/JSON cortado → fail-safe).
+            max_tokens=max_tokens_for_provider(40, proveedor, modelo),
             timeout=_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
                 "content": _PROMPT.format(categoria=categoria, mensaje=mensaje[:1000]),
             }],
-            extra_body=reasoning_extra_body(),
+            extra_body=extra_body_for(proveedor, modelo),
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         valor = data.get("riesgo_real")
