@@ -330,6 +330,16 @@ class ChatRequest(BaseModel):
     checkin_recien_hecho: Optional[bool] = False
 
 
+class ImportMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    mood: Optional[str] = None
+
+
+class ChatImportRequest(BaseModel):
+    messages: List[ImportMessage]
+
+
 class ChatResponse(BaseModel):
     message: str
     mood: str
@@ -788,5 +798,130 @@ def chat_endpoint(
 
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# El cliente corta en 10 mensajes de invitado; este es el respaldo server-side
+# (con margen para el historial que el cliente reenvía completo).
+MAX_GUEST_USER_MESSAGES = 12
+
+
+@router.post("/chat/guest", response_model=ChatResponse)
+@limiter.limit("10/minute")
+def chat_guest_endpoint(request: Request, body: ChatRequest):
+    """Chat para usuarios sin cuenta (modo invitado de la app).
+
+    Sin perfil, sin memorias y sin persistencia: la conversación vive solo en
+    el dispositivo hasta que el usuario se registra (ahí se migra vía
+    /chat/import). El pipeline de crisis se mantiene completo — detector,
+    verificador y respuesta determinística — porque el riesgo no distingue
+    entre registrados e invitados.
+    """
+    try:
+        conversation = body.conversation[-MAX_CONV_MESSAGES:]
+        for m in conversation:
+            if len(m.content) > MAX_MSG_CHARS:
+                m.content = m.content[:MAX_MSG_CHARS]
+
+        num_user_msgs = sum(1 for m in conversation if m.role == "user")
+        if num_user_msgs > MAX_GUEST_USER_MESSAGES:
+            raise HTTPException(
+                status_code=403,
+                detail="Límite de mensajes de invitado alcanzado. Creá tu cuenta para seguir hablando.",
+            )
+
+        ultimo_mensaje = conversation[-1].content if conversation else ""
+        crisis = detectar_crisis(ultimo_mensaje)
+        crisis_score = crisis.get("score", 0.0)
+
+        if crisis["detected"]:
+            if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
+                # Sin crisis_log: no hay user_id al que asociarlo.
+                return {
+                    "message":          crisis["message"],
+                    "mood":             "sad",
+                    "suggested_action": None,
+                    "risk_level":       "high",
+                    "nuevas_memorias":  None,
+                }
+            crisis_score = 0.45
+
+        router_hints = clasificar_contexto([m.model_dump() for m in conversation])
+        if router_hints.get("ok"):
+            crisis_score = max(
+                crisis_score,
+                score_riesgo_router(router_hints.get("senal_riesgo", "none")),
+            )
+
+        num_interacciones = len(conversation)
+        historial_reciente = [m.model_dump() for m in conversation[-4:]]
+
+        mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
+        preguntas_seguidas = 0
+        for contenido in reversed(mensajes_numa):
+            if contenido.rstrip().rstrip('"\'').endswith("?"):
+                preguntas_seguidas += 1
+            else:
+                break
+
+        system_prompt = construir_prompt(
+            perfil=None,
+            memorias=[],
+            patrones=[],
+            es_inicio_sesion=num_interacciones == 1,
+            num_interacciones=num_interacciones,
+            es_primera_vez=num_interacciones == 1,
+            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
+            crisis_score=crisis_score,
+            historial_reciente=historial_reciente,
+            mood_actual=body.ultimo_mood,
+            ultimo_mensaje=ultimo_mensaje,
+            preguntas_seguidas=preguntas_seguidas,
+            hoy=date.today(),
+            router_hints=router_hints,
+        )
+
+        result = llm.generate_response(
+            conversation=[m.model_dump() for m in conversation],
+            system_prompt=system_prompt,
+        )
+
+        if result.get("message"):
+            result["message"] = _quitar_che(result["message"])
+
+        return {
+            "message":          result["message"],
+            "mood":             result["mood"],
+            "suggested_action": result.get("suggested_action"),
+            "risk_level":       "medium" if crisis_score >= 0.35 else "none",
+            "nuevas_memorias":  None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/import")
+@limiter.limit("3/minute")
+def chat_import(
+    request: Request,
+    body: ChatImportRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Migra al usuario recién registrado la conversación que tuvo como
+    invitado, para que Numa no 'olvide' lo que ya hablaron."""
+    mensajes = [
+        {"role": m.role, "content": m.content[:MAX_MSG_CHARS], "mood": m.mood}
+        for m in body.messages[-40:]
+        if (m.content or "").strip()
+    ]
+    if not mensajes:
+        return {"ok": True, "imported": 0}
+    try:
+        conversation_repo.import_messages(user_id, mensajes)
+        return {"ok": True, "imported": len(mensajes)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

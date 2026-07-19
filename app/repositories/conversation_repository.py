@@ -83,6 +83,19 @@ class ConversationRepository:
         if rows:
             supabase.table("memories").insert(rows).execute()
 
+    def import_messages(self, user_id: str, mensajes: List[Dict[str, Any]]) -> None:
+        """Inserta de una vez la conversación que un invitado trajo al
+        registrarse (vivía solo en su dispositivo). El mood solo aplica a
+        mensajes de Numa, igual que en save()."""
+        rows = []
+        for m in mensajes:
+            row = {"user_id": user_id, "role": m["role"], "content": m["content"]}
+            if m["role"] == "assistant" and m.get("mood"):
+                row["mood"] = m["mood"]
+            rows.append(row)
+        if rows:
+            supabase.table("conversations").insert(rows).execute()
+
     def deactivate_memories(self, ids: list[str]) -> None:
         if not ids:
             return

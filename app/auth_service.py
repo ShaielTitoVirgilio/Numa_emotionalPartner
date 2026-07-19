@@ -21,6 +21,13 @@ def register_user(email: str, password: str, nombre: str):
     if not user:
         raise Exception("Error al crear el usuario")
 
+    # Signup repetido: GoTrue devuelve un usuario ofuscado SIN identities para no
+    # revelar si el email existe. Sin este corte, el upsert de abajo reintenta ~8s
+    # contra un id inexistente (FK 23503) y el fetch de la app móvil muere antes
+    # con "Network request failed" en vez de mostrar este mensaje.
+    if not user.identities:
+        raise Exception("Este email ya está registrado. Probá iniciando sesión.")
+
     try:
         with_retry(lambda: supabase.table("users_profiles").upsert({
             "id": user.id,

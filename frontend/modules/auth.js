@@ -359,7 +359,7 @@ async function _loginConGoogle() {
     const { error } = await _supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-            redirectTo: 'https://web-production-3f4e4.up.railway.app',
+            redirectTo: window.location.origin,
             queryParams: { prompt: 'select_account' }
         }
     });
@@ -384,6 +384,20 @@ export async function manejarCallbackOAuth() {
     // Recovery flow: el usuario hizo clic en el link de "Reset Password"
     const hash = window.location.hash;
     const hashParams = new URLSearchParams(hash.substring(1));
+
+    // Link de recovery vencido o ya usado: GoTrue redirige con el error en el
+    // hash en vez del token. Sin este aviso el usuario cae en el login pelado
+    // y no entiende qué pasó (visto con testers reales).
+    if (hashParams.get('error_code') === 'otp_expired') {
+        window.history.replaceState(null, '', window.location.pathname);
+        showAuthScreen();
+        const errorEl = document.getElementById('login-error');
+        if (errorEl) {
+            _mostrarError(errorEl, 'El link para restablecer tu contraseña expiró o ya fue usado. Pedí uno nuevo desde "¿Olvidaste tu contraseña?".');
+        }
+        return true;
+    }
+
     if (hashParams.get('type') === 'recovery') {
         const access_token = hashParams.get('access_token');
         const refresh_token = hashParams.get('refresh_token');
