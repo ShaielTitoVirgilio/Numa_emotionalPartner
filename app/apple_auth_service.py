@@ -111,7 +111,13 @@ def find_or_create_apple_user(
             )
         raise
 
-    nombre = full_name or email.split("@")[0]
+    # Apple sólo manda el nombre la primera vez que un Apple ID autoriza la app.
+    # Cuando no viene, NO lo inventamos: rellenar con el local-part del email
+    # significaba guardar "vcd4ckkbvj" (Ocultar mi correo) como si fuera un
+    # nombre real, y terminaba en el prompt como "Se llama vcd4ckkbvj".
+    # Vacío es el estado honesto: el perfil no muestra nombre, Numa no lo usa,
+    # y el usuario puede ponerlo desde Perfil o diciéndoselo a Numa.
+    nombre = full_name or ""
 
     # Guardar perfil con apple_sub (requiere columna apple_sub en users_profiles)
     with_retry(lambda: supabase.table("users_profiles").upsert({
