@@ -6,6 +6,7 @@ que usa el resto de la app) — no cambia el esquema de la base.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
 from app.memory_service import invalidate_patterns_cache
@@ -28,7 +29,7 @@ def listar_memorias(user_id: str = Depends(get_current_user_id)):
         )
         return {"memories": res.data or []}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.delete("/{memory_id}")
@@ -49,4 +50,4 @@ def borrar_memoria(memory_id: str, user_id: str = Depends(get_current_user_id)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

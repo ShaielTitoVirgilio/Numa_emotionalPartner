@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
+from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
 from app.memory_service import invalidate_checkin_cache
@@ -44,7 +45,7 @@ def crear_checkin(body: CheckinRequest, user_id: str = Depends(get_current_user_
         invalidate_checkin_cache(user_id)
         return {"ok": True, "mood_emoji": emoji}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.get("/today")
@@ -63,7 +64,7 @@ def checkin_hoy(user_id: str = Depends(get_current_user_id)):
         data = res.data
         return {"checkin": data[0] if data else None}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.get("/history")
@@ -81,4 +82,4 @@ def historial_checkins(days: int = 30, user_id: str = Depends(get_current_user_i
         )
         return {"checkins": res.data or []}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from app.core.observability import capturar_error
+from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.apple_auth_service import verify_apple_token, find_or_create_apple_user
 
 router = APIRouter()
@@ -21,5 +23,8 @@ def apple_auth_endpoint(req: AppleAuthRequest):
             full_name=req.full_name,
         )
         return result
-    except Exception as e:
+    except NumaError as e:
         raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        capturar_error(e, contexto="apple_auth")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

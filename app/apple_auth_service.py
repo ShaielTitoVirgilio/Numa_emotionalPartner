@@ -7,6 +7,7 @@ from typing import Optional
 from jwt.algorithms import RSAAlgorithm
 from app.auth_service import _auth_client
 from app.core.db import supabase
+from app.core.errors import NumaError
 from app.core.retry import with_retry
 
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
@@ -28,7 +29,7 @@ def verify_apple_token(identity_token: str) -> dict:
 
     matching = next((k for k in keys if k["kid"] == kid), None)
     if not matching:
-        raise Exception("Clave pública de Apple no encontrada.")
+        raise NumaError("Clave pública de Apple no encontrada.")
 
     public_key = RSAAlgorithm.from_jwk(matching)
 
@@ -41,9 +42,9 @@ def verify_apple_token(identity_token: str) -> dict:
             issuer=APPLE_ISS,
         )
     except jwt.ExpiredSignatureError:
-        raise Exception("El token de Apple expiró. Intentá de nuevo.")
+        raise NumaError("El token de Apple expiró. Intentá de nuevo.")
     except jwt.InvalidTokenError as e:
-        raise Exception(f"Token de Apple inválido: {e}")
+        raise NumaError(f"Token de Apple inválido: {e}")
 
     return payload
 
@@ -73,7 +74,7 @@ def find_or_create_apple_user(
         user_email = auth_user.user.email if auth_user.user else email
 
         if not user_email:
-            raise Exception("No se pudo recuperar tu cuenta. Contactá soporte.")
+            raise NumaError("No se pudo recuperar tu cuenta. Contactá soporte.")
 
         try:
             response = client.auth.sign_in_with_password({
@@ -82,11 +83,11 @@ def find_or_create_apple_user(
             })
             return _build_session(response)
         except Exception:
-            raise Exception("No se pudo iniciar sesión con Apple. Intentá de nuevo.")
+            raise NumaError("No se pudo iniciar sesión con Apple. Intentá de nuevo.")
 
     # Usuario nuevo — necesitamos email
     if not email:
-        raise Exception(
+        raise NumaError(
             "No pudimos obtener tu email de Apple. "
             "En tu iPhone andá a Ajustes → ID de Apple → Contraseñas y Seguridad → "
             "Apps que usan tu ID de Apple → eliminá Numa y volvé a intentarlo."
@@ -100,11 +101,11 @@ def find_or_create_apple_user(
         })
         user = response.user
         if not user:
-            raise Exception("No se pudo crear la cuenta con Apple.")
+            raise NumaError("No se pudo crear la cuenta con Apple.")
     except Exception as e:
         err = str(e).lower()
         if "already registered" in err or "23505" in err:
-            raise Exception(
+            raise NumaError(
                 "Este email ya está registrado. "
                 "Iniciá sesión con email y contraseña o con Google."
             )

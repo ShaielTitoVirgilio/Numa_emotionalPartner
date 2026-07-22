@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
 from app.core.auth import get_current_user_id
+from app.core.observability import capturar_error
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
@@ -37,6 +38,7 @@ from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.feedback_repository import FeedbackRepository
+from app.core.errors import NumaError, MENSAJE_GENERICO
 
 router = APIRouter()
 limiter = Limiter(key_func=client_ip)
@@ -367,6 +369,7 @@ async def speech_to_text_endpoint(
     except HTTPException:
         raise
     except Exception as e:
+        capturar_error(e, contexto="speech_to_text")
         print("❌ STT ERROR:", e)
         raise HTTPException(status_code=503, detail="Servicio de transcripción no disponible")
 
@@ -381,6 +384,7 @@ def chat_history(limit: int = 30, user_id: str = Depends(get_current_user_id)):
         messages = conversation_repo.get_recent_messages(user_id, limit)
         return {"messages": messages}
     except Exception as e:
+        capturar_error(e, contexto="chat_history")
         print(f"⚠️ No se pudo cargar el historial: {e}")
         return {"messages": []}
 
@@ -408,7 +412,8 @@ def chat_endpoint(
         if perfil is None:
             try:
                 perfil = user_repo.get_profile(user_id)
-            except Exception:
+            except Exception as e:
+                capturar_error(e, contexto="cargar_perfil")
                 perfil = None
 
         ultimo_mensaje = conversation[-1].content if conversation else ""
@@ -498,12 +503,14 @@ def chat_endpoint(
             memorias_vigentes = merged[:15]
             ids_a_desactivar = ids_old
         except Exception as e:
+            capturar_error(e, contexto="cargar_memorias")
             print(f"⚠️ No se pudieron cargar memorias: {e}")
             memorias_vigentes = memorias_sesion or []
 
         try:
             patrones = get_topic_patterns_cached(user_id=user_id)
         except Exception as e:
+            capturar_error(e, contexto="cargar_patrones")
             print(f"⚠️ No se pudieron cargar patrones: {e}")
 
         # ── Memoria proactiva contextual ─────────────────────────────────
@@ -555,6 +562,7 @@ def chat_endpoint(
                     elif eleccion["tipo"] == "recurso":
                         memoria_recurso = eleccion["memoria"]
             except Exception as e:
+                capturar_error(e, contexto="memoria_contextual")
                 print(f"⚠️ No se pudo elegir memoria contextual: {e}")
 
         es_inicio_sesion = len(conversation) == 1
@@ -589,6 +597,7 @@ def chat_endpoint(
         try:
             checkin_hoy = get_checkin_hoy_cached(user_id)
         except Exception as e:
+            capturar_error(e, contexto="cargar_checkin")
             print(f"⚠️ No se pudo cargar el check-in: {e}")
 
         # Últimos 4 mensajes para las detecciones del router de módulos
@@ -799,7 +808,7 @@ def chat_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 # El cliente corta en 10 mensajes de invitado; este es el respaldo server-side
@@ -901,7 +910,7 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.post("/chat/import")
@@ -924,4 +933,4 @@ def chat_import(
         conversation_repo.import_messages(user_id, mensajes)
         return {"ok": True, "imported": len(mensajes)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

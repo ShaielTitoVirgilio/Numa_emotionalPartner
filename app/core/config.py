@@ -10,6 +10,14 @@ class Config:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "")
 
+    # ── Observabilidad (Sentry) ─────────────────────────────────────────
+    # Sin DSN, Sentry no se inicializa y la app corre igual (local/tests).
+    # La config de privacidad vive en app/core/observability.py: el contenido
+    # de las conversaciones NO se reporta nunca.
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    SENTRY_ENVIRONMENT: str = os.getenv("SENTRY_ENVIRONMENT", "production")
+    SENTRY_TRACES_SAMPLE_RATE: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0"))
+
     # ── Chat principal (la respuesta que ve el usuario) ─────────────────
     # Corre en OpenRouter (GPT-5.6 Luna: 0/30 fallas de tuteo/eco/comillas en
     # eval_multimodelo vs 3-4/30 de Llama 70B). Si el primario falla (outage,

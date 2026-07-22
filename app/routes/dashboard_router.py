@@ -2,6 +2,7 @@
 from datetime import date, timedelta, datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
+from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
 from app.core.llm import get_client, get_groq_text_model, reasoning_extra_body, max_tokens_for
@@ -192,7 +193,7 @@ def get_dashboard(user_id: str = Depends(get_current_user_id)):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 def _generar_insight_ia(

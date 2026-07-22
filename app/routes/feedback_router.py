@@ -6,6 +6,7 @@ from app.core.auth import get_current_user_id
 from app.repositories.feedback_repository import FeedbackRepository
 from app.memory_service import invalidate_patterns_cache
 from app.core.config import config
+from app.core.errors import NumaError, MENSAJE_GENERICO
 
 router = APIRouter()
 feedback_repo = FeedbackRepository()
@@ -71,7 +72,7 @@ def exercise_rating_endpoint(req: ExerciseRatingRequest, user_id: str = Depends(
         return {"ok": True}
     except Exception as e:
         print(f"⚠️ Error guardando exercise rating: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.get("/admin/feedback")
@@ -84,7 +85,7 @@ def admin_feedback(
         data = feedback_repo.get_feedback(limit)
         return {"total": len(data), "feedbacks": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.get("/admin/crisis")
@@ -98,7 +99,7 @@ def admin_crisis(
         data = feedback_repo.get_crisis_logs(limit, solo_pendientes)
         return {"total": len(data), "eventos": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 @router.patch("/admin/crisis/{crisis_id}/revisar")
@@ -108,4 +109,4 @@ def admin_marcar_revisado(crisis_id: str, x_admin_key: Optional[str] = Header(No
         feedback_repo.marcar_crisis_revisada(crisis_id)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

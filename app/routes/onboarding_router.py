@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
+from app.core.observability import capturar_error
+from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.auth import get_current_user_id
 from app.repositories.user_repository import UserRepository
 
@@ -55,4 +57,5 @@ def onboarding_endpoint(request: OnboardingRequest, user_id: str = Depends(get_c
 
         return {"message": "Onboarding guardado correctamente"}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        capturar_error(e, contexto="onboarding")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

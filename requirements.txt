@@ -8,3 +8,4 @@ slowapi
 python-multipart
 pywebpush
 PyJWT[crypto]
+sentry-sdk[fastapi]

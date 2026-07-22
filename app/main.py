@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 
 from app.core.config import config
 from app.core.auth import get_current_user_id
+from app.core.observability import init_sentry, capturar_error
 from app.core.ratelimit import client_ip
 from app.memory_service import construir_push_contextual, marcar_push_enviado
 from app.routes.auth_router import router as auth_router
@@ -28,6 +30,7 @@ from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
 from app.routes.memories_router import router as memories_router
 from app.supabase_client import supabase
+from app.core.errors import NumaError, MENSAJE_GENERICO
 
 # ==========================
 # VALIDACIÓN DE ENTORNO (fail-fast)
@@ -38,6 +41,15 @@ if not config.ADMIN_KEY:
         "ADMIN_KEY no está configurada. Definila en el .env antes de arrancar: "
         "sin ella los endpoints de administración quedarían abiertos."
     )
+
+# ==========================
+# OBSERVABILIDAD
+# ==========================
+
+# Antes de crear la app, para que las integraciones enganchen todo.
+# Sin SENTRY_DSN es no-op y la app arranca igual.
+_sentry_activo = init_sentry()
+print(f"🔭 Sentry: {'activo' if _sentry_activo else 'desactivado (sin SENTRY_DSN)'}")
 
 # ==========================
 # APP
@@ -65,6 +77,17 @@ class NoCacheJSMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(NoCacheJSMiddleware)
+
+
+# Red de seguridad: la app tiene decenas de `except Exception` que convierten el
+# error en HTTPException(500). Sentry no captura esas por ser "manejadas", así
+# que las reportamos acá — pase lo que pase, un 5xx queda registrado.
+# (Los 4xx son errores del cliente, no fallas nuestras: no se reportan.)
+@app.exception_handler(HTTPException)
+async def _reportar_5xx(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        capturar_error(exc, contexto="http_5xx", ruta=request.url.path)
+    return await http_exception_handler(request, exc)
 
 
 # ==========================
@@ -107,7 +130,8 @@ def subscribe(data: SuscripcionPush, user_id: str = Depends(get_current_user_id)
         }, on_conflict="user_id").execute()
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        capturar_error(e, contexto="subscribe")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 @app.post("/api/send-daily-push")
 def send_daily_push(x_admin_key: str = Header(None)):
@@ -141,6 +165,7 @@ def send_daily_push(x_admin_key: str = Header(None)):
                 try:
                     push = construir_push_contextual(user_id)
                 except Exception as ex:
+                    capturar_error(ex, contexto="construir_push_contextual")
                     print(f"⚠️ construir_push_contextual falló para {user_id}: {ex}")
 
             payload = {"title": push["title"], "body": push["body"]} if push else GENERICO
@@ -158,6 +183,7 @@ def send_daily_push(x_admin_key: str = Header(None)):
                     contextual_count += 1
                     marcar_push_enviado(push["memory_id"], push["push_type"])
             except WebPushException as ex:
+                capturar_error(ex, contexto="webpush_envio")
                 print(f"Error enviando push a una suscripción: {ex}")
 
         return {
@@ -169,7 +195,8 @@ def send_daily_push(x_admin_key: str = Header(None)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        capturar_error(e, contexto="send_daily_push")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
 # ==========================
