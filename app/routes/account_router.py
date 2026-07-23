@@ -19,13 +19,14 @@ def delete_account_endpoint(req: DeleteAccountRequest, user_id: str = Depends(ge
     # Solo se puede borrar la cuenta propia: el user_id sale del token.
     # Antes cualquiera podía borrar la cuenta de cualquiera con su UUID.
     try:
-        # Guardar el motivo antes de borrar cualquier dato
+        # Guardar el motivo antes de borrar cualquier dato. Sólo columnas que
+        # existen en user_feedback (categoria/app_version NO existen: incluirlas
+        # hacía fallar el insert y abortaba todo el borrado). El motivo se marca
+        # en el texto; delete_all_user_data lo desvincula (user_id → NULL).
         if req.reason and req.reason.strip():
             supabase.table("user_feedback").insert({
-                "user_id":   user_id,
-                "texto":     req.reason.strip()[:2000],
-                "categoria": "account_deletion",
-                "app_version": "mvp-1",
+                "user_id": user_id,
+                "texto":   f"[Motivo de baja] {req.reason.strip()[:2000]}",
             }).execute()
 
         user_repo.delete_all_user_data(user_id)

@@ -38,12 +38,27 @@ class UserRepository:
         supabase.table("onboarding_answers").insert(answers).execute()
 
     def delete_all_user_data(self, user_id: str) -> None:
-        # Borrar datos en orden para respetar FKs
+        # Datos del usuario: se borran por completo. (memories, conversations,
+        # onboarding_answers y exercise_ratings también caerían por ON DELETE
+        # CASCADE al borrar el perfil, pero los borramos explícito igual;
+        # daily_checkins, user_notifications, crisis_logs y crisis_pendientes NO
+        # tienen cascade, así que acá es la única vía.)
         supabase.table("memories").delete().eq("user_id", user_id).execute()
         supabase.table("conversations").delete().eq("user_id", user_id).execute()
         supabase.table("daily_checkins").delete().eq("user_id", user_id).execute()
         supabase.table("onboarding_answers").delete().eq("user_id", user_id).execute()
         supabase.table("user_notifications").delete().eq("user_id", user_id).execute()
+        supabase.table("crisis_logs").delete().eq("user_id", user_id).execute()
+        supabase.table("crisis_pendientes").delete().eq("user_id", user_id).execute()
+
+        # Feedback: se conserva para métricas pero desvinculado del usuario
+        # (user_id → NULL). Ya no queda ningún dato identificable.
+        supabase.table("user_feedback").update({"user_id": None}).eq("user_id", user_id).execute()
+
+        # Perfil (dispara el CASCADE de las tablas con FK).
         supabase.table("users_profiles").delete().eq("id", user_id).execute()
-        # Eliminar el usuario de Supabase Auth (requiere service key)
+
+        # Registro de Supabase Auth: saca el email y el UUID de auth.users.
+        # Requiere service key. Va al final para que un fallo acá no deje datos
+        # del usuario sin borrar (el resto ya se limpió).
         supabase.auth.admin.delete_user(user_id)
