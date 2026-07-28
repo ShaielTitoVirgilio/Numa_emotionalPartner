@@ -159,7 +159,18 @@ def extra_body_for(provider: str | None, model: str | None = None) -> dict:
     Groq (o proveedor desconocido): la lógica por familia de siempre.
     """
     if provider == "openrouter":
-        return {"reasoning": {"effort": "low"}}
+        body: dict = {"reasoning": {"effort": "low"}}
+        if model and model.startswith("openai/"):
+            # Los modelos OpenAI en OpenRouter tienen 2 backends reales detrás
+            # (OpenAI directo y Azure) que NO comparten cache entre sí — cada
+            # vez que un turno caía en el otro backend, el prefijo cacheable
+            # "se disolvía" y se pagaba precio pleno. Fijar solo a OpenAI
+            # directo: cache >99% medido incluso variando el mensaje del
+            # usuario turno a turno (antes: 0% fuera de prompts idénticos
+            # byte a byte), y de paso excluye el tier caro (Azure/Priority),
+            # ~2x más barato. Validado 2026-07-28.
+            body["provider"] = {"only": ["openai"]}
+        return body
     return reasoning_extra_body(model)
 
 
