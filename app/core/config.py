@@ -66,5 +66,22 @@ class Config:
     # thinking (reasoning_effort="none") y suma headroom → JSON limpio y rápido.
     GROQ_MODEL_ROUTER: str = os.getenv("GROQ_MODEL_ROUTER", "qwen/qwen3-32b")
 
+    # ── Context router: proveedor configurable (2026-07-28) ─────────────
+    # qwen/qwen3-32b fue decomisionado por Groq el 17/07 y ningún candidato de
+    # Groq igualó su 0/25 en eval_seguridad_router.py. Se desacopla del
+    # GROQ_MODEL_ROUTER de arriba (que queda legacy) para poder probar/usar un
+    # modelo en OpenRouter (ej. Gemini 3 Flash Preview, ya validado 10/10 en
+    # eval_crisis_verifier.py contra las mismas trampas de hipérbole) sin tocar
+    # las otras piezas que siguen en Groq.
+    CONTEXT_ROUTER_PROVIDER: str = os.getenv("CONTEXT_ROUTER_PROVIDER", "groq")
+    CONTEXT_ROUTER_MODEL: str = os.getenv("CONTEXT_ROUTER_MODEL", GROQ_MODEL_ROUTER)
+    # Si CONTEXT_ROUTER_PROVIDER=openrouter: lista separada por comas de
+    # providers OpenRouter permitidos para ESTE modelo puntual (campo
+    # `provider.only` de la API). Necesario porque distintos providers detrás
+    # del mismo model id en OpenRouter dieron resultados MUY distintos en
+    # eval_seguridad_router.py (ej. Alibaba: 11/25 fallas graves; Nebius: 0/25).
+    # Vacío = sin pin, OpenRouter balancea libremente entre todos.
+    CONTEXT_ROUTER_OPENROUTER_PROVIDERS: str = os.getenv("CONTEXT_ROUTER_OPENROUTER_PROVIDERS", "")
+
 
 config = Config()

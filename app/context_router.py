@@ -28,7 +28,8 @@ contención — nunca lo bajamos.
 
 import json
 
-from app.core.llm import get_client, get_router_model, reasoning_extra_body, max_tokens_for
+from app.core.config import config
+from app.core.llm import get_context_router_target, extra_body_for, max_tokens_for_provider
 
 _TIMEOUT_SECONDS = 4
 
@@ -169,22 +170,26 @@ def clasificar_contexto(conversation: list) -> dict:
         if not bloque.strip():
             return dict(_RESULTADO_VACIO)
 
-        modelo = get_router_model()
-        resp = get_client("groq").chat.completions.create(
+        cliente, proveedor, modelo = get_context_router_target()
+        extra = extra_body_for(proveedor, modelo)
+        if proveedor == "openrouter" and config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS:
+            pinned = [p.strip() for p in config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS.split(",") if p.strip()]
+            extra = {**extra, "provider": {"only": pinned}}
+        resp = cliente.chat.completions.create(
             model=modelo,
             temperature=0.0,
-            # Los modelos qwen/gpt-oss habilitados en la org son de razonamiento:
-            # el reasoning cuenta contra max_tokens. reasoning_extra_body apaga el
-            # thinking (effort="none") y max_tokens_for suma headroom, así el JSON
-            # no se trunca (era el 400 que daba qwen3.6-27b sin estos ajustes).
-            max_tokens=max_tokens_for(120, modelo),
+            # El reasoning (si el modelo lo tiene) cuenta contra max_tokens.
+            # extra_body_for/max_tokens_for_provider ya saben qué mandarle a
+            # cada proveedor (Groq por familia, OpenRouter con reasoning.effort)
+            # para que el JSON no se trunque.
+            max_tokens=max_tokens_for_provider(120, proveedor, modelo),
             timeout=_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
                 "content": _PROMPT.format(conversacion=bloque),
             }],
-            extra_body=reasoning_extra_body(modelo),
+            extra_body=extra,
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         return _normalizar(data)

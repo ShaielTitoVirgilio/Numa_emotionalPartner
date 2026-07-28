@@ -97,8 +97,20 @@ def get_crisis_verifier_target() -> tuple[OpenAI, str, str]:
 
 
 def get_router_model() -> str:
-    """Modelo chico del clasificador de contexto (de config / .env)."""
+    """Modelo chico del clasificador de contexto (de config / .env). Legacy:
+    asume Groq. Usar get_context_router_target() para el proveedor real."""
     return config.GROQ_MODEL_ROUTER
+
+
+def get_context_router_target() -> tuple[OpenAI, str, str]:
+    """Objetivo (cliente, proveedor, modelo) del context router
+    (clasificar_contexto). Separado a propósito, como get_crisis_verifier_target:
+    puede moverse a OpenRouter sin tocar GROQ_MODEL/GROQ_MODEL_ROUTER."""
+    return (
+        get_client(config.CONTEXT_ROUTER_PROVIDER),
+        config.CONTEXT_ROUTER_PROVIDER,
+        config.CONTEXT_ROUTER_MODEL,
+    )
 
 
 def _reasoning_key(model: str | None = None) -> str | None:
