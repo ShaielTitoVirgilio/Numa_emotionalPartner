@@ -71,15 +71,36 @@ segundos **con usuarios reales**, no en tu máquina.
 
 ## 2. Backend de pruebas (NumaDev)
 
-### 2.1 Base de datos separada
+### 2.1 Base de datos separada ✅ ya hecho
 
-1. En Supabase, proyecto nuevo: `numa-staging`.
-2. Replicá el esquema. Las tablas están en `memories_event_migration.sql` y en
-   el resto de migraciones del repo.
-3. Guardá su `SUPABASE_URL` y `SUPABASE_SERVICE_KEY`.
+Proyecto `numa-staging` creado (`kwzgvjxyfjwdqljtcgsd`, región `us-west-2` —
+producción está en `sa-east-1`; quedó así porque se creó antes de fijar esto,
+no afecta funcionalidad, solo un pelín de latencia extra al medir tiempos).
+
+El esquema completo (10 tablas, políticas RLS, índices, extensión `pgvector`)
+se replicó leyendo la estructura REAL de producción vía el MCP de Supabase y
+se aplicó a staging. Queda versionado en `schema_staging.sql` (raíz del repo)
+por si hay que reconstruirlo alguna vez. **No hay sincronización automática**:
+si el esquema de producción cambia, hay que actualizar ese archivo a mano y
+reaplicarlo.
+
+Credenciales de `numa-staging`:
+```
+SUPABASE_URL=https://kwzgvjxyfjwdqljtcgsd.supabase.co
+SUPABASE_SERVICE_KEY=<Settings → API → service_role — no se puede sacar por MCP, andá al dashboard>
+```
 
 > No reutilices el proyecto de producción "filtrando por usuario de prueba".
 > Un bug en una query de prueba te toca datos reales.
+
+**Deuda técnica encontrada en el camino (existe en producción, no se tocó):**
+varias tablas (`conversations`, `memories`, `onboarding_answers`, `crisis_logs`,
+`users_profiles`) tienen políticas RLS duplicadas que hacen lo mismo — reflejo
+de migraciones que se fueron acumulando. `get_advisors` las señala como
+`multiple_permissive_policies`/`auth_rls_initplan` (funcionan bien, solo son
+más lentas de lo necesario a escala). Se replicaron tal cual para que staging
+sea un espejo fiel; limpiarlas es un trabajo aparte, sobre producción, con su
+propio cuidado.
 
 ### 2.2 Rama y servicio
 
