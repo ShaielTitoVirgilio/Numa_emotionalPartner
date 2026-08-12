@@ -118,6 +118,32 @@ def init_sentry() -> bool:
     return True
 
 
+def marcar_usuario(user_id: str) -> None:
+    """Asocia el request en curso a un user_id para los eventos de Sentry.
+
+    Sin esto, todos los errores llegan anónimos y es imposible saber cuáles
+    corresponden al usuario que te escribió "me falló la app" — que es
+    justamente lo que el docstring de arriba dice que Sentry tiene que
+    permitir. Se manda SOLO el UUID: no revela nada del contenido de las
+    conversaciones (send_default_pii sigue en False, así que tampoco se
+    manda IP ni email).
+
+    No-op si Sentry no está configurado, y nunca lanza.
+    """
+    if not user_id:
+        return
+    try:
+        import sentry_sdk
+
+        client = sentry_sdk.get_client()
+        if client is None or not client.is_active():
+            return
+        sentry_sdk.set_user({"id": user_id})
+    except Exception:
+        # Observabilidad nunca debe romper el request.
+        pass
+
+
 def capturar_error(e: BaseException, contexto: str = "", **tags: str) -> None:
     """Reporta a Sentry un error que el código atrapa y convierte en respuesta.
 

@@ -24,6 +24,7 @@ from typing import Dict, Tuple, Optional
 from fastapi import Header, HTTPException
 
 from app.core.db import supabase
+from app.core.observability import marcar_usuario
 
 # token_hash → (expires_at_epoch, user_id)
 _TOKEN_CACHE: Dict[str, Tuple[float, str]] = {}
@@ -58,6 +59,7 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
     key = hashlib.sha256(token.encode()).hexdigest()
     cached = _TOKEN_CACHE.get(key)
     if cached and cached[0] > now:
+        marcar_usuario(cached[1])
         return cached[1]
 
     try:
@@ -71,4 +73,8 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
 
     _prune_cache(now)
     _TOKEN_CACHE[key] = (now + _TOKEN_TTL_SECONDS, user.id)
+    # Este dependency corre en TODOS los endpoints autenticados, así que es el
+    # único lugar donde hace falta marcar el usuario para que cualquier error
+    # posterior del request quede atribuido.
+    marcar_usuario(user.id)
     return user.id
