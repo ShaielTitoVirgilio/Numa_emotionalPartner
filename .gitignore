@@ -1,5 +1,11 @@
 # Variables de entorno
+# ".env" solo matchea ese nombre exacto: una copia como ".env.backup" o
+# ".env.produccion" quedaba fuera del ignore y era commiteable CON las claves
+# adentro. El patrón cubre cualquier variante; .env.example se exceptúa
+# porque es la plantilla sin valores y sí tiene que estar en el repo.
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/

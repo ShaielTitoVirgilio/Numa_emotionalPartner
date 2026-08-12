@@ -10,6 +10,19 @@ class Config:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "")
 
+    # ── Entorno de despliegue ───────────────────────────────────────────
+    # "production" (la app real) o "staging" (NumaDev, para probar sin tocar
+    # datos de usuarios reales). Cambia el nombre con el que la PWA se instala
+    # en el celular y muestra un cartelito en pantalla, para que NUNCA quede
+    # duda de en cuál de las dos estás. El default es "production" a propósito:
+    # si alguien olvida setear la variable, lo peor que pasa es que staging se
+    # vea como producción, no al revés.
+    APP_ENTORNO: str = os.getenv("APP_ENTORNO", "production")
+
+    @property
+    def es_produccion(self) -> bool:
+        return self.APP_ENTORNO.strip().lower() == "production"
+
     # ── Observabilidad (Sentry) ─────────────────────────────────────────
     # Sin DSN, Sentry no se inicializa y la app corre igual (local/tests).
     # La config de privacidad vive en app/core/observability.py: el contenido

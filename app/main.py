@@ -6,7 +6,7 @@ import json
 from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -107,6 +107,36 @@ app.mount("/static", StaticFiles(directory="frontend"), name="static")
 @app.get("/")
 def serve_frontend():
     return FileResponse(os.path.join("frontend", "index.html"))
+
+
+@app.get("/manifest.json")
+def serve_manifest():
+    """Manifest de la PWA, con el nombre según el entorno.
+
+    Se sirve desde acá y no como archivo estático para que NumaDev (staging)
+    se instale en el celular como una app SEPARADA y con otro nombre. Si las
+    dos usaran el mismo manifest, en la pantalla de inicio quedarían dos íconos
+    idénticos llamados "Numa" y no habría forma de saber cuál es cuál — que es
+    justo el error que hace que uno crea que está probando y en realidad esté
+    tocando datos de usuarios reales.
+    """
+    with open(os.path.join("frontend", "manifest.json"), encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    if not config.es_produccion:
+        manifest["name"] = "Numa DEV"
+        manifest["short_name"] = "Numa DEV"
+        manifest["description"] = "Numa — entorno de pruebas"
+        # Color distinto: se ve en la barra de estado y en la splash screen.
+        manifest["theme_color"] = "#c98b3a"
+
+    return JSONResponse(manifest, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/entorno")
+def entorno():
+    """Le dice al frontend en qué entorno corre, para mostrar el cartel de DEV."""
+    return {"entorno": config.APP_ENTORNO, "es_produccion": config.es_produccion}
 
 @app.get("/sw.js")
 def serve_sw():
