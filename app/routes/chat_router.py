@@ -1,8 +1,11 @@
+import json
 import re
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Depends
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
@@ -11,6 +14,7 @@ from app.core.observability import capturar_error
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
+from app.streaming_buffer import BufferStreamingMensaje
 from app.memory_service import (
     get_recent_memories,
     get_topic_patterns_cached,
@@ -39,6 +43,14 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.feedback_repository import FeedbackRepository
 from app.core.errors import NumaError, MENSAJE_GENERICO
+from app.text_filters import (
+    _quitar_pregunta_final,
+    _quitar_che,
+    _familia_apertura,
+    _aplanar_apertura,
+    _cierra_con_presencia,
+    _quitar_cierre_presencia,
+)
 
 router = APIRouter()
 limiter = Limiter(key_func=client_ip)
@@ -67,141 +79,10 @@ _RE_MEMORIA_DE_OIDAS = re.compile(
 )
 
 
-def _quitar_pregunta_final(texto: str) -> str:
-    """Recorta la pregunta final del mensaje conservando lo afirmativo.
-
-    Red de seguridad para la regla de preguntas: si el LLM ignora el bloqueo
-    del prompt y vuelve a cerrar con pregunta, se corta acá. En vez de borrar
-    la oración entera, intenta conservar la parte afirmativa antes del '¿'
-    (ej: "Hace días que te sentís así, ¿pasó algo?" → "Hace días que te
-    sentís así."). Devuelve "" si el mensaje entero era pregunta (en ese caso
-    se deja el original).
-    """
-    partes = re.split(r"(?<=[.!?…])\s+", texto.strip())
-    while partes and partes[-1].rstrip("\"'” ").endswith("?"):
-        ultima = partes.pop()
-        idx = ultima.find("¿")
-        if idx > 0:
-            prefijo = ultima[:idx].rstrip(" ,;:—–-")
-            if len(prefijo) >= 12:
-                if not prefijo.endswith((".", "!", "…")):
-                    prefijo += "."
-                partes.append(prefijo)
-    return " ".join(partes).strip()
-
-
-def _quitar_che(texto: str) -> str:
-    """Saca por completo la muletilla "che" del mensaje del LLM.
-
-    El prompt (M02) ya pide usarla con cuentagotas, pero el LLM la mete por
-    inercia en casi cada mensaje (suena a guión). Este filtro la elimina de
-    forma determinística y recompone la puntuación y las mayúsculas afectadas.
-    No toca "noche", "leche", "coche", etc. (usa límites de palabra).
-    """
-    if "che" not in texto.lower():
-        return texto
-
-    original = texto
-    t = texto
-
-    # "che" al inicio de una frase (arranque del texto o tras . ! ? …):
-    # "Che, parece..." → "Parece...";  ". Che, ¿estás?" → ". ¿Estás?"
-    t = re.sub(
-        r"(^|[.!?…]\s+)che\b\s*[,:;]?\s*([¿¡]*)([a-záéíóúñ])",
-        lambda m: m.group(1) + m.group(2) + m.group(3).upper(),
-        t, flags=re.IGNORECASE,
-    )
-    # "..., che, ..." en el medio → una sola coma
-    t = re.sub(r"\s*,\s*che\b\s*,", ",", t, flags=re.IGNORECASE)
-    # "..., che." / "..., che!" al cierre → quita ", che", deja la puntuación
-    t = re.sub(r"\s*,\s*che\b", "", t, flags=re.IGNORECASE)
-    # cualquier "che" suelto que haya quedado
-    t = re.sub(r"\s*\bche\b\s*", " ", t, flags=re.IGNORECASE)
-
-    # Recomponer espacios, puntuación y comas/espacios sueltos al inicio
-    t = re.sub(r"\s+([,.;:!?…])", r"\1", t)
-    t = re.sub(r"\s{2,}", " ", t).strip()
-    t = re.sub(r"^[\s,;:]+", "", t)
-
-    # Si el recorte dejó algo degenerado, mejor el original
-    if len(t) < 2:
-        return original
-    return t
-
-
-# ── Anti-repetición de cierres de presencia ───────────────────────────────
-# El modelo cierra casi cada mensaje con una fórmula de presencia ("estoy acá",
-# "te leo", "acá ando"...). Un cierre así está bien de vez en cuando, pero turno
-# a turno suena a bot (el usuario del chat que motivó esto detectó el patrón al
-# instante). M05 lo desaconseja; esta es la red determinística: si el mensaje
-# anterior de Numa YA cerró con presencia y este también, se recorta el cierre
-# de este. NO aplica en crisis (ahí "Estoy acá" es un paso válido y buscado).
-_PRESENCIA_CIERRE_RE = re.compile(
-    r"(?<![\wñ])(?:"
-    r"ac[áa]\s+estoy|estoy\s+ac[áa]|ac[áa]\s+ando|ac[áa]\s+andamos|ac[áa]\s+estamos|"
-    r"aqu[íi]\s+estoy|ac[áa]\s+me\s+ten[ée]s|"
-    r"te\s+leo|te\s+escucho|"
-    r"no\s+me\s+voy\s+a\s+ning[úu]n\s+lado|no\s+me\s+muevo|"
-    r"cuando\s+quieras\s+seguimos|cuando\s+quieras,\s+seguimos"
-    r")(?![\wñ])",
-    re.IGNORECASE,
-)
-
-
-def _cierra_con_presencia(texto: str) -> bool:
-    """True si alguna de las últimas ~2 oraciones es un cierre CORTO de presencia
-    ('Acá estoy.', 'Te leo, sin apuro.'). El límite de longitud evita marcar una
-    oración larga con contenido propio que apenas menciona 'te leo'."""
-    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
-    for p in partes[-2:]:
-        if _PRESENCIA_CIERRE_RE.search(p) and len(p) <= 60:
-            return True
-    return False
-
-
-def _quitar_cierre_presencia(texto: str) -> str:
-    """Saca las oraciones finales que son solo cierre de presencia, dejando el
-    cuerpo con contenido. Devuelve '' si el mensaje era puro cierre."""
-    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
-    while partes and _PRESENCIA_CIERRE_RE.search(partes[-1]) and len(partes[-1]) <= 70:
-        partes.pop()
-    return " ".join(partes).strip()
-
-
-# ── Anti-tic de apertura repetida ─────────────────────────────────────────
-# El modelo, sobre todo al reflejar, se engancha con una misma fórmula de
-# apertura ("Sentís que...", "Es como que...") y abre varios mensajes seguidos
-# igual. M05 ya lo prohíbe, pero cuando lo desobedece se aplana acá: se quita
-# la fórmula y el resto queda como afirmación ("Sentís que todo te pesa." →
-# "Todo te pesa."). Solo se aplana si el mensaje ANTERIOR de Numa abrió con la
-# MISMA familia — un único uso es una herramienta válida de reflejo.
-# "Es como si..." queda afuera a propósito: al sacarlo deja subjuntivo colgado.
-_APERTURAS_REPETIBLES = [
-    ("sentis_que",  re.compile(r"^\s*sent[ií]s\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
-    ("siento_que",  re.compile(r"^\s*siento\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
-    ("es_como_que", re.compile(r"^\s*es\s+como\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
-    ("parece_que",  re.compile(r"^\s*parece\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
-]
-
-
-def _familia_apertura(texto: str) -> Optional[str]:
-    """Clave de familia si el texto abre con una fórmula repetible, o None."""
-    for clave, rx in _APERTURAS_REPETIBLES:
-        if rx.match(texto or ""):
-            return clave
-    return None
-
-
-def _aplanar_apertura(texto: str) -> str:
-    """Quita la fórmula de apertura y capitaliza el resto.
-    'Sentís que todo te pesa.' → 'Todo te pesa.'"""
-    for _clave, rx in _APERTURAS_REPETIBLES:
-        m = rx.match(texto or "")
-        if m:
-            resto = m.group(1).lstrip()
-            if resto:
-                return resto[0].upper() + resto[1:]
-    return texto
+# _quitar_pregunta_final, _quitar_che, _cierra_con_presencia,
+# _quitar_cierre_presencia, _familia_apertura, _aplanar_apertura: se
+# movieron a app/text_filters.py (mismo código, sin cambios) para poder
+# reusarlos también desde app/streaming_buffer.py sin import circular.
 
 
 # Ventana de validez de un event_date: desde ayer (tolerancia) hasta ~13 meses.
@@ -350,6 +231,360 @@ class ChatResponse(BaseModel):
     nuevas_memorias: Optional[List[Dict[str, Any]]] = None
 
 
+def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """Todo el trabajo previo a llamar al LLM: límites, crisis, perfil,
+    memorias, patrones, memoria proactiva, prompt. Extraído de chat_endpoint
+    tal cual (mismo orden, mismas variables) para que chat_endpoint (sync) y
+    chat_stream_endpoint (streaming, ver /chat/stream) partan de EXACTAMENTE
+    el mismo estado — evita que los dos pipelines diverjan con el tiempo.
+
+    Devuelve un dict. Si la crisis ya se resolvió con la respuesta
+    hardcodeada (sin pasar por el LLM): {"crisis_confirmada": True,
+    "respuesta_crisis": {...}}. Si no, el resto de las claves que hacen
+    falta para llamar al LLM y post-procesar la respuesta.
+    """
+    # Límite server-side de tamaño de la conversación
+    conversation = body.conversation[-MAX_CONV_MESSAGES:]
+    for m in conversation:
+        if len(m.content) > MAX_MSG_CHARS:
+            m.content = m.content[:MAX_MSG_CHARS]
+
+    perfil = body.perfil
+    if perfil is None:
+        try:
+            perfil = user_repo.get_profile(user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_perfil")
+            perfil = None
+
+    ultimo_mensaje = conversation[-1].content if conversation else ""
+    crisis = detectar_crisis(ultimo_mensaje)
+    crisis_score = crisis.get("score", 0.0)
+    crisis_log_level = crisis.get("log_level", "none")
+
+    if crisis["detected"]:
+        # Verificación en dos pasos: las keywords dispararon crítico/alto;
+        # un clasificador LLM rápido confirma si el riesgo es real y actual.
+        # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
+        if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
+            background_tasks.add_task(
+                feedback_repo.save_crisis_log,
+                user_id, ultimo_mensaje, crisis["category"], crisis_log_level,
+            )
+            return {
+                "crisis_confirmada": True,
+                "respuesta_crisis": {
+                    "message":          crisis["message"],
+                    "mood":             "sad",
+                    "suggested_action": None,
+                    "risk_level":       "high",
+                    "nuevas_memorias":  None,
+                },
+            }
+        # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
+        # se degrada a señal media → el LLM responde con módulos de crisis.
+        crisis_score = 0.45
+        crisis_log_level = "medium"
+
+    # ── Capa 2: clasificador semántico de contexto ──────────────
+    router_hints = clasificar_contexto([m.model_dump() for m in conversation])
+    if router_hints.get("ok"):
+        score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
+        if score_router > crisis_score:
+            crisis_score = score_router
+            if crisis_log_level == "none":
+                crisis_log_level = "medium"
+
+    if crisis_score >= 0.35:
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, crisis.get("category") or "ROUTER_RISK", crisis_log_level,
+        )
+
+    memorias_sesion: List[Dict[str, Any]] = []
+    if perfil and "_memorias_sesion" in perfil:
+        raw = perfil.pop("_memorias_sesion", []) or []
+        memorias_sesion = [
+            m if isinstance(m, dict) else {"content": str(m), "priority": 3, "category": "otro"}
+            for m in raw
+        ]
+
+    memorias_vigentes: List[Dict[str, Any]] = []
+    ids_a_desactivar: List[str] = []
+    patrones: List[dict] = []
+
+    try:
+        m_db, ids_old = get_recent_memories(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
+        seen = set()
+        merged = []
+        for m in (memorias_sesion or []) + m_db:
+            key = (m.get("content") or "").strip()
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(m)
+        memorias_vigentes = merged[:15]
+        ids_a_desactivar = ids_old
+    except Exception as e:
+        capturar_error(e, contexto="cargar_memorias")
+        print(f"⚠️ No se pudieron cargar memorias: {e}")
+        memorias_vigentes = memorias_sesion or []
+
+    try:
+        patrones = get_topic_patterns_cached(user_id=user_id)
+    except Exception as e:
+        capturar_error(e, contexto="cargar_patrones")
+        print(f"⚠️ No se pudieron cargar patrones: {e}")
+
+    # ── Memoria proactiva contextual ─────────────────────────────────
+    hoy = date.today()
+    evento_proactivo: Optional[Dict[str, Any]] = None
+    tema_abierto: Optional[Dict[str, Any]] = None
+    memoria_recurso: Optional[Dict[str, Any]] = None
+    memoria_ctx_id: Optional[str] = None
+    if crisis_score < 0.35:
+        try:
+            eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
+            evento_top = eventos[0] if eventos else None
+
+            router_ok = bool(router_hints.get("ok"))
+            estado_r = router_hints.get("estado_emocional") if router_ok else None
+
+            recursos = (
+                get_resource_memories(user_id=user_id)
+                if estado_r in ("triste_vacio", "ansioso", "abrumado")
+                else []
+            )
+            temas = (
+                get_open_topics(user_id=user_id)
+                if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
+                else []
+            )
+
+            eleccion = elegir_memoria_contextual(
+                estado_emocional=estado_r,
+                router_ok=router_ok,
+                riesgo_score=crisis_score,
+                evento=evento_top,
+                temas_abiertos=temas,
+                recursos=recursos,
+            )
+            if eleccion:
+                memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
+                if eleccion["tipo"] == "evento":
+                    evento_proactivo = eleccion["memoria"]
+                elif eleccion["tipo"] == "tema_abierto":
+                    tema_abierto = eleccion["memoria"]
+                elif eleccion["tipo"] == "recurso":
+                    memoria_recurso = eleccion["memoria"]
+        except Exception as e:
+            capturar_error(e, contexto="memoria_contextual")
+            print(f"⚠️ No se pudo elegir memoria contextual: {e}")
+
+    es_inicio_sesion = len(conversation) == 1
+    num_interacciones = len(conversation)
+    es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
+
+    dias_inactivo = 0
+    if num_interacciones <= 4:
+        dias_inactivo = get_dias_inactivo(user_id)
+
+    ultimo_modulo_critico = False
+    previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
+    for msg_previo in previos_usuario:
+        if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
+            ultimo_modulo_critico = True
+            break
+    if not ultimo_modulo_critico and num_interacciones <= 4:
+        ultimo_modulo_critico = feedback_repo.hay_crisis_reciente(user_id)
+
+    checkin_hoy = None
+    try:
+        checkin_hoy = get_checkin_hoy_cached(user_id)
+    except Exception as e:
+        capturar_error(e, contexto="cargar_checkin")
+        print(f"⚠️ No se pudo cargar el check-in: {e}")
+
+    historial_reciente = [m.model_dump() for m in conversation[-4:]]
+
+    mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
+    preguntas_seguidas = 0
+    for contenido in reversed(mensajes_numa):
+        if contenido.rstrip().rstrip('"\'').endswith("?"):
+            preguntas_seguidas += 1
+        else:
+            break
+
+    # Apertura/cierre del ÚLTIMO mensaje de Numa: dependen solo del historial
+    # (no del mensaje nuevo, que todavía no existe acá) — se calculan una vez
+    # y las reusan tanto el post-procesamiento sync como BufferStreamingMensaje.
+    familia_apertura_previa = None
+    previo_cierre_presencia = False
+    for m in reversed(conversation[:-1]):
+        if m.role == "assistant":
+            familia_apertura_previa = _familia_apertura(m.content)
+            previo_cierre_presencia = _cierra_con_presencia(m.content)
+            break
+
+    system_prompt = construir_prompt(
+        perfil=perfil,
+        memorias=memorias_vigentes,
+        patrones=patrones,
+        es_inicio_sesion=es_inicio_sesion,
+        num_interacciones=num_interacciones,
+        es_primera_vez=es_primera_vez,
+        ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
+        dias_inactivo=dias_inactivo,
+        checkin_hoy=checkin_hoy,
+        checkin_recien_hecho=bool(body.checkin_recien_hecho),
+        crisis_score=crisis_score,
+        ultimo_modulo_critico=ultimo_modulo_critico,
+        historial_reciente=historial_reciente,
+        mood_actual=body.ultimo_mood,
+        ultimo_mensaje=ultimo_mensaje,
+        preguntas_seguidas=preguntas_seguidas,
+        hoy=hoy,
+        evento_proactivo=evento_proactivo,
+        tema_abierto=tema_abierto,
+        memoria_recurso=memoria_recurso,
+        router_hints=router_hints,
+    )
+
+    return {
+        "crisis_confirmada": False,
+        "conversation": conversation,
+        "system_prompt": system_prompt,
+        "crisis_score": crisis_score,
+        "ultimo_mensaje": ultimo_mensaje,
+        "hoy": hoy,
+        "memorias_vigentes": memorias_vigentes,
+        "ids_a_desactivar": ids_a_desactivar,
+        "evento_proactivo": evento_proactivo,
+        "tema_abierto": tema_abierto,
+        "memoria_ctx_id": memoria_ctx_id,
+        "preguntas_seguidas": preguntas_seguidas,
+        "ultimo_modulo_critico": ultimo_modulo_critico,
+        "familia_apertura_previa": familia_apertura_previa,
+        "previo_cierre_presencia": previo_cierre_presencia,
+    }
+
+
+def _procesar_memorias_turno(
+    memorias_llm: List[Dict[str, Any]],
+    memorias_vigentes: List[Dict[str, Any]],
+    ultimo_mensaje: str,
+    hoy: date,
+    crisis_score: float,
+) -> List[Dict[str, Any]]:
+    """Valida/clampea/dedupea las memorias que devolvió el LLM antes de
+    persistir. Extraído tal cual de chat_endpoint; lo comparten chat_endpoint
+    y chat_stream_endpoint."""
+    es_post_ejercicio = ultimo_mensaje.strip().startswith("[Post-ejercicio")
+    contenidos_conocidos = [(m.get("content") or "") for m in memorias_vigentes]
+    memorias_validadas: List[Dict[str, Any]] = []
+    for m in memorias_llm:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if _es_memoria_duplicada(content, contenidos_conocidos):
+            continue
+        prioridad = _normalizar_prioridad(
+            content,
+            _validar_priority(m.get("priority")),
+            crisis_score,
+            es_post_ejercicio,
+        )
+        mem: Dict[str, Any] = {
+            "content":  content,
+            "category": _validar_category(m.get("category")),
+            "priority": prioridad,
+        }
+        # Memoria proactiva: si el LLM marcó un evento con fecha, lo validamos.
+        event_title, event_date = _validar_evento(m.get("event"), content, hoy)
+        if event_title and event_date:
+            mem["event_title"] = event_title
+            mem["event_date"] = event_date
+        # Tema abierto: solo memorias SIN fecha (el ciclo de los eventos ya
+        # lo maneja followed_up). Recurso: algo que el usuario dijo que le
+        # hizo bien. Ambos son booleanos del LLM → clampeo estricto.
+        if m.get("open") is True and not (event_title and event_date):
+            mem["status"] = "open"
+        if m.get("helped") is True:
+            mem["helped_before"] = True
+        # Respaldo server-side de los flags (como detectar_evento_con_fecha
+        # respalda los eventos): el LLM sub-produce open/helped y sin ellos
+        # el canal proactivo se queda sin material. Los detectores leen el
+        # content ya redactado en tercera persona (vocabulario de M08).
+        if "status" not in mem and not (event_title and event_date) and detectar_tema_abierto(content):
+            mem["status"] = "open"
+        if "helped_before" not in mem and detectar_recurso(content):
+            mem["helped_before"] = True
+        memorias_validadas.append(mem)
+        contenidos_conocidos.append(content)
+
+    # Respaldo: si el LLM no guardó ninguna memoria, detectar evento próximo con fecha
+    if not memorias_validadas:
+        evento = detectar_evento_con_fecha(ultimo_mensaje, hoy)
+        if evento:
+            memorias_validadas.append(evento)
+
+    return memorias_validadas
+
+
+def _disparar_tareas_turno(
+    background_tasks: BackgroundTasks,
+    *,
+    user_id: str,
+    conversation: List["Message"],
+    mensaje_final: str,
+    mood: Optional[str],
+    memorias_validadas: List[Dict[str, Any]],
+    ids_a_desactivar: List[str],
+    evento_proactivo: Optional[Dict[str, Any]],
+    tema_abierto: Optional[Dict[str, Any]],
+    memoria_ctx_id: Optional[str],
+    ultimo_mensaje: str,
+    hoy: date,
+) -> None:
+    """Tareas de background que se disparan una vez que hay respuesta final:
+    guardar conversación/memorias, follow-up de eventos, cierre de temas
+    abiertos, cooldown de mención proactiva. Extraído tal cual de
+    chat_endpoint; lo comparten chat_endpoint y chat_stream_endpoint."""
+    # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
+    # marcarlo followed_up para no volver a preguntar cómo le fue. Si dijo que
+    # AÚN no pasó ("es el martes que viene"), se re-fecha y queda abierto.
+    background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
+
+    # Ciclo de temas abiertos: si el usuario contó el desenlace de un tema
+    # abierto (sin fecha), se cierra para no volver a preguntarle.
+    background_tasks.add_task(cerrar_temas_abiertos, user_id, ultimo_mensaje)
+
+    # Cooldown de mención proactiva (req. 8): lo que sea que este turno trajo
+    # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
+    # para no insistir en cada mensaje con el mismo tema. Además, lo
+    # MENCIONADO cierra su ciclo (regla de producto).
+    if memoria_ctx_id:
+        cierre = None
+        if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
+            cierre = "followup"
+        elif tema_abierto:
+            cierre = "cerrar_tema"
+        background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id, cierre)
+
+    if conversation:
+        background_tasks.add_task(
+            conversation_repo.save,
+            user_id,
+            conversation[-1].content,
+            mensaje_final,
+            memorias_validadas,
+            mood,
+        )
+        if ids_a_desactivar:
+            background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
+        if memorias_validadas:
+            invalidate_patterns_cache(user_id)
+
+
 @router.post("/speech-to-text")
 async def speech_to_text_endpoint(
     file: UploadFile = File(...),
@@ -363,7 +598,14 @@ async def speech_to_text_endpoint(
         if len(audio_bytes) > MAX_AUDIO_BYTES:
             raise HTTPException(status_code=413, detail="Audio demasiado largo")
 
-        text = speech_to_text(audio_bytes, file.filename)
+        # A un thread, NO en el event loop. speech_to_text() habla con Whisper
+        # por HTTP bloqueante; como este endpoint es `async def`, correrlo
+        # derecho acá congelaba el servidor ENTERO mientras duraba la
+        # transcripción (medido: un pedido que tarda 0.02s pasaba a 4.6s si
+        # había un STT de 5s en vuelo). Con el modo llamada, que transcribe en
+        # cada turno, eso encolaba los mensajes del chat escrito hasta pasarse
+        # del timeout de 25s del cliente.
+        text = await run_in_threadpool(speech_to_text, audio_bytes, file.filename)
         return {"text": text}
 
     except HTTPException:
@@ -401,247 +643,25 @@ def chat_endpoint(
         # El user_id viene SIEMPRE del token, nunca del body (IDOR fix)
         user_id = auth_user_id
 
-        # Límite server-side de tamaño de la conversación
-        conversation = body.conversation[-MAX_CONV_MESSAGES:]
-        for m in conversation:
-            if len(m.content) > MAX_MSG_CHARS:
-                m.content = m.content[:MAX_MSG_CHARS]
+        turno = _preparar_turno(body, user_id, background_tasks)
+        if turno["crisis_confirmada"]:
+            return turno["respuesta_crisis"]
 
-        perfil = body.perfil
-
-        if perfil is None:
-            try:
-                perfil = user_repo.get_profile(user_id)
-            except Exception as e:
-                capturar_error(e, contexto="cargar_perfil")
-                perfil = None
-
-        ultimo_mensaje = conversation[-1].content if conversation else ""
-        crisis = detectar_crisis(ultimo_mensaje)
-        crisis_score = crisis.get("score", 0.0)
-        crisis_log_level = crisis.get("log_level", "none")
-
-        if crisis["detected"]:
-            # Verificación en dos pasos: las keywords dispararon crítico/alto;
-            # un clasificador LLM rápido confirma si el riesgo es real y actual.
-            # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
-            if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
-                # Respuesta determinística, sin LLM principal.
-                background_tasks.add_task(
-                    feedback_repo.save_crisis_log,
-                    user_id,
-                    ultimo_mensaje,
-                    crisis["category"],
-                    crisis_log_level,
-                )
-                return {
-                    "message":          crisis["message"],
-                    "mood":             "sad",
-                    "suggested_action": None,
-                    "risk_level":       "high",
-                    "nuevas_memorias":  None,
-                }
-            # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
-            # se degrada a señal media → el LLM responde con módulos de crisis.
-            crisis_score = 0.45
-            crisis_log_level = "medium"
-
-        # ── Capa 2: clasificador semántico de contexto ──────────────
-        # Corre en cada turno (salvo cuando arriba ya devolvimos la respuesta
-        # hardcodeada). Lee el contexto que las keywords no ven y devuelve señales
-        # que se mergean en el ruteo de módulos. Puede ESCALAR el riesgo hacia
-        # M19/M20 (nunca bajarlo) — pero NO dispara la respuesta hardcodeada:
-        # ese bypass sigue siendo exclusivo de keyword + crisis_verifier.
-        # Fail-safe: si se cae, router_hints["ok"]=False y el ruteo usa solo keywords.
-        router_hints = clasificar_contexto([m.model_dump() for m in conversation])
-        if router_hints.get("ok"):
-            score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
-            if score_router > crisis_score:
-                crisis_score = score_router
-                # Riesgo que el léxico no había marcado: subimos el nivel de log.
-                if crisis_log_level == "none":
-                    crisis_log_level = "medium"
-
-        # Señal media (desborde/implícitas/degradadas/router): va al LLM con el
-        # módulo de crisis activado. Se loguea igual para trazabilidad del equipo.
-        # category cae a "ROUTER_RISK" cuando la señal la aportó solo el clasificador.
-        if crisis_score >= 0.35:
-            background_tasks.add_task(
-                feedback_repo.save_crisis_log,
-                user_id,
-                ultimo_mensaje,
-                crisis.get("category") or "ROUTER_RISK",
-                crisis_log_level,
-            )
-
-        memorias_sesion: List[Dict[str, Any]] = []
-        if perfil and "_memorias_sesion" in perfil:
-            raw = perfil.pop("_memorias_sesion", []) or []
-            memorias_sesion = [
-                m if isinstance(m, dict)
-                else {"content": str(m), "priority": 3, "category": "otro"}
-                for m in raw
-            ]
-
-        memorias_vigentes: List[Dict[str, Any]] = []
-        ids_a_desactivar: List[str] = []
-        patrones: List[dict] = []
-
-        try:
-            m_db, ids_old = get_recent_memories(
-                user_id=user_id,
-                days=MEMORY_WINDOW_DAYS_DEFAULT,
-                max_items=12
-            )
-            seen = set()
-            merged = []
-            for m in (memorias_sesion or []) + m_db:
-                key = (m.get("content") or "").strip()
-                if key and key not in seen:
-                    seen.add(key)
-                    merged.append(m)
-            memorias_vigentes = merged[:15]
-            ids_a_desactivar = ids_old
-        except Exception as e:
-            capturar_error(e, contexto="cargar_memorias")
-            print(f"⚠️ No se pudieron cargar memorias: {e}")
-            memorias_vigentes = memorias_sesion or []
-
-        try:
-            patrones = get_topic_patterns_cached(user_id=user_id)
-        except Exception as e:
-            capturar_error(e, contexto="cargar_patrones")
-            print(f"⚠️ No se pudieron cargar patrones: {e}")
-
-        # ── Memoria proactiva contextual ─────────────────────────────────
-        # Se elige A LO SUMO UNA cosa para traer al prompt (evento con fecha,
-        # tema abierto sin resolver, o recurso propio del usuario) según el
-        # estado emocional que ya clasificó el router (Qwen). En un momento
-        # triste no se pregunta por el partido del finde; sí se puede recordar
-        # "correr te despejó la última vez". Solo fuera de contexto de riesgo.
-        hoy = date.today()
-        evento_proactivo: Optional[Dict[str, Any]] = None
-        tema_abierto: Optional[Dict[str, Any]] = None
-        memoria_recurso: Optional[Dict[str, Any]] = None
-        memoria_ctx_id: Optional[str] = None
-        if crisis_score < 0.35:
-            try:
-                eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
-                evento_top = eventos[0] if eventos else None
-
-                router_ok = bool(router_hints.get("ok"))
-                estado_r = router_hints.get("estado_emocional") if router_ok else None
-
-                # Solo se consulta lo que la política puede llegar a usar
-                # (ver elegir_memoria_contextual) para no sumar queries al turno.
-                recursos = (
-                    get_resource_memories(user_id=user_id)
-                    if estado_r in ("triste_vacio", "ansioso", "abrumado")
-                    else []
-                )
-                temas = (
-                    get_open_topics(user_id=user_id)
-                    if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
-                    else []
-                )
-
-                eleccion = elegir_memoria_contextual(
-                    estado_emocional=estado_r,
-                    router_ok=router_ok,
-                    riesgo_score=crisis_score,
-                    evento=evento_top,
-                    temas_abiertos=temas,
-                    recursos=recursos,
-                )
-                if eleccion:
-                    memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
-                    if eleccion["tipo"] == "evento":
-                        evento_proactivo = eleccion["memoria"]
-                    elif eleccion["tipo"] == "tema_abierto":
-                        tema_abierto = eleccion["memoria"]
-                    elif eleccion["tipo"] == "recurso":
-                        memoria_recurso = eleccion["memoria"]
-            except Exception as e:
-                capturar_error(e, contexto="memoria_contextual")
-                print(f"⚠️ No se pudo elegir memoria contextual: {e}")
-
-        es_inicio_sesion = len(conversation) == 1
-        num_interacciones = len(conversation)
-
-        # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
-        es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
-
-        # Detectar reenganche: >5 días sin actividad
-        dias_inactivo = 0
-        if num_interacciones <= 4:
-            # Solo consultamos al principio de la sesión para no repetir la llamada
-            dias_inactivo = get_dias_inactivo(user_id)
-
-        # ¿El turno anterior estuvo en territorio de crisis? (se mira el score
-        # de los últimos 2 mensajes previos del usuario que vienen en el request)
-        ultimo_modulo_critico = False
-        previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
-        for msg_previo in previos_usuario:
-            if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
-                ultimo_modulo_critico = True
-                break
-
-        # Respaldo stateless: si la sesión recién empieza (el historial del
-        # request no alcanza), mirar crisis_logs — el usuario pudo haber
-        # recargado la app justo después de una crisis.
-        if not ultimo_modulo_critico and num_interacciones <= 4:
-            ultimo_modulo_critico = feedback_repo.hay_crisis_reciente(user_id)
-
-        # Check-in del día (1-4) — cacheado 5 min en memory_service
-        checkin_hoy = None
-        try:
-            checkin_hoy = get_checkin_hoy_cached(user_id)
-        except Exception as e:
-            capturar_error(e, contexto="cargar_checkin")
-            print(f"⚠️ No se pudo cargar el check-in: {e}")
-
-        # Últimos 4 mensajes para las detecciones del router de módulos
-        historial_reciente = [m.model_dump() for m in conversation[-4:]]
-
-        # Racha de mensajes de Numa terminados en "?": el servidor la cuenta
-        # (el modelo no sabe auditar su propio historial) y el prompt recibe
-        # la señal ya calculada. Se recalcula en cada turno, así el bloqueo
-        # se levanta solo apenas Numa responde sin pregunta.
-        mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
-        preguntas_seguidas = 0
-        for contenido in reversed(mensajes_numa):
-            if contenido.rstrip().rstrip('"\'').endswith("?"):
-                preguntas_seguidas += 1
-            else:
-                break
-
-        system_prompt = construir_prompt(
-            perfil=perfil,
-            memorias=memorias_vigentes,
-            patrones=patrones,
-            es_inicio_sesion=es_inicio_sesion,
-            num_interacciones=num_interacciones,
-            es_primera_vez=es_primera_vez,
-            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
-            dias_inactivo=dias_inactivo,
-            checkin_hoy=checkin_hoy,
-            checkin_recien_hecho=bool(body.checkin_recien_hecho),
-            crisis_score=crisis_score,
-            ultimo_modulo_critico=ultimo_modulo_critico,
-            historial_reciente=historial_reciente,
-            mood_actual=body.ultimo_mood,
-            ultimo_mensaje=ultimo_mensaje,
-            preguntas_seguidas=preguntas_seguidas,
-            hoy=hoy,
-            evento_proactivo=evento_proactivo,
-            tema_abierto=tema_abierto,
-            memoria_recurso=memoria_recurso,
-            router_hints=router_hints,
-        )
+        conversation = turno["conversation"]
+        crisis_score = turno["crisis_score"]
+        ultimo_mensaje = turno["ultimo_mensaje"]
+        hoy = turno["hoy"]
+        memorias_vigentes = turno["memorias_vigentes"]
+        ids_a_desactivar = turno["ids_a_desactivar"]
+        evento_proactivo = turno["evento_proactivo"]
+        tema_abierto = turno["tema_abierto"]
+        memoria_ctx_id = turno["memoria_ctx_id"]
+        preguntas_seguidas = turno["preguntas_seguidas"]
+        ultimo_modulo_critico = turno["ultimo_modulo_critico"]
 
         result = llm.generate_response(
             conversation=[m.model_dump() for m in conversation],
-            system_prompt=system_prompt,
+            system_prompt=turno["system_prompt"],
         )
 
         # Filtro determinístico del "che": el modelo lo repite como muletilla
@@ -655,16 +675,10 @@ def chat_endpoint(
         # determinística. Solo aplica cuando se repite respecto del turno previo.
         mensaje_actual = result.get("message") or ""
         familia_actual = _familia_apertura(mensaje_actual)
-        if familia_actual:
-            apertura_previa = None
-            for m in reversed(conversation[:-1]):
-                if m.role == "assistant":
-                    apertura_previa = _familia_apertura(m.content)
-                    break
-            if apertura_previa == familia_actual:
-                aplanado = _aplanar_apertura(mensaje_actual)
-                if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
-                    result["message"] = aplanado
+        if familia_actual and familia_actual == turno["familia_apertura_previa"]:
+            aplanado = _aplanar_apertura(mensaje_actual)
+            if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
+                result["message"] = aplanado
 
         # Anti-repetición de cierres de presencia: si el turno anterior de Numa
         # ya cerró con "estoy acá"/"te leo"/etc. y este también, recortamos el
@@ -673,18 +687,13 @@ def chat_endpoint(
         if (
             crisis_score < 0.35
             and not ultimo_modulo_critico
+            and turno["previo_cierre_presencia"]
             and _cierra_con_presencia(mensaje_actual)
         ):
-            previo_cierre_presencia = False
-            for m in reversed(conversation[:-1]):
-                if m.role == "assistant":
-                    previo_cierre_presencia = _cierra_con_presencia(m.content)
-                    break
-            if previo_cierre_presencia:
-                recortado = _quitar_cierre_presencia(mensaje_actual)
-                # Guardia anti-cortante: solo si queda un cuerpo con sustancia.
-                if recortado and len(recortado) >= 40 and len(recortado) >= 0.4 * len(mensaje_actual):
-                    result["message"] = recortado
+            recortado = _quitar_cierre_presencia(mensaje_actual)
+            # Guardia anti-cortante: solo si queda un cuerpo con sustancia.
+            if recortado and len(recortado) >= 40 and len(recortado) >= 0.4 * len(mensaje_actual):
+                result["message"] = recortado
 
         # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
         # prohibió preguntar; si el modelo desobedece igual, se recorta la
@@ -703,99 +712,27 @@ def chat_endpoint(
                 result["message"] = recortado
 
         memorias_llm: List[Dict[str, Any]] = result.get("memories") or []
-
-        # Validar/clampear metadata de cada memoria antes de persistir.
-        # El dedup difuso descarta el mismo hecho reformulado (contra las
-        # memorias ya conocidas y contra la otra memoria del mismo turno).
-        es_post_ejercicio = ultimo_mensaje.strip().startswith("[Post-ejercicio")
-        contenidos_conocidos = [(m.get("content") or "") for m in memorias_vigentes]
-        memorias_validadas: List[Dict[str, Any]] = []
-        for m in memorias_llm:
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            if _es_memoria_duplicada(content, contenidos_conocidos):
-                continue
-            prioridad = _normalizar_prioridad(
-                content,
-                _validar_priority(m.get("priority")),
-                crisis_score,
-                es_post_ejercicio,
-            )
-            mem: Dict[str, Any] = {
-                "content":  content,
-                "category": _validar_category(m.get("category")),
-                "priority": prioridad,
-            }
-            # Memoria proactiva: si el LLM marcó un evento con fecha, lo validamos.
-            event_title, event_date = _validar_evento(m.get("event"), content, hoy)
-            if event_title and event_date:
-                mem["event_title"] = event_title
-                mem["event_date"] = event_date
-            # Tema abierto: solo memorias SIN fecha (el ciclo de los eventos ya
-            # lo maneja followed_up). Recurso: algo que el usuario dijo que le
-            # hizo bien. Ambos son booleanos del LLM → clampeo estricto.
-            if m.get("open") is True and not (event_title and event_date):
-                mem["status"] = "open"
-            if m.get("helped") is True:
-                mem["helped_before"] = True
-            # Respaldo server-side de los flags (como detectar_evento_con_fecha
-            # respalda los eventos): el LLM sub-produce open/helped y sin ellos
-            # el canal proactivo se queda sin material. Los detectores leen el
-            # content ya redactado en tercera persona (vocabulario de M08).
-            if "status" not in mem and not (event_title and event_date) and detectar_tema_abierto(content):
-                mem["status"] = "open"
-            if "helped_before" not in mem and detectar_recurso(content):
-                mem["helped_before"] = True
-            memorias_validadas.append(mem)
-            contenidos_conocidos.append(content)
-
-        # Respaldo: si el LLM no guardó ninguna memoria, detectar evento próximo con fecha
-        if not memorias_validadas:
-            evento = detectar_evento_con_fecha(ultimo_mensaje, hoy)
-            if evento:
-                memorias_validadas.append(evento)
+        memorias_validadas = _procesar_memorias_turno(
+            memorias_llm, memorias_vigentes, ultimo_mensaje, hoy, crisis_score,
+        )
 
         # Sin early-return: reportar el nivel real de señal detectada
         risk_level = "medium" if crisis_score >= 0.35 else "none"
 
-        # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
-        # marcarlo followed_up para no volver a preguntar cómo le fue. Si dijo que
-        # AÚN no pasó ("es el martes que viene"), se re-fecha y queda abierto.
-        background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
-
-        # Ciclo de temas abiertos: si el usuario contó el desenlace de un tema
-        # abierto (sin fecha), se cierra para no volver a preguntarle.
-        background_tasks.add_task(cerrar_temas_abiertos, user_id, ultimo_mensaje)
-
-        # Cooldown de mención proactiva (req. 8): lo que sea que este turno trajo
-        # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
-        # para no insistir en cada mensaje con el mismo tema.
-        # Además, lo MENCIONADO cierra su ciclo (regla de producto): un evento ya
-        # ocurrido no se re-pregunta ("followup") y un tema abierto ya traído se
-        # cierra ("cerrar_tema" — si sigue pendiente, la memoria nueva del turno
-        # lo re-captura). Eventos futuros y recursos solo arrancan cooldown.
-        if memoria_ctx_id:
-            cierre = None
-            if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
-                cierre = "followup"
-            elif tema_abierto:
-                cierre = "cerrar_tema"
-            background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id, cierre)
-
-        if conversation:
-            background_tasks.add_task(
-                conversation_repo.save,
-                user_id,
-                conversation[-1].content,
-                result["message"],
-                memorias_validadas,
-                result.get("mood"),
-            )
-            if ids_a_desactivar:
-                background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
-            if memorias_validadas:
-                invalidate_patterns_cache(user_id)
+        _disparar_tareas_turno(
+            background_tasks,
+            user_id=user_id,
+            conversation=conversation,
+            mensaje_final=result["message"],
+            mood=result.get("mood"),
+            memorias_validadas=memorias_validadas,
+            ids_a_desactivar=ids_a_desactivar,
+            evento_proactivo=evento_proactivo,
+            tema_abierto=tema_abierto,
+            memoria_ctx_id=memoria_ctx_id,
+            ultimo_mensaje=ultimo_mensaje,
+            hoy=hoy,
+        )
 
         return {
             "message":          result["message"],
@@ -809,6 +746,161 @@ def chat_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+
+# ════════════════════════════════════════════════════════════════
+# /chat/stream — variante en streaming de /chat (ver docs/plan_streaming_voz.md)
+#
+# Endpoint NUEVO y separado de /chat a propósito: /chat mantiene su forma de
+# respuesta de siempre (documentada además en REACT_NATIVE_CONTEXT.md para la
+# futura app RN) sin ningún cambio de comportamiento. /chat/stream comparte
+# TODA la preparación (_preparar_turno) y el post-procesamiento de memorias/
+# tareas de background (_procesar_memorias_turno, _disparar_tareas_turno) con
+# /chat — la única diferencia real es cómo se llama al LLM y cómo se arma la
+# respuesta (NDJSON incremental en vez de un JSON de una sola vez).
+#
+# Contrato NDJSON (una línea = un JSON, separadas por "\n"):
+#   {"type": "delta",  "text": "..."}   — cero o más, en orden: oraciones ya filtradas
+#   {"type": "crisis", "text": "..."}   — en vez de los delta, cuando la respuesta
+#                                         es la de contención hardcodeada
+#   {"type": "final", "mood": ..., "suggested_action": ..., "risk_level": ..., "nuevas_memorias": [...]}
+#
+# Por qué "crisis" es un tipo aparte y no un delta más: el cliente de voz
+# (modo llamada) habla cada delta apenas lo recibe. Si la contención llegara
+# como delta, para cuando el evento "final" avisara risk_level=high el cliente
+# YA la habría dicho en voz alta — y esa respuesta lleva teléfonos de ayuda que
+# el usuario tiene que poder TOCAR, no escuchar. Con un tipo propio, el cliente
+# lo sabe en el instante y decide qué hacer (hoy: frase puente hablada + salir
+# de la llamada mostrando la tarjeta con los links clicables).
+# ════════════════════════════════════════════════════════════════
+
+def _evento_ndjson(obj: Dict[str, Any]) -> str:
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
+
+def _stream_ndjson_fijo(payload: Dict[str, Any]):
+    """Generador para cuando la respuesta YA está resuelta sin pasar por el
+    LLM (crisis confirmada). Mismo contrato NDJSON que el streaming real para
+    que el frontend no necesite un código de lectura distinto para ese caso."""
+    yield _evento_ndjson({"type": "crisis", "text": payload["message"]})
+    yield _evento_ndjson({
+        "type": "final",
+        "mood": payload["mood"],
+        "suggested_action": payload.get("suggested_action"),
+        "risk_level": payload.get("risk_level"),
+        "nuevas_memorias": payload.get("nuevas_memorias"),
+    })
+
+
+def _stream_chat_respuesta(turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks):
+    """Generador principal: llama al LLM en streaming, va filtrando/emitiendo
+    oraciones vía BufferStreamingMensaje (sección 5 del plan) y al final
+    dispara el mismo post-procesamiento de memorias/background que /chat."""
+    conversation = turno["conversation"]
+    crisis_score = turno["crisis_score"]
+    ultimo_mensaje = turno["ultimo_mensaje"]
+    hoy = turno["hoy"]
+    memorias_vigentes = turno["memorias_vigentes"]
+    ids_a_desactivar = turno["ids_a_desactivar"]
+    evento_proactivo = turno["evento_proactivo"]
+    tema_abierto = turno["tema_abierto"]
+    memoria_ctx_id = turno["memoria_ctx_id"]
+    preguntas_seguidas = turno["preguntas_seguidas"]
+    ultimo_modulo_critico = turno["ultimo_modulo_critico"]
+
+    buf = BufferStreamingMensaje(
+        familia_apertura_previa=turno["familia_apertura_previa"],
+        previo_cierre_presencia=turno["previo_cierre_presencia"],
+        preguntas_seguidas=preguntas_seguidas,
+        crisis_score=crisis_score,
+        ultimo_modulo_critico=ultimo_modulo_critico,
+    )
+
+    metadata: Optional[Dict[str, Any]] = None
+    try:
+        for tipo, valor in llm.generate_response_stream(
+            conversation=[m.model_dump() for m in conversation],
+            system_prompt=turno["system_prompt"],
+        ):
+            if tipo == "mensaje":
+                for oracion in buf.feed(valor):
+                    yield _evento_ndjson({"type": "delta", "text": oracion})
+            else:
+                metadata = valor
+        for oracion in buf.cerrar():
+            yield _evento_ndjson({"type": "delta", "text": oracion})
+    except Exception as e:
+        # El stream se cortó a mitad de camino (ver docs/plan_streaming_voz.md
+        # sección 3.4): no se reintenta con otro proveedor para no mostrar un
+        # mensaje "Frankenstein". Lo que ya se emitió queda tal cual mostrado/
+        # hablado; sin evento "final" el frontend lo trata como corte de
+        # conexión (mismo tratamiento que ya tiene un fetch que falla hoy).
+        capturar_error(e, contexto="chat_stream")
+        print(f"⚠️ /chat/stream: se cortó el generador: {e}")
+        return
+
+    mensaje_final = buf.mensaje_completo()
+    metadata = metadata or {"mood": "neutral", "suggested_action": None, "memories": []}
+
+    memorias_llm: List[Dict[str, Any]] = metadata.get("memories") or []
+    memorias_validadas = _procesar_memorias_turno(
+        memorias_llm, memorias_vigentes, ultimo_mensaje, hoy, crisis_score,
+    )
+    risk_level = "medium" if crisis_score >= 0.35 else "none"
+
+    _disparar_tareas_turno(
+        background_tasks,
+        user_id=user_id,
+        conversation=conversation,
+        mensaje_final=mensaje_final,
+        mood=metadata.get("mood"),
+        memorias_validadas=memorias_validadas,
+        ids_a_desactivar=ids_a_desactivar,
+        evento_proactivo=evento_proactivo,
+        tema_abierto=tema_abierto,
+        memoria_ctx_id=memoria_ctx_id,
+        ultimo_mensaje=ultimo_mensaje,
+        hoy=hoy,
+    )
+
+    yield _evento_ndjson({
+        "type": "final",
+        "mood": metadata.get("mood"),
+        "suggested_action": metadata.get("suggested_action"),
+        "risk_level": risk_level,
+        "nuevas_memorias": memorias_validadas,
+    })
+
+
+@router.post("/chat/stream")
+@limiter.limit("18/minute")
+def chat_stream_endpoint(
+    request: Request,
+    body: ChatRequest,
+    background_tasks: BackgroundTasks,
+    auth_user_id: str = Depends(get_current_user_id),
+):
+    user_id = auth_user_id
+    try:
+        turno = _preparar_turno(body, user_id, background_tasks)
+    except Exception:
+        # Todavía no se mandó ningún byte de respuesta -> se puede devolver
+        # un error HTTP normal, como en /chat.
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+    if turno["crisis_confirmada"]:
+        generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
+    else:
+        generador = _stream_chat_respuesta(turno, user_id, background_tasks)
+
+    # background=background_tasks es necesario: a diferencia de devolver un
+    # dict (donde FastAPI engancha las tareas solas), acá se devuelve un
+    # Response explícito y hay que pasárselo a mano para que corran.
+    return StreamingResponse(
+        generador,
+        media_type="application/x-ndjson",
+        background=background_tasks,
+    )
 
 
 # El cliente corta en 10 mensajes de invitado; este es el respaldo server-side

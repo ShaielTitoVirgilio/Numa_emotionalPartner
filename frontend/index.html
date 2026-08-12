@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Numa</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="manifest" href="/static/manifest.json" />
+  <!-- El manifest lo sirve FastAPI (no es estático) para que el entorno de
+       pruebas se instale como "Numa DEV", una app aparte. Ver serve_manifest(). -->
+  <link rel="manifest" href="/manifest.json" />
   <meta name="theme-color" content="#7db89e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -303,11 +305,20 @@
 
     <!-- INPUT + MIC -->
     <div class="input-container">
+      <!-- Modo llamada: abre la pantalla de voz (hablás y Numa te contesta
+           hablando). El emoji es temporal: va a ser un ícono propio. -->
+      <button
+        class="llamada-btn"
+        id="llamada-btn"
+        onclick="abrirLlamada()"
+        aria-label="Hablar con Numa por voz">
+        📞
+      </button>
       <button
         class="mic-btn"
         id="mic-btn"
         onclick="toggleMic()"
-        aria-label="Hablar con Numa">
+        aria-label="Dictar un mensaje">
         🎤
       </button>
       <input

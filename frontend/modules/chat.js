@@ -305,6 +305,131 @@ if (!res.ok) {
 }
 
 
+// ============================================
+// MODO LLAMADA — envío por streaming (/chat/stream)
+// ============================================
+// El chat ESCRITO usa /chat (arriba) y no cambió: ahí ver el texto aparecer de
+// a pedacitos no aporta nada. La llamada sí usa /chat/stream, porque lo que se
+// gana es que Numa EMPIECE A HABLAR apenas está lista la primera oración en
+// vez de esperar la respuesta entera (3-5 segundos menos de silencio incómodo
+// después de que el usuario dejó de hablar).
+//
+// Contrato NDJSON del backend (ver chat_router.py):
+//   {"type":"delta","text":...} | {"type":"crisis","text":...} | {"type":"final",...}
+
+/**
+ * Manda un mensaje desde el modo llamada y entrega la respuesta por partes.
+ *
+ * @param {string} texto            lo que dijo el usuario (ya transcripto)
+ * @param {object} cbs
+ * @param {(oracion:string)=>void} cbs.onOracion  cada oración lista para decir en voz
+ * @param {(texto:string)=>void}   cbs.onCrisis   respuesta de contención: NO se habla,
+ *                                                la llamada la maneja aparte (tarjeta)
+ * @param {(data:object)=>void}    cbs.onFinal    metadata final (mood, risk_level, ...)
+ * @param {AbortSignal}            cbs.signal     para cortar el turno si el usuario sale de la llamada
+ */
+export async function enviarDesdeLlamada(texto, { onOracion, onCrisis, onFinal, signal } = {}) {
+  const historialLimitado = historialConversacion.slice(-MAX_HISTORIAL);
+  const conversationToSend = [...historialLimitado, { role: "user", content: texto }];
+
+  const numaUser = localStorage.getItem('numa_user');
+  const userId = numaUser ? JSON.parse(numaUser).user_id : null;
+  const checkinRecienHecho = consumirFlagCheckin();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  // Si el usuario sale de la llamada, se corta el turno en curso: si no, el
+  // servidor sigue generando una respuesta que ya nadie va a escuchar.
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  let res;
+  try {
+    res = await fetch("/chat/stream", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      signal: controller.signal,
+      body: JSON.stringify({
+        conversation: conversationToSend,
+        user_id: userId,
+        perfil: perfilCacheado,
+        ultimo_mood: ultimoMood,
+        checkin_recien_hecho: checkinRecienHecho,
+      })
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (res.status === 401) {
+    localStorage.removeItem('numa_user');
+    showAuthScreen();
+    throw new Error("Sesión expirada");
+  }
+  if (!res.ok || !res.body) throw new Error("Error en respuesta HTTP");
+
+  // Lectura incremental del body. No se usa EventSource porque no permite
+  // mandar el header Authorization con el que autentica toda la API.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let acumulado = "";
+  let textoCrisis = null;
+  let dataFinal = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const linea = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      if (!linea.trim()) continue;
+
+      let evento;
+      try { evento = JSON.parse(linea); } catch { continue; }
+
+      if (evento.type === "delta") {
+        const limpio = _limpiarMensaje(evento.text);
+        if (!limpio) continue;
+        acumulado = acumulado ? `${acumulado} ${limpio}` : limpio;
+        onOracion?.(limpio);
+      } else if (evento.type === "crisis") {
+        textoCrisis = _limpiarMensaje(evento.text);
+        onCrisis?.(textoCrisis);
+      } else if (evento.type === "final") {
+        dataFinal = evento;
+      }
+    }
+  }
+
+  const respuesta = textoCrisis || acumulado;
+  const mood = dataFinal?.mood || 'neutral';
+  if (!textoCrisis) ultimoMood = mood;
+
+  // La conversación de la llamada queda en el chat escrito: al salir del modo
+  // llamada el usuario ve lo que se habló, y el historial que se manda en el
+  // próximo turno sigue completo.
+  if (respuesta) {
+    agregarMensaje(texto, "user");
+    if (textoCrisis) _agregarMensajeCrisis(textoCrisis);
+    else agregarMensaje(respuesta, "oso", mood);
+    _actualizarHistorial(texto, respuesta);
+  }
+
+  if (dataFinal?.nuevas_memorias?.length && perfilCacheado) {
+    if (!perfilCacheado._memorias_sesion) perfilCacheado._memorias_sesion = [];
+    for (const m of dataFinal.nuevas_memorias) perfilCacheado._memorias_sesion.push(m);
+  }
+
+  onFinal?.(dataFinal || { mood, risk_level: textoCrisis ? 'high' : 'none' });
+  return { mood, risk_level: dataFinal?.risk_level || (textoCrisis ? 'high' : 'none') };
+}
+
 
 function _procesarRespuesta(data, textoUsuario) {
 
@@ -346,7 +471,9 @@ function _procesarRespuesta(data, textoUsuario) {
 }
 
 function _limpiarMensaje(mensaje) {
-  return mensaje.replace(/\[EJERCICIO:\s*(\w+)\]/, "").trim();
+  // Tolera null/undefined: desde el modo llamada llega texto de eventos del
+  // stream, que pueden venir vacíos.
+  return (mensaje || "").replace(/\[EJERCICIO:\s*(\w+)\]/, "").trim();
 }
 
 function _actualizarHistorial(textoUsuario, textoOso) {

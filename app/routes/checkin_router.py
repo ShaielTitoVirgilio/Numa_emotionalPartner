@@ -81,5 +81,6 @@ def historial_checkins(days: int = 30, user_id: str = Depends(get_current_user_i
             .execute()
         )
         return {"checkins": res.data or []}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)

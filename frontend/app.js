@@ -19,6 +19,8 @@ import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternar
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 import { initFeedbackTab } from './modules/feedbackTab.js';
+import { abrirLlamada, cerrarLlamada } from './modules/llamada.js';
+import { marcarEntornoDePruebas } from './modules/entorno.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -44,6 +46,8 @@ window.toggleMic = toggleMic;
 window.alternarTemaChat = alternarTemaChat;
 window.inicializarChat = inicializarChat;
 window.initFeedback = initFeedbackTab;
+window.abrirLlamada = abrirLlamada;
+window.cerrarLlamada = cerrarLlamada;
 
 
 
@@ -108,6 +112,7 @@ function _tokenExpired(token) {
 }
 
 async function init() {
+  marcarEntornoDePruebas();   // no bloquea: si es producción, es no-op
   aplicarTemaGuardado();
   aplicarTamanoFuenteGuardado();
   const fueOAuth = await manejarCallbackOAuth();
