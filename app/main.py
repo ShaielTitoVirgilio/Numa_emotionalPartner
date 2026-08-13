@@ -3,6 +3,8 @@
 import hmac
 import os
 import json
+import time
+import uuid
 from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +19,8 @@ from pydantic import BaseModel
 
 from app.core.config import config
 from app.core.auth import get_current_user_id
-from app.core.observability import init_sentry, capturar_error
+from app.core.observability import init_sentry, capturar_error, etiquetar_request
+from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.memory_service import construir_push_contextual, marcar_push_enviado
 from app.routes.auth_router import router as auth_router
@@ -77,6 +80,70 @@ class NoCacheJSMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(NoCacheJSMiddleware)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Une la pieza que faltaba entre Sentry (solo ve errores) y los `print()`
+    sueltos que caían en los logs de Railway sin estructura: una línea JSON
+    por request de la API con método, endpoint, status, latencia y user_id
+    (si el endpoint es autenticado) — para poder buscar "qué le pasó a este
+    usuario" o "está tardando este endpoint" sin esperar a que reviente una
+    excepción. request.state.user_id lo deja seteado get_current_user_id
+    (app/core/auth.py) cuando el endpoint pasa por ese dependency.
+
+    También taguea el scope de Sentry con el mismo request_id: si más
+    adelante en este request salta un error, el evento en Sentry ya viene
+    con ese contexto pegado.
+
+    No loguea body, headers de auth, ni nada del contenido del request —
+    mismo criterio de privacidad que observability.py. Los estáticos
+    (/, /static, /manifest.json, etc.) se excluyen a propósito: no aportan
+    nada al seguimiento y solo generarían ruido.
+    """
+
+    _PREFIJOS_API = (
+        "/chat", "/auth", "/onboarding", "/feedback", "/checkin",
+        "/dashboard", "/account", "/apple", "/memories", "/subscribe",
+        "/api/",
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        if not request.url.path.startswith(self._PREFIJOS_API):
+            return await call_next(request)
+
+        request_id = uuid.uuid4().hex[:12]
+        etiquetar_request(request_id=request_id, endpoint=request.url.path)
+        inicio = time.perf_counter()
+
+        try:
+            response = await call_next(request)
+        except Exception:
+            log_event(
+                "request",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                user_id=getattr(request.state, "user_id", None),
+                status=500,
+                latencia_ms=round((time.perf_counter() - inicio) * 1000, 1),
+                excepcion_no_manejada=True,
+            )
+            raise
+
+        response.headers["X-Request-ID"] = request_id
+        log_event(
+            "request",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            user_id=getattr(request.state, "user_id", None),
+            status=response.status_code,
+            latencia_ms=round((time.perf_counter() - inicio) * 1000, 1),
+        )
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # Red de seguridad: la app tiene decenas de `except Exception` que convierten el

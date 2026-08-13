@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
 from app.core.auth import get_current_user_id
-from app.core.observability import capturar_error
+from app.core.observability import capturar_error, etiquetar_request
+from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
@@ -645,6 +646,10 @@ def chat_endpoint(
 
         turno = _preparar_turno(body, user_id, background_tasks)
         if turno["crisis_confirmada"]:
+            log_event(
+                "chat_turn", endpoint="/chat", user_id=user_id,
+                crisis_hardcoded=True, risk_level="high", llm_provider=None,
+            )
             return turno["respuesta_crisis"]
 
         conversation = turno["conversation"]
@@ -718,6 +723,25 @@ def chat_endpoint(
 
         # Sin early-return: reportar el nivel real de señal detectada
         risk_level = "medium" if crisis_score >= 0.35 else "none"
+
+        llm_info = result.get("_llm") or {}
+        etiquetar_request(
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+        )
+        log_event(
+            "chat_turn",
+            endpoint="/chat",
+            user_id=user_id,
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+            llm_fallback=llm_info.get("fallback"),
+            llm_latency_ms=llm_info.get("latency_ms"),
+            mood=result.get("mood"),
+            risk_level=risk_level,
+            suggested_action=result.get("suggested_action"),
+            memorias_nuevas=len(memorias_validadas),
+        )
 
         _disparar_tareas_turno(
             background_tasks,
@@ -848,6 +872,26 @@ def _stream_chat_respuesta(turno: Dict[str, Any], user_id: str, background_tasks
     )
     risk_level = "medium" if crisis_score >= 0.35 else "none"
 
+    llm_info = metadata.get("_llm") or {}
+    etiquetar_request(
+        llm_provider=llm_info.get("provider"),
+        llm_model=llm_info.get("model"),
+    )
+    log_event(
+        "chat_turn",
+        endpoint="/chat/stream",
+        user_id=user_id,
+        llm_provider=llm_info.get("provider"),
+        llm_model=llm_info.get("model"),
+        llm_fallback=llm_info.get("fallback"),
+        llm_latency_ms=llm_info.get("latency_ms"),
+        llm_cut=llm_info.get("cut"),
+        mood=metadata.get("mood"),
+        risk_level=risk_level,
+        suggested_action=metadata.get("suggested_action"),
+        memorias_nuevas=len(memorias_validadas),
+    )
+
     _disparar_tareas_turno(
         background_tasks,
         user_id=user_id,
@@ -889,6 +933,10 @@ def chat_stream_endpoint(
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
     if turno["crisis_confirmada"]:
+        log_event(
+            "chat_turn", endpoint="/chat/stream", user_id=user_id,
+            crisis_hardcoded=True, risk_level="high", llm_provider=None,
+        )
         generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
     else:
         generador = _stream_chat_respuesta(turno, user_id, background_tasks)
@@ -939,6 +987,10 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
         if crisis["detected"]:
             if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
                 # Sin crisis_log: no hay user_id al que asociarlo.
+                log_event(
+                    "chat_turn", endpoint="/chat/guest", user_id=None,
+                    crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                )
                 return {
                     "message":          crisis["message"],
                     "mood":             "sad",
@@ -990,6 +1042,20 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
 
         if result.get("message"):
             result["message"] = _quitar_che(result["message"])
+
+        llm_info = result.get("_llm") or {}
+        log_event(
+            "chat_turn",
+            endpoint="/chat/guest",
+            user_id=None,
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+            llm_fallback=llm_info.get("fallback"),
+            llm_latency_ms=llm_info.get("latency_ms"),
+            mood=result.get("mood"),
+            risk_level="medium" if crisis_score >= 0.35 else "none",
+            suggested_action=result.get("suggested_action"),
+        )
 
         return {
             "message":          result["message"],

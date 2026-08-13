@@ -144,6 +144,36 @@ def marcar_usuario(user_id: str) -> None:
         pass
 
 
+def etiquetar_request(**tags: Any) -> None:
+    """Agrega tags al scope de Sentry del request en curso (no solo a errores).
+
+    Sentry crea un scope aislado por request (integración FastAPI/Starlette);
+    taguearlo acá hace que, si más adelante en ESE MISMO request salta una
+    excepción, el evento ya llegue con estos tags pegados (request_id,
+    endpoint, llm_provider, etc.) sin tener que ir a buscarlos en los logs de
+    Railway aparte. Si además se prende tracing de performance
+    (SENTRY_TRACES_SAMPLE_RATE > 0), estos tags también quedan en la
+    transacción, aunque no haya ningún error.
+
+    Nunca pasar acá nada que pueda llevar contenido de conversación — mismo
+    criterio que _CLAVES_SENSIBLES arriba. No-op si Sentry no está activo, y
+    nunca lanza.
+    """
+    if not tags:
+        return
+    try:
+        import sentry_sdk
+
+        client = sentry_sdk.get_client()
+        if client is None or not client.is_active():
+            return
+        for k, v in tags.items():
+            if v is not None:
+                sentry_sdk.set_tag(k, v)
+    except Exception:
+        pass
+
+
 def capturar_error(e: BaseException, contexto: str = "", **tags: str) -> None:
     """Reporta a Sentry un error que el código atrapa y convierte en respuesta.
 

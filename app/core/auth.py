@@ -21,7 +21,7 @@ import hashlib
 import time
 from typing import Dict, Tuple, Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app.core.db import supabase
 from app.core.observability import marcar_usuario
@@ -43,7 +43,7 @@ def _prune_cache(now: float) -> None:
         _TOKEN_CACHE.clear()
 
 
-def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
+def get_current_user_id(request: Request, authorization: Optional[str] = Header(None)) -> str:
     """Valida el Bearer token de Supabase y devuelve el user_id del token.
 
     Lanza 401 si falta el header o el token es inválido/expirado.
@@ -60,6 +60,7 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
     cached = _TOKEN_CACHE.get(key)
     if cached and cached[0] > now:
         marcar_usuario(cached[1])
+        request.state.user_id = cached[1]
         return cached[1]
 
     try:
@@ -77,4 +78,8 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
     # único lugar donde hace falta marcar el usuario para que cualquier error
     # posterior del request quede atribuido.
     marcar_usuario(user.id)
+    # Expuesto en request.state para que el middleware de logging (main.py)
+    # pueda incluir el user_id en la línea de log del request sin tener que
+    # revalidar el token una segunda vez.
+    request.state.user_id = user.id
     return user.id
