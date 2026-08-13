@@ -4,6 +4,12 @@ Guía para tener un lugar donde probar cambios **con el celular, como un usuario
 real**, antes de que toquen a nadie. Lo que ya está hecho en el código está
 marcado ✅; lo que falta necesita tu cuenta y lo hacés vos.
 
+**Estado: ✅ NumaDev anda de punta a punta**, confirmado en los dos frentes:
+la PWA web (probada en `localhost` y en Railway) y la app de iOS (instalada
+y probada en dispositivo real el 2026-08-13, separada de la app de
+producción). Lo que queda de este documento es referencia para cuando haga
+falta tocar algo, no pasos pendientes.
+
 ---
 
 ## El mapa
@@ -39,10 +45,11 @@ conversaciones y `crisis_logs` sobre usuarios reales.
 | Verificador de Sentry | `scripts/verificar_sentry.py` |
 | URL del backend configurable por perfil de build | `numa-mobile/src/constants.ts` + `eas.json` |
 | Bundle ID/ícono propios para staging (conviven instaladas) | `numa-mobile/app.config.js` |
+| `ios/`/`android/` excluidos del upload a EAS (la causa real del bug de instalación) | `numa-mobile/.easignore` |
 
 ---
 
-## 1. Sentry (30 minutos, gratis)
+## 1. Sentry (30 minutos, gratis) ✅ ya hecho
 
 Hoy la app atrapa 22 tipos de error distintos y **no te enterás de ninguno**.
 
@@ -70,7 +77,7 @@ segundos **con usuarios reales**, no en tu máquina.
 
 ---
 
-## 2. Backend de pruebas (NumaDev)
+## 2. Backend de pruebas (NumaDev) ✅ ya hecho
 
 ### 2.1 Base de datos separada ✅ ya hecho
 
@@ -165,7 +172,27 @@ genera un build real instalable por link, sin App Store.
    perfil: solo esos 4 campos difieren, todo lo demás (plugins, permisos,
    `runtimeVersion`) queda idéntico entre entornos.
 
-3. Build de pruebas:
+3. **`.easignore` (la causa real del primer y segundo intento fallido)** —
+   con `app.config.js` ya andando, el build *seguía* saliendo con el Bundle
+   ID de producción. Causa, confirmada bajando el `.ipa` real e inspeccionando
+   su `Info.plist` con `PlistBuddy`: había una carpeta `ios/` vieja en el
+   disco (de un `expo prebuild`/`run:ios` de antes), con el Bundle ID grabado
+   ahí adentro. `ios/` está en `.gitignore` pero **`eas build` no sube según
+   git — sube el directorio de trabajo tal cual** — así que esa carpeta
+   viajaba en cada build y EAS, al detectarla, usaba lo que ya tenía grabado
+   ahí e ignoraba `app.config.js` por completo. `--clear-cache` no lo
+   arreglaba (no era un tema de caché). Se agregó a `.easignore`:
+   ```
+   /ios
+   /android
+   ```
+   con el mismo patrón anclado que ya usa `.gitignore` — probado que `ios/`
+   sin la barra inicial NO alcanza. Verificado en dos pasos locales, sin
+   gastar build, con `eas build:inspect`: primero que `ios/` ya no viaja en
+   el paquete subido (`-s archive`), después que la advertencia de EAS que
+   delataba el problema ya no sale (`-s pre-build`).
+
+4. Build de pruebas:
 
 ```bash
 cd /Users/mac/Numa/numa-mobile
@@ -177,9 +204,10 @@ Como `app.numa.mobile.dev` es un Bundle ID nuevo, es posible que EAS pida
 crear el App ID / perfil de aprovisionamiento en Apple Developer la primera
 vez (paso único, interactivo — no se repite en builds siguientes).
 
-4. EAS te da un link para instalar en el celu. Se instala como **"Numa DEV"**,
+5. EAS te da un link para instalar en el celu. Se instala como **"Numa DEV"**,
    separada de la real, con su propio ícono — las dos conviven sin pisarse.
-5. Para producción no cambia nada: `eas build --profile production`.
+   **Confirmado en dispositivo real el 2026-08-13.**
+6. Para producción no cambia nada: `eas build --profile production`.
 
 **Verificá siempre a dónde apunta un build** antes de confiar en él: el perfil
 `production` es el único con la URL real, y está escrita explícita en `eas.json`.
@@ -203,13 +231,18 @@ no requiere build nuevo).
 
 ## 5. Lo que falta y no está resuelto
 
+- **CI (GitHub Actions) para `staging`/`main`**: correr tests/lint automático
+  en cada push y PR contra `main`, para que un merge a producción no dependa
+  solo de haberlo probado a mano en NumaDev. Decisión: se deja para más
+  adelante, no es la prioridad ahora. Cuando se retome, el disparador natural
+  es "push a staging" (rápido, feedback temprano) y "PR contra main" (gate
+  antes de producción).
 - **Login con Google en la web** (`frontend/modules/auth.js`) tiene su propia
   URL y anon key de Supabase hardcodeadas a producción, sin pasar por
-  `APP_ENTORNO`. Hoy, entrar con Google desde "Numa DEV" autentica igual
-  contra el Supabase de producción. Login con email/contraseña no tiene este
-  problema (pasa por el backend, que sí respeta `SUPABASE_URL`). Decisión
-  tomada: no se arregla por ahora — queda anotado acá para el día que se
-  retome.
+  `APP_ENTORNO` — en NumaDev autenticaría igual contra el Supabase de
+  producción. **Descartado a propósito**: no se va a usar login con Google,
+  así que no hace falta arreglarlo. Login con email/contraseña (el que sí se
+  usa) no tiene este problema — pasa por el backend, que respeta `SUPABASE_URL`.
 - **Métricas de producto propias** (cuánto tardó cada etapa, qué modelo
   respondió, qué módulos del prompt se activaron): la idea es una tabla en
   Supabase escrita en background y consultada desde el `/dashboard` que ya
