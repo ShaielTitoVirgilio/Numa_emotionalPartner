@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
 from app.core.auth import get_current_user_id
-from app.core.observability import capturar_error
+from app.core.observability import capturar_error, etiquetar_request
+from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
@@ -400,6 +401,9 @@ def chat_endpoint(
     try:
         # El user_id viene SIEMPRE del token, nunca del body (IDOR fix)
         user_id = auth_user_id
+        # Solo para los logs operativos (Railway) — nunca a Sentry ni junto
+        # con contenido de mensajes. Ver docstring de get_current_user_id.
+        email = getattr(request.state, "user_email", None)
 
         # Límite server-side de tamaño de la conversación
         conversation = body.conversation[-MAX_CONV_MESSAGES:]
@@ -433,6 +437,10 @@ def chat_endpoint(
                     ultimo_mensaje,
                     crisis["category"],
                     crisis_log_level,
+                )
+                log_event(
+                    "chat_turn", endpoint="/chat", user_id=user_id, email=email,
+                    crisis_hardcoded=True, risk_level="high", llm_provider=None,
                 )
                 return {
                     "message":          crisis["message"],
@@ -759,6 +767,26 @@ def chat_endpoint(
         # Sin early-return: reportar el nivel real de señal detectada
         risk_level = "medium" if crisis_score >= 0.35 else "none"
 
+        llm_info = result.get("_llm") or {}
+        etiquetar_request(
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+        )
+        log_event(
+            "chat_turn",
+            endpoint="/chat",
+            user_id=user_id,
+            email=email,
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+            llm_fallback=llm_info.get("fallback"),
+            llm_latency_ms=llm_info.get("latency_ms"),
+            mood=result.get("mood"),
+            risk_level=risk_level,
+            suggested_action=result.get("suggested_action"),
+            memorias_nuevas=len(memorias_validadas),
+        )
+
         # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
         # marcarlo followed_up para no volver a preguntar cómo le fue. Si dijo que
         # AÚN no pasó ("es el martes que viene"), se re-fecha y queda abierto.
@@ -847,6 +875,10 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
         if crisis["detected"]:
             if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
                 # Sin crisis_log: no hay user_id al que asociarlo.
+                log_event(
+                    "chat_turn", endpoint="/chat/guest", user_id=None,
+                    crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                )
                 return {
                     "message":          crisis["message"],
                     "mood":             "sad",
@@ -898,6 +930,20 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
 
         if result.get("message"):
             result["message"] = _quitar_che(result["message"])
+
+        llm_info = result.get("_llm") or {}
+        log_event(
+            "chat_turn",
+            endpoint="/chat/guest",
+            user_id=None,
+            llm_provider=llm_info.get("provider"),
+            llm_model=llm_info.get("model"),
+            llm_fallback=llm_info.get("fallback"),
+            llm_latency_ms=llm_info.get("latency_ms"),
+            mood=result.get("mood"),
+            risk_level="medium" if crisis_score >= 0.35 else "none",
+            suggested_action=result.get("suggested_action"),
+        )
 
         return {
             "message":          result["message"],

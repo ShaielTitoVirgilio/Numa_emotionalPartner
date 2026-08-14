@@ -2,6 +2,7 @@
 
 import re
 import json
+import time
 from typing import List, Literal, TypedDict, Optional
 from openai import OpenAI
 
@@ -93,6 +94,10 @@ class LLMClient:
         # reintentamos con el fallback antes de rendirnos al mensaje genérico.
         raw = None
         ultimo_error = None
+        proveedor_usado = None
+        modelo_usado = None
+        intento_usado = None
+        inicio = time.perf_counter()
         for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
             try:
                 completion = cliente.chat.completions.create(
@@ -109,6 +114,7 @@ class LLMClient:
                     extra_body=(extra_body if extra_body is not None else extra_body_for(proveedor, modelo)),
                 )
                 raw = completion.choices[0].message.content or ""
+                proveedor_usado, modelo_usado, intento_usado = proveedor, modelo, i
                 if i > 0:
                     print(f"ℹ️ LLM: respondió el modelo de backup ({proveedor or '?'}: {modelo})")
                 break
@@ -121,14 +127,22 @@ class LLMClient:
                 if recuperado is not None:
                     print(f"ℹ️ json_validate_failed ({modelo}): recuperado failed_generation")
                     raw = recuperado
+                    proveedor_usado, modelo_usado, intento_usado = proveedor, modelo, i
                     break
                 # Caída real (timeout, rate limit, 402, 5xx): probamos el backup.
                 ultimo_error = e
                 print(f"⚠️ LLM error con {proveedor or '?'}: {modelo}: {e}")
 
+        latencia_ms = round((time.perf_counter() - inicio) * 1000, 1)
+
         if raw is None:
             print(f"⚠️ LLM: fallaron todos los modelos. Último error: {ultimo_error}")
-            return dict(_FALLBACK_RESPONSE)
+            resultado = dict(_FALLBACK_RESPONSE)
+            resultado["_llm"] = {
+                "provider": None, "model": None, "fallback": None,
+                "ok": False, "latency_ms": latencia_ms,
+            }
+            return resultado
 
         # Defensa: si el modelo de razonamiento filtró el <think> al content,
         # lo quitamos antes de parsear (con json_object normalmente ya viene limpio).
@@ -233,6 +247,15 @@ class LLMClient:
             "mood":             parsed["mood"],
             "suggested_action": parsed.get("suggested_action"),
             "memories":         memories,
+            # Metadata operativa para logging (chat_router la lee y no la
+            # incluye en la respuesta HTTP). Nunca contenido de la conversación.
+            "_llm": {
+                "provider": proveedor_usado,
+                "model": modelo_usado,
+                "fallback": bool(intento_usado) if intento_usado is not None else None,
+                "ok": True,
+                "latency_ms": latencia_ms,
+            },
         }
 
 
