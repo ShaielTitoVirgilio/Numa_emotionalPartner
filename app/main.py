@@ -85,11 +85,16 @@ app.add_middleware(NoCacheJSMiddleware)
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Une la pieza que faltaba entre Sentry (solo ve errores) y los `print()`
     sueltos que caían en los logs de Railway sin estructura: una línea JSON
-    por request de la API con método, endpoint, status, latencia y user_id
-    (si el endpoint es autenticado) — para poder buscar "qué le pasó a este
-    usuario" o "está tardando este endpoint" sin esperar a que reviente una
-    excepción. request.state.user_id lo deja seteado get_current_user_id
-    (app/core/auth.py) cuando el endpoint pasa por ese dependency.
+    por request de la API con método, endpoint, status, latencia y
+    user_id/email (si el endpoint es autenticado) — para poder buscar "qué le
+    pasó a este usuario" o "está tardando este endpoint" sin esperar a que
+    reviente una excepción. request.state.user_id/user_email los deja
+    seteados get_current_user_id (app/core/auth.py) cuando el endpoint pasa
+    por ese dependency.
+
+    El email SOLO va a estos logs (Railway, que mira el dueño de la app para
+    saber a quién atender) — nunca a Sentry (marcar_usuario ahí sigue
+    mandando nada más que el UUID) y nunca junto con contenido de mensajes.
 
     También taguea el scope de Sentry con el mismo request_id: si más
     adelante en este request salta un error, el evento en Sentry ya viene
@@ -124,6 +129,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 method=request.method,
                 path=request.url.path,
                 user_id=getattr(request.state, "user_id", None),
+                email=getattr(request.state, "user_email", None),
                 status=500,
                 latencia_ms=round((time.perf_counter() - inicio) * 1000, 1),
                 excepcion_no_manejada=True,
@@ -137,6 +143,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             method=request.method,
             path=request.url.path,
             user_id=getattr(request.state, "user_id", None),
+            email=getattr(request.state, "user_email", None),
             status=response.status_code,
             latencia_ms=round((time.perf_counter() - inicio) * 1000, 1),
         )

@@ -643,11 +643,14 @@ def chat_endpoint(
     try:
         # El user_id viene SIEMPRE del token, nunca del body (IDOR fix)
         user_id = auth_user_id
+        # Solo para los logs operativos (Railway) — nunca a Sentry ni junto
+        # con contenido de mensajes. Ver docstring de get_current_user_id.
+        email = getattr(request.state, "user_email", None)
 
         turno = _preparar_turno(body, user_id, background_tasks)
         if turno["crisis_confirmada"]:
             log_event(
-                "chat_turn", endpoint="/chat", user_id=user_id,
+                "chat_turn", endpoint="/chat", user_id=user_id, email=email,
                 crisis_hardcoded=True, risk_level="high", llm_provider=None,
             )
             return turno["respuesta_crisis"]
@@ -733,6 +736,7 @@ def chat_endpoint(
             "chat_turn",
             endpoint="/chat",
             user_id=user_id,
+            email=email,
             llm_provider=llm_info.get("provider"),
             llm_model=llm_info.get("model"),
             llm_fallback=llm_info.get("fallback"),
@@ -816,7 +820,9 @@ def _stream_ndjson_fijo(payload: Dict[str, Any]):
     })
 
 
-def _stream_chat_respuesta(turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks):
+def _stream_chat_respuesta(
+    turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks, email: Optional[str] = None,
+):
     """Generador principal: llama al LLM en streaming, va filtrando/emitiendo
     oraciones vía BufferStreamingMensaje (sección 5 del plan) y al final
     dispara el mismo post-procesamiento de memorias/background que /chat."""
@@ -881,6 +887,7 @@ def _stream_chat_respuesta(turno: Dict[str, Any], user_id: str, background_tasks
         "chat_turn",
         endpoint="/chat/stream",
         user_id=user_id,
+        email=email,
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
         llm_fallback=llm_info.get("fallback"),
@@ -925,6 +932,7 @@ def chat_stream_endpoint(
     auth_user_id: str = Depends(get_current_user_id),
 ):
     user_id = auth_user_id
+    email = getattr(request.state, "user_email", None)
     try:
         turno = _preparar_turno(body, user_id, background_tasks)
     except Exception:
@@ -934,12 +942,12 @@ def chat_stream_endpoint(
 
     if turno["crisis_confirmada"]:
         log_event(
-            "chat_turn", endpoint="/chat/stream", user_id=user_id,
+            "chat_turn", endpoint="/chat/stream", user_id=user_id, email=email,
             crisis_hardcoded=True, risk_level="high", llm_provider=None,
         )
         generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
     else:
-        generador = _stream_chat_respuesta(turno, user_id, background_tasks)
+        generador = _stream_chat_respuesta(turno, user_id, background_tasks, email=email)
 
     # background=background_tasks es necesario: a diferencia de devolver un
     # dict (donde FastAPI engancha las tareas solas), acá se devuelve un
