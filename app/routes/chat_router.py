@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
@@ -244,6 +245,20 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     "respuesta_crisis": {...}}. Si no, el resto de las claves que hacen
     falta para llamar al LLM y post-procesar la respuesta.
     """
+    # Checkpoints de latencia por etapa — ver GUIA_LATENCIA.md (o el log
+    # "chat_turn": t_perfil_ms, t_crisis_verifier_ms, t_context_router_ms,
+    # t_memorias_ms, t_patrones_ms, t_proactivo_ms, t_checkin_ms). Es la única
+    # forma de saber DÓNDE se van los ~6s de un turno en vez de adivinar —
+    # cada uno de estos pasos es secuencial hoy (ver docstring de arriba).
+    tiempos: Dict[str, float] = {}
+    _t0 = time.perf_counter()
+
+    def _checkpoint(nombre: str) -> None:
+        nonlocal _t0
+        ahora = time.perf_counter()
+        tiempos[nombre] = round((ahora - _t0) * 1000, 1)
+        _t0 = ahora
+
     # Límite server-side de tamaño de la conversación
     conversation = body.conversation[-MAX_CONV_MESSAGES:]
     for m in conversation:
@@ -257,17 +272,21 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         except Exception as e:
             capturar_error(e, contexto="cargar_perfil")
             perfil = None
+    _checkpoint("t_perfil_ms")
 
     ultimo_mensaje = conversation[-1].content if conversation else ""
     crisis = detectar_crisis(ultimo_mensaje)
     crisis_score = crisis.get("score", 0.0)
     crisis_log_level = crisis.get("log_level", "none")
+    _checkpoint("t_crisis_keywords_ms")
 
     if crisis["detected"]:
         # Verificación en dos pasos: las keywords dispararon crítico/alto;
         # un clasificador LLM rápido confirma si el riesgo es real y actual.
         # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
-        if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
+        confirmado = confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or "")
+        _checkpoint("t_crisis_verifier_ms")
+        if confirmado:
             background_tasks.add_task(
                 feedback_repo.save_crisis_log,
                 user_id, ultimo_mensaje, crisis["category"], crisis_log_level,
@@ -281,6 +300,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
                     "risk_level":       "high",
                     "nuevas_memorias":  None,
                 },
+                "_tiempos": tiempos,
             }
         # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
         # se degrada a señal media → el LLM responde con módulos de crisis.
@@ -289,6 +309,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
 
     # ── Capa 2: clasificador semántico de contexto ──────────────
     router_hints = clasificar_contexto([m.model_dump() for m in conversation])
+    _checkpoint("t_context_router_ms")
     if router_hints.get("ok"):
         score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
         if score_router > crisis_score:
@@ -329,12 +350,14 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         capturar_error(e, contexto="cargar_memorias")
         print(f"⚠️ No se pudieron cargar memorias: {e}")
         memorias_vigentes = memorias_sesion or []
+    _checkpoint("t_memorias_ms")
 
     try:
         patrones = get_topic_patterns_cached(user_id=user_id)
     except Exception as e:
         capturar_error(e, contexto="cargar_patrones")
         print(f"⚠️ No se pudieron cargar patrones: {e}")
+    _checkpoint("t_patrones_ms")
 
     # ── Memoria proactiva contextual ─────────────────────────────────
     hoy = date.today()
@@ -380,6 +403,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         except Exception as e:
             capturar_error(e, contexto="memoria_contextual")
             print(f"⚠️ No se pudo elegir memoria contextual: {e}")
+    _checkpoint("t_proactivo_ms")
 
     es_inicio_sesion = len(conversation) == 1
     num_interacciones = len(conversation)
@@ -404,6 +428,10 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     except Exception as e:
         capturar_error(e, contexto="cargar_checkin")
         print(f"⚠️ No se pudo cargar el check-in: {e}")
+    # Agrupados: dias_inactivo, hay_crisis_reciente y checkin_hoy arriba son
+    # cada uno una consulta chica (y las dos primeras, condicionales) — más
+    # útil verlas juntas que trocear el checkpoint en tres casi-siempre-cero.
+    _checkpoint("t_metadatos_ms")
 
     historial_reciente = [m.model_dump() for m in conversation[-4:]]
 
@@ -449,6 +477,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         memoria_recurso=memoria_recurso,
         router_hints=router_hints,
     )
+    _checkpoint("t_prompt_ms")
 
     return {
         "crisis_confirmada": False,
@@ -461,6 +490,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "ids_a_desactivar": ids_a_desactivar,
         "evento_proactivo": evento_proactivo,
         "tema_abierto": tema_abierto,
+        "_tiempos": tiempos,
         "memoria_ctx_id": memoria_ctx_id,
         "preguntas_seguidas": preguntas_seguidas,
         "ultimo_modulo_critico": ultimo_modulo_critico,
@@ -652,6 +682,7 @@ def chat_endpoint(
             log_event(
                 "chat_turn", endpoint="/chat", user_id=user_id, email=email,
                 crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                **turno.get("_tiempos", {}),
             )
             return turno["respuesta_crisis"]
 
@@ -732,6 +763,8 @@ def chat_endpoint(
             llm_provider=llm_info.get("provider"),
             llm_model=llm_info.get("model"),
         )
+        tiempos = turno.get("_tiempos", {})
+        t_preparar_turno_ms = round(sum(tiempos.values()), 1)
         log_event(
             "chat_turn",
             endpoint="/chat",
@@ -745,6 +778,11 @@ def chat_endpoint(
             risk_level=risk_level,
             suggested_action=result.get("suggested_action"),
             memorias_nuevas=len(memorias_validadas),
+            # Desglose de dónde se va el tiempo ANTES de llamar al LLM
+            # principal — ver _checkpoint() en _preparar_turno. Sumado a
+            # llm_latency_ms de arriba da el total real del turno.
+            t_preparar_turno_ms=t_preparar_turno_ms,
+            **tiempos,
         )
 
         _disparar_tareas_turno(
@@ -883,6 +921,7 @@ def _stream_chat_respuesta(
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
     )
+    tiempos = turno.get("_tiempos", {})
     log_event(
         "chat_turn",
         endpoint="/chat/stream",
@@ -893,6 +932,8 @@ def _stream_chat_respuesta(
         llm_fallback=llm_info.get("fallback"),
         llm_latency_ms=llm_info.get("latency_ms"),
         llm_cut=llm_info.get("cut"),
+        t_preparar_turno_ms=round(sum(tiempos.values()), 1),
+        **tiempos,
         mood=metadata.get("mood"),
         risk_level=risk_level,
         suggested_action=metadata.get("suggested_action"),
@@ -944,6 +985,7 @@ def chat_stream_endpoint(
         log_event(
             "chat_turn", endpoint="/chat/stream", user_id=user_id, email=email,
             crisis_hardcoded=True, risk_level="high", llm_provider=None,
+            **turno.get("_tiempos", {}),
         )
         generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
     else:
