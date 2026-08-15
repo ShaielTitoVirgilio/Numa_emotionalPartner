@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
@@ -233,6 +234,18 @@ class ChatResponse(BaseModel):
     nuevas_memorias: Optional[List[Dict[str, Any]]] = None
 
 
+# context_router/memorias/patrones/metadatos corren en paralelo dentro de
+# _preparar_turno (ver ThreadPoolExecutor ahí) — sus tiempos individuales se
+# guardan en "_tiempos" para diagnóstico, pero SUMARLOS exageraría el total
+# real (se solapan a propósito). "t_paralelo_ms" ya representa el tiempo de
+# pared de ese bloque, así que estos 4 quedan afuera de la suma.
+_TIEMPOS_EXCLUIDOS_DEL_TOTAL = {"t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms"}
+
+
+def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
+    return round(sum(v for k, v in tiempos.items() if k not in _TIEMPOS_EXCLUIDOS_DEL_TOTAL), 1)
+
+
 def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Todo el trabajo previo a llamar al LLM: límites, crisis, perfil,
     memorias, patrones, memoria proactiva, prompt. Extraído de chat_endpoint
@@ -307,9 +320,106 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         crisis_score = 0.45
         crisis_log_level = "medium"
 
-    # ── Capa 2: clasificador semántico de contexto ──────────────
-    router_hints = clasificar_contexto([m.model_dump() for m in conversation])
-    _checkpoint("t_context_router_ms")
+    memorias_sesion: List[Dict[str, Any]] = []
+    if perfil and "_memorias_sesion" in perfil:
+        raw = perfil.pop("_memorias_sesion", []) or []
+        memorias_sesion = [
+            m if isinstance(m, dict) else {"content": str(m), "priority": 3, "category": "otro"}
+            for m in raw
+        ]
+
+    num_interacciones = len(conversation)
+
+    # ultimo_modulo_critico: local/instantáneo (detectar_crisis por keywords
+    # sobre los últimos mensajes propios, no pega a ningún servicio) — se
+    # calcula ANTES del paralelo de abajo para poder saltear la consulta a
+    # Supabase (hay_crisis_reciente) si ya dio positivo, igual que antes.
+    ultimo_modulo_critico = False
+    previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
+    for msg_previo in previos_usuario:
+        if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
+            ultimo_modulo_critico = True
+            break
+
+    # ── Etapas independientes en paralelo ────────────────────────────
+    # Medido en producción (ver docs/latencia): context_router (una llamada a
+    # LLM aparte de la principal, SOLO para rutear módulos) se come 1.5-2s por
+    # su cuenta, y corría secuencial ANTES de memorias/patrones/metadatos —
+    # cada Supabase call se sumaba encima de esos 1.5-2s. Ninguna de las 4
+    # etapas de abajo depende de otra (solo la memoria proactiva, más abajo,
+    # necesita el resultado de context_router) — correrlas en paralelo no
+    # acelera a context_router en sí, pero evita que memorias/patrones/
+    # metadatos agreguen su propio tiempo arriba del suyo.
+    def _tarea_router():
+        t0 = time.perf_counter()
+        hints = clasificar_contexto([m.model_dump() for m in conversation])
+        return hints, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_memorias():
+        t0 = time.perf_counter()
+        vigentes, ids_old = memorias_sesion or [], []
+        try:
+            m_db, ids_old = get_recent_memories(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
+            seen = set()
+            merged = []
+            for m in (memorias_sesion or []) + m_db:
+                key = (m.get("content") or "").strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(m)
+            vigentes = merged[:15]
+        except Exception as e:
+            capturar_error(e, contexto="cargar_memorias")
+            print(f"⚠️ No se pudieron cargar memorias: {e}")
+            vigentes, ids_old = memorias_sesion or [], []
+        return vigentes, ids_old, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_patrones():
+        t0 = time.perf_counter()
+        pats: List[dict] = []
+        try:
+            pats = get_topic_patterns_cached(user_id=user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_patrones")
+            print(f"⚠️ No se pudieron cargar patrones: {e}")
+        return pats, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_metadatos():
+        t0 = time.perf_counter()
+        dias_inactivo_ = 0
+        if num_interacciones <= 4:
+            dias_inactivo_ = get_dias_inactivo(user_id)
+        critico = ultimo_modulo_critico
+        if not critico and num_interacciones <= 4:
+            critico = feedback_repo.hay_crisis_reciente(user_id)
+        checkin = None
+        try:
+            checkin = get_checkin_hoy_cached(user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_checkin")
+            print(f"⚠️ No se pudo cargar el check-in: {e}")
+        return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
+
+    _t_paralelo_inicio = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=4) as ejecutor:
+        fut_router = ejecutor.submit(_tarea_router)
+        fut_memorias = ejecutor.submit(_tarea_memorias)
+        fut_patrones = ejecutor.submit(_tarea_patrones)
+        fut_metadatos = ejecutor.submit(_tarea_metadatos)
+
+        router_hints, tiempos["t_context_router_ms"] = fut_router.result()
+        memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
+        patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
+        dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
+    # Tiempo de PARED del bloque paralelo — es el que realmente importa para
+    # el total (la suma de los 4 de arriba exagera, se solapan a propósito).
+    tiempos["t_paralelo_ms"] = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
+    _t0 = time.perf_counter()  # reengancha _checkpoint(): las etapas de acá para abajo vuelven a ser secuenciales
+
+    # Qué proveedor/modelo respondió (o se colgó) el context router — para
+    # poder cruzarlo con t_context_router_ms en el log sin adivinar. Separado
+    # de `tiempos` (que solo tiene números).
+    router_meta = router_hints.pop("_router", None) or {}
     if router_hints.get("ok"):
         score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
         if score_router > crisis_score:
@@ -323,43 +433,9 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             user_id, ultimo_mensaje, crisis.get("category") or "ROUTER_RISK", crisis_log_level,
         )
 
-    memorias_sesion: List[Dict[str, Any]] = []
-    if perfil and "_memorias_sesion" in perfil:
-        raw = perfil.pop("_memorias_sesion", []) or []
-        memorias_sesion = [
-            m if isinstance(m, dict) else {"content": str(m), "priority": 3, "category": "otro"}
-            for m in raw
-        ]
-
-    memorias_vigentes: List[Dict[str, Any]] = []
-    ids_a_desactivar: List[str] = []
-    patrones: List[dict] = []
-
-    try:
-        m_db, ids_old = get_recent_memories(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
-        seen = set()
-        merged = []
-        for m in (memorias_sesion or []) + m_db:
-            key = (m.get("content") or "").strip()
-            if key and key not in seen:
-                seen.add(key)
-                merged.append(m)
-        memorias_vigentes = merged[:15]
-        ids_a_desactivar = ids_old
-    except Exception as e:
-        capturar_error(e, contexto="cargar_memorias")
-        print(f"⚠️ No se pudieron cargar memorias: {e}")
-        memorias_vigentes = memorias_sesion or []
-    _checkpoint("t_memorias_ms")
-
-    try:
-        patrones = get_topic_patterns_cached(user_id=user_id)
-    except Exception as e:
-        capturar_error(e, contexto="cargar_patrones")
-        print(f"⚠️ No se pudieron cargar patrones: {e}")
-    _checkpoint("t_patrones_ms")
-
     # ── Memoria proactiva contextual ─────────────────────────────────
+    # Depende de router_hints (estado_emocional) → tiene que ir DESPUÉS del
+    # paralelo de arriba, no puede sumarse a él.
     hoy = date.today()
     evento_proactivo: Optional[Dict[str, Any]] = None
     tema_abierto: Optional[Dict[str, Any]] = None
@@ -405,33 +481,11 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             print(f"⚠️ No se pudo elegir memoria contextual: {e}")
     _checkpoint("t_proactivo_ms")
 
+    # es_inicio_sesion/es_primera_vez son locales — no hacía falta paralelizarlas.
+    # dias_inactivo, ultimo_modulo_critico y checkin_hoy ya se resolvieron
+    # arriba, en el bloque paralelo (_tarea_metadatos).
     es_inicio_sesion = len(conversation) == 1
-    num_interacciones = len(conversation)
     es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
-
-    dias_inactivo = 0
-    if num_interacciones <= 4:
-        dias_inactivo = get_dias_inactivo(user_id)
-
-    ultimo_modulo_critico = False
-    previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
-    for msg_previo in previos_usuario:
-        if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
-            ultimo_modulo_critico = True
-            break
-    if not ultimo_modulo_critico and num_interacciones <= 4:
-        ultimo_modulo_critico = feedback_repo.hay_crisis_reciente(user_id)
-
-    checkin_hoy = None
-    try:
-        checkin_hoy = get_checkin_hoy_cached(user_id)
-    except Exception as e:
-        capturar_error(e, contexto="cargar_checkin")
-        print(f"⚠️ No se pudo cargar el check-in: {e}")
-    # Agrupados: dias_inactivo, hay_crisis_reciente y checkin_hoy arriba son
-    # cada uno una consulta chica (y las dos primeras, condicionales) — más
-    # útil verlas juntas que trocear el checkpoint en tres casi-siempre-cero.
-    _checkpoint("t_metadatos_ms")
 
     historial_reciente = [m.model_dump() for m in conversation[-4:]]
 
@@ -491,6 +545,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "evento_proactivo": evento_proactivo,
         "tema_abierto": tema_abierto,
         "_tiempos": tiempos,
+        "_router": router_meta,
         "memoria_ctx_id": memoria_ctx_id,
         "preguntas_seguidas": preguntas_seguidas,
         "ultimo_modulo_critico": ultimo_modulo_critico,
@@ -764,7 +819,8 @@ def chat_endpoint(
             llm_model=llm_info.get("model"),
         )
         tiempos = turno.get("_tiempos", {})
-        t_preparar_turno_ms = round(sum(tiempos.values()), 1)
+        router_meta = turno.get("_router", {})
+        t_preparar_turno_ms = _sumar_tiempos(tiempos)
         log_event(
             "chat_turn",
             endpoint="/chat",
@@ -782,6 +838,8 @@ def chat_endpoint(
             # principal — ver _checkpoint() en _preparar_turno. Sumado a
             # llm_latency_ms de arriba da el total real del turno.
             t_preparar_turno_ms=t_preparar_turno_ms,
+            router_provider=router_meta.get("provider"),
+            router_model=router_meta.get("model"),
             **tiempos,
         )
 
@@ -922,6 +980,7 @@ def _stream_chat_respuesta(
         llm_model=llm_info.get("model"),
     )
     tiempos = turno.get("_tiempos", {})
+    router_meta = turno.get("_router", {})
     log_event(
         "chat_turn",
         endpoint="/chat/stream",
@@ -932,7 +991,9 @@ def _stream_chat_respuesta(
         llm_fallback=llm_info.get("fallback"),
         llm_latency_ms=llm_info.get("latency_ms"),
         llm_cut=llm_info.get("cut"),
-        t_preparar_turno_ms=round(sum(tiempos.values()), 1),
+        t_preparar_turno_ms=_sumar_tiempos(tiempos),
+        router_provider=router_meta.get("provider"),
+        router_model=router_meta.get("model"),
         **tiempos,
         mood=metadata.get("mood"),
         risk_level=risk_level,

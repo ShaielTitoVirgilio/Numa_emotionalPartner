@@ -27,6 +27,7 @@ contención — nunca lo bajamos.
 """
 
 import json
+import time
 
 from app.core.config import config
 from app.core.llm import get_context_router_target, extra_body_for, max_tokens_for_provider
@@ -165,10 +166,24 @@ def clasificar_contexto(conversation: list) -> dict:
     if not conversation:
         return dict(_RESULTADO_VACIO)
 
+    # Metadata operativa para logging (chat_router la suma a "chat_turn" como
+    # router_provider/router_model). Se resuelve ANTES del try para que quede
+    # disponible incluso si la llamada al LLM falla o da timeout — ahí es
+    # justo cuando más importa saber qué proveedor/modelo fue el lento.
+    proveedor = modelo = None
+    inicio = time.perf_counter()
+
+    def _con_tiempo(resultado: dict) -> dict:
+        resultado["_router"] = {
+            "provider": proveedor, "model": modelo,
+            "latency_ms": round((time.perf_counter() - inicio) * 1000, 1),
+        }
+        return resultado
+
     try:
         bloque = _formatear_conversacion(conversation)
         if not bloque.strip():
-            return dict(_RESULTADO_VACIO)
+            return _con_tiempo(dict(_RESULTADO_VACIO))
 
         cliente, proveedor, modelo = get_context_router_target()
         extra = extra_body_for(proveedor, modelo)
@@ -192,11 +207,11 @@ def clasificar_contexto(conversation: list) -> dict:
             extra_body=extra,
         )
         data = json.loads(resp.choices[0].message.content or "{}")
-        return _normalizar(data)
+        return _con_tiempo(_normalizar(data))
     except Exception as e:
         # Fail-safe: el ruteo por keywords sigue funcionando solo.
         print(f"⚠️ Context router no disponible (se usa ruteo por keywords): {e}")
-        return dict(_RESULTADO_VACIO)
+        return _con_tiempo(dict(_RESULTADO_VACIO))
 
 
 # Mapeo score de crisis por señal del router. Espeja los umbrales de
