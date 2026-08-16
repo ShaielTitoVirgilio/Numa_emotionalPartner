@@ -1,13 +1,20 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, field_validator
+from slowapi import Limiter
 from app.auth_service import register_user, login_user, get_user_profile, refresh_session, verify_email_otp
 from app.core.auth import get_current_user_id
 from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.observability import capturar_error
+from app.core.ratelimit import client_ip
 from app.repositories.user_repository import UserRepository
 
 router = APIRouter()
 user_repo = UserRepository()
+# Sin rate limit acá, /register, /login, /refresh y /verify-email quedaban
+# expuestos a fuerza bruta (login, el OTP de 8 dígitos de verify-email) y a
+# spam de cuentas (register) sin ningún freno — a diferencia de /chat, que
+# ya lo tenía desde el vamos.
+limiter = Limiter(key_func=client_ip)
 
 MAX_NOMBRE_CHARS = 60
 
@@ -28,9 +35,10 @@ class VerifyEmailRequest(BaseModel):
     token: str
 
 @router.post("/register")
-def register_endpoint(request: RegisterRequest):
+@limiter.limit("5/minute")
+def register_endpoint(request: Request, body: RegisterRequest):
     try:
-        user = register_user(request.email, request.password, request.nombre)
+        user = register_user(body.email, body.password, body.nombre)
         return {"message": "Usuario creado correctamente", "user_id": user.id}
     except NumaError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -39,9 +47,10 @@ def register_endpoint(request: RegisterRequest):
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 @router.post("/login")
-def login_endpoint(request: LoginRequest):
+@limiter.limit("10/minute")
+def login_endpoint(request: Request, body: LoginRequest):
     try:
-        result = login_user(request.email, request.password)
+        result = login_user(body.email, body.password)
         return result
     except NumaError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -50,9 +59,10 @@ def login_endpoint(request: LoginRequest):
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 @router.post("/refresh")
-def refresh_endpoint(request: RefreshRequest):
+@limiter.limit("30/minute")
+def refresh_endpoint(request: Request, body: RefreshRequest):
     try:
-        result = refresh_session(request.refresh_token)
+        result = refresh_session(body.refresh_token)
         return result
     except NumaError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -107,9 +117,10 @@ def update_nombre_endpoint(
 
 
 @router.post("/verify-email")
-def verify_email_endpoint(request: VerifyEmailRequest):
+@limiter.limit("5/minute")
+def verify_email_endpoint(request: Request, body: VerifyEmailRequest):
     try:
-        result = verify_email_otp(request.email, request.token)
+        result = verify_email_otp(body.email, body.token)
         return result
     except NumaError as e:
         raise HTTPException(status_code=400, detail=str(e))
