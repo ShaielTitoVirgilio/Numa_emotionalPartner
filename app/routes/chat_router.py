@@ -214,6 +214,11 @@ class ChatRequest(BaseModel):
     ubicacion: Optional[UbicacionData] = None
     ultimo_mood: Optional[str] = None
     checkin_recien_hecho: Optional[bool] = False
+    # Solo lo manda LlamadaOverlay.tsx (modo llamada de voz), nunca el chat
+    # escrito — aunque ambos pegan a /chat/stream. Baja la retención del
+    # buffer a 0 (audio arranca antes) y le pide al LLM respuestas más
+    # cortas para voz (ver _INSTRUCCION_MODO_LLAMADA en llm_client.py).
+    modo_llamada: Optional[bool] = False
 
 
 class ImportMessage(BaseModel):
@@ -673,9 +678,11 @@ def _disparar_tareas_turno(
 
 @router.post("/speech-to-text")
 async def speech_to_text_endpoint(
+    request: Request,
     file: UploadFile = File(...),
     _user_id: str = Depends(get_current_user_id),
 ):
+    email = getattr(request.state, "user_email", None)
     try:
         audio_bytes = await file.read()
 
@@ -691,7 +698,23 @@ async def speech_to_text_endpoint(
         # había un STT de 5s en vuelo). Con el modo llamada, que transcribe en
         # cada turno, eso encolaba los mensajes del chat escrito hasta pasarse
         # del timeout de 25s del cliente.
+        #
+        # t_speech_to_text: se sospechaba (y la sensación del usuario en la
+        # llamada real lo confirma) que Whisper/Groq no es el cuello de
+        # botella — esto lo mide en vez de asumirlo, sin loguear contenido.
+        inicio = time.perf_counter()
         text = await run_in_threadpool(speech_to_text, audio_bytes, file.filename)
+        t_speech_to_text_ms = round((time.perf_counter() - inicio) * 1000)
+
+        log_event(
+            "stt_turn",
+            endpoint="/speech-to-text",
+            user_id=_user_id,
+            email=email,
+            t_speech_to_text_ms=t_speech_to_text_ms,
+            audio_bytes=len(audio_bytes),
+            texto_len=len(text or ""),
+        )
         return {"text": text}
 
     except HTTPException:
@@ -918,6 +941,7 @@ def _stream_ndjson_fijo(payload: Dict[str, Any]):
 
 def _stream_chat_respuesta(
     turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks, email: Optional[str] = None,
+    modo_llamada: bool = False,
 ):
     """Generador principal: llama al LLM en streaming, va filtrando/emitiendo
     oraciones vía BufferStreamingMensaje (sección 5 del plan) y al final
@@ -940,6 +964,14 @@ def _stream_chat_respuesta(
         preguntas_seguidas=preguntas_seguidas,
         crisis_score=crisis_score,
         ultimo_modulo_critico=ultimo_modulo_critico,
+        # Modo llamada: 0 retención — arranca a emitir/hablar antes. Efecto
+        # secundario aceptado: _quitar_cierre_presencia/_quitar_pregunta_final
+        # solo ven la última oración aislada (no las últimas 2 juntas), así
+        # que a veces el guard de largo mínimo los frena y no recortan donde
+        # sí lo harían en modo no-streaming (detalle + test en
+        # scripts/test_buffer_streaming.py). Chat escrito mantiene el
+        # default (2), sin cambios.
+        retencion=0 if modo_llamada else BufferStreamingMensaje.RETENCION_DEFAULT,
     )
 
     metadata: Optional[Dict[str, Any]] = None
@@ -947,6 +979,7 @@ def _stream_chat_respuesta(
         for tipo, valor in llm.generate_response_stream(
             conversation=[m.model_dump() for m in conversation],
             system_prompt=turno["system_prompt"],
+            modo_llamada=modo_llamada,
         ):
             if tipo == "mensaje":
                 for oracion in buf.feed(valor):
@@ -1050,7 +1083,10 @@ def chat_stream_endpoint(
         )
         generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
     else:
-        generador = _stream_chat_respuesta(turno, user_id, background_tasks, email=email)
+        generador = _stream_chat_respuesta(
+            turno, user_id, background_tasks, email=email,
+            modo_llamada=bool(body.modo_llamada),
+        )
 
     # background=background_tasks es necesario: a diferencia de devolver un
     # dict (donde FastAPI engancha las tareas solas), acá se devuelve un

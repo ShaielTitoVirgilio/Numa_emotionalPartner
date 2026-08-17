@@ -269,6 +269,7 @@ class LLMClient:
         *,
         max_tokens_base: int = 600,
         extra_body: Optional[dict] = None,
+        modo_llamada: bool = False,
     ):
         """Generador para el modo streaming. Va devolviendo tuplas:
 
@@ -287,8 +288,15 @@ class LLMClient:
             stream se corta a mitad de camino, no se reintenta con otro
             proveedor (mostraría un mensaje "Frankenstein" de dos estilos) —
             se corta ahí con una metadata neutra de cortesía.
+
+        `modo_llamada=True` (solo lo usa /chat/stream cuando lo llama la
+        llamada de voz, no el chat escrito) suma _INSTRUCCION_MODO_LLAMADA:
+        techo de extensión pensado para que se hable, no para que se lea.
         """
-        system_prompt_streaming = system_prompt + _INSTRUCCION_FORMATO_STREAMING
+        instrucciones = _INSTRUCCION_FORMATO_STREAMING
+        if modo_llamada:
+            instrucciones += _INSTRUCCION_MODO_LLAMADA
+        system_prompt_streaming = system_prompt + instrucciones
 
         ultimo_error = None
         for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
@@ -379,6 +387,27 @@ Escribí PRIMERO el mensaje para la persona, en texto plano y natural, tal cual 
 Cuando termines el mensaje, dejá una línea en blanco y escribí SOLO un JSON compacto de una línea con esta forma exacta:
 {"mood": "...", "suggested_action": ..., "memories": [...]}
 Usá los mismos valores posibles de mood/suggested_action/memories ya explicados arriba. No repitas el mensaje adentro de ese JSON — ahí van solo mood, suggested_action y memories.
+"""
+
+# Solo para el modo llamada (voz), NO para el chat escrito en streaming — los
+# dos pasan por generate_response_stream, así que esto se suma aparte y
+# condicional (ver modo_llamada arriba), no adentro de numa_prompt.py.
+#
+# M03_longitud_y_estructura (numa_prompt.py) ya pide corto por defecto y
+# permite extenderse si piden explicación/detalle — esto NO lo reemplaza, le
+# agrega un TECHO pensado para voz: en una llamada de verdad nadie suelta un
+# monólogo de diez oraciones aunque le hayas pedido que cuente algo largo,
+# lo dice en tandas cortas. Sin techo, "explicame X" podía generar un párrafo
+# entero de una — bien para leer, rarísimo para escuchar.
+_INSTRUCCION_MODO_LLAMADA = """
+
+MODO LLAMADA (estás hablando por voz, en vivo, no escribiendo):
+Por defecto 1-2 oraciones, como siempre. Si te piden que expliques, cuentes o
+detalles algo, podés extenderte hasta un máximo de 5 oraciones — nunca más
+que eso, ni siquiera si el tema da para más: en una llamada real nadie dice
+un párrafo entero de corrido, se habla en tandas y se deja lugar para que el
+otro responda. Si hay más para decir, dejalo para el próximo turno en vez de
+volcarlo todo junto.
 """
 
 

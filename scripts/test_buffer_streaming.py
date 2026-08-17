@@ -136,4 +136,68 @@ for caso in CASOS:
 
 print()
 print("TODO OK" if ok_total else "HAY DIFERENCIAS — revisar")
+
+# ──────────────────────────────────────────────────────────────────
+# Modo llamada (retencion=0): con retencion=0, toda oración completa se
+# emite en feed() apenas cierra (llega antes al TTS) — SALVO la última, que
+# por construcción del split (necesita un espacio DESPUÉS de la puntuación
+# para cortar) siempre queda pendiente en self._crudo hasta cerrar(). Así
+# que _quitar_cierre_presencia/_quitar_pregunta_final SÍ se siguen llamando,
+# pero solo ven esa última oración aislada en vez de las últimas 2 juntas.
+# Eso cambia el resultado del guard `len(recortado) >= 40`:
+#   - Si la frase de cierre ES básicamente toda la última oración (caso
+#     típico de "Acá estoy, no me voy a ningún lado."), sacarla dentro de
+#     una cola de UNA sola oración deja <40 caracteres -> el guard frena y
+#     NO se recorta (a diferencia del modo no-streaming, que mide el
+#     mensaje filtrado completo, no solo la cola).
+#   - Si el filtro solo recorta una cláusula final dentro de una oración
+#     más larga (caso típico de "..., ¿me contás un poco más?"), sigue
+#     quedando >=40 -> el guard pasa y el recorte SÍ se aplica, igual que
+#     en no-streaming.
+# Por eso el resultado válido para cada caso es exactamente uno de estos
+# dos (nunca un tercero): "esperado" (recorte aplicado, igual que
+# no-streaming) o "sin_cierre" (recorte NO aplicado, guard lo frenó).
+# Ver docs/plan_streaming_voz.md sección 5.
+# ──────────────────────────────────────────────────────────────────
+print()
+print("-- modo llamada (retencion=0) --")
+ok_llamada = True
+
+for caso in CASOS:
+    kwargs = dict(
+        familia_apertura_previa=caso["familia_previa"],
+        previo_cierre_presencia=caso["previo_cierre"],
+        preguntas_seguidas=caso["preguntas_seguidas"],
+        crisis_score=caso["crisis_score"],
+        ultimo_modulo_critico=caso["ultimo_critico"],
+        retencion=0,
+    )
+    obtenido = simular_streaming(caso["mensaje"], **kwargs)
+
+    esperado = filtrar_no_streaming(
+        caso["mensaje"], caso["familia_previa"], caso["previo_cierre"],
+        caso["preguntas_seguidas"], caso["crisis_score"], caso["ultimo_critico"],
+    )
+
+    # sin_cierre: mismo mensaje pasado SOLO por che + aplanado de apertura
+    # (lo único garantizado "en vivo"), sin los dos filtros de cierre.
+    sin_cierre = _quitar_che(caso["mensaje"])
+    familia_actual = _familia_apertura(sin_cierre)
+    if familia_actual and familia_actual == caso["familia_previa"]:
+        aplanado = _aplanar_apertura(sin_cierre)
+        if aplanado and aplanado != sin_cierre and len(aplanado) >= 10:
+            sin_cierre = aplanado
+
+    ok = obtenido.strip() in (esperado.strip(), sin_cierre.strip())
+    ok_llamada &= ok
+    cual = "recorte aplicado" if obtenido.strip() == esperado.strip() else "recorte frenado por el guard"
+    print(f"{'✅' if ok else '❌'} {caso['nombre']} (retencion=0, {cual if ok else 'NINGUNO DE LOS DOS'})")
+    if not ok:
+        print(f"   esperado (con cierre)   : {esperado!r}")
+        print(f"   esperado (sin cierre)   : {sin_cierre!r}")
+        print(f"   obtenido                : {obtenido!r}")
+
+ok_total &= ok_llamada
+print()
+print("TODO OK" if ok_total else "HAY DIFERENCIAS — revisar")
 sys.exit(0 if ok_total else 1)

@@ -109,7 +109,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _PREFIJOS_API = (
         "/chat", "/auth", "/onboarding", "/feedback", "/checkin",
         "/dashboard", "/account", "/apple", "/memories", "/subscribe",
-        "/api/",
+        "/api/", "/speech-to-text",
     )
 
     async def dispatch(self, request: Request, call_next):

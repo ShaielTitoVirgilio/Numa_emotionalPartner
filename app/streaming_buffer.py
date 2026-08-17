@@ -49,10 +49,15 @@ class BufferStreamingMensaje:
         mensaje_final = buf.mensaje_completo()   # para guardar en Supabase
     """
 
-    RETENCION = 2  # coincide con la ventana que mira _cierra_con_presencia (partes[-2:])
+    # 2 = coincide con la ventana que mira _cierra_con_presencia (partes[-2:]).
+    # Configurable por instancia: el modo llamada (voz) lo baja a 0 — ver
+    # `retencion` en el constructor y el motivo en chat_router.py.
+    RETENCION_DEFAULT = 2
 
     def __init__(self, *, familia_apertura_previa, previo_cierre_presencia,
-                 preguntas_seguidas, crisis_score, ultimo_modulo_critico):
+                 preguntas_seguidas, crisis_score, ultimo_modulo_critico,
+                 retencion=RETENCION_DEFAULT):
+        self.RETENCION = retencion
         self._crudo = ""            # texto sin cortar en oraciones todavía
         self._retenidas = []        # oraciones completas esperando turno (≤ RETENCION)
         self._emitidas = []         # oraciones ya devueltas (para reconstruir el mensaje completo)
