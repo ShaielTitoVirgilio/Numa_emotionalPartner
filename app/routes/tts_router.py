@@ -21,6 +21,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.core.auth import get_current_user_id
 from app.core.config import config
@@ -92,3 +93,40 @@ async def tts_token(_user_id: str = Depends(get_current_user_id)):
     _token_cache = (vence_en, token)
     log_event("tts_token_emitido", endpoint="/tts/token", duracion_s=_DURACION_S)
     return {"habilitado": True, "token": token, "expira_en_s": int(vence_en - ahora)}
+
+
+class FalloTTS(BaseModel):
+    motivo: str
+    status: Optional[int] = None
+
+
+@router.post("/tts/fallo")
+async def tts_fallo(body: FalloTTS, user_id: str = Depends(get_current_user_id)):
+    """La app avisa que la voz falló, para que aparezca en Sentry.
+
+    Existe porque el fallo que más importa —quedarse sin créditos de Cartesia—
+    pasa del lado del CLIENTE: la app le pega directo a Cartesia, así que el
+    servidor nunca se enteraría por su cuenta. Y es justo el que llega sin
+    aviso previo y deja el modo llamada caído para todos.
+
+    Se reporta desde el backend en vez de meter un SDK de Sentry en la app:
+    una dependencia menos y un solo lugar donde está configurada la privacidad.
+    No se manda nada del contenido de la conversación, solo el motivo y el
+    código HTTP.
+    """
+    motivo = (body.motivo or "desconocido")[:60]
+    # 402/429 = sin créditos o límite alcanzado. Se separa del resto porque no
+    # es un error transitorio: hasta que alguien recargue, el modo llamada no
+    # funciona para NINGÚN usuario.
+    sin_creditos = body.status in (402, 429)
+    capturar_error(
+        RuntimeError(f"TTS Cartesia caído ({motivo}, HTTP {body.status})"),
+        contexto="tts_sin_creditos" if sin_creditos else "tts_fallo",
+        motivo=motivo,
+        status=str(body.status),
+    )
+    log_event(
+        "tts_fallo", endpoint="/tts/fallo", user_id=user_id,
+        motivo=motivo, status=body.status, sin_creditos=sin_creditos,
+    )
+    return {"ok": True}
