@@ -927,6 +927,10 @@ def chat_endpoint(
             t_preparar_turno_ms=t_preparar_turno_ms,
             router_provider=router_meta.get("provider"),
             router_model=router_meta.get("model"),
+            # True = la clasificación se pasó del timeout por intento, o sea
+            # que hubo reintento. Es el campo que permite calcular la tasa
+            # real de reintentos en vez de inferirla de la latencia.
+            router_reintento=router_meta.get("reintento") or None,
             **tiempos,
         )
 
@@ -1252,6 +1256,7 @@ def _stream_chat_respuesta(
         t_preparar_turno_ms=_sumar_tiempos(tiempos),
         router_provider=router_meta.get("provider"),
         router_model=router_meta.get("model"),
+        router_reintento=router_meta.get("reintento") or None,
         **tiempos,
         mood=metadata.get("mood"),
         risk_level=risk_level,

@@ -32,7 +32,31 @@ import time
 from app.core.config import config
 from app.core.llm import get_context_router_target, extra_body_for, max_tokens_for_provider
 
-_TIMEOUT_SECONDS = 4
+# Presupuesto de la clasificación. OJO: `timeout` del SDK de OpenAI es POR
+# INTENTO, no para la operación completa — el techo real es
+# timeout × (reintentos + 1) + backoff.
+#
+# Con los defaults del cliente (max_retries=2) esto NO acotaba nada: una
+# clasificación podía tomar 3 intentos y ~13s sin disparar nunca el fail-safe,
+# porque el except solo corre cuando fallan TODOS los intentos. En el chat
+# escrito eso es espera pura del usuario (el turno bloquea en fut_router.result());
+# en modo llamada no cuesta latencia pero la señal de riesgo llega tarde.
+#
+# Por qué 1 reintento de 4s y no "2 intentos cortos que sumen 4s": medido
+# 2026-08-18 sobre 75 clasificaciones, qwen3-32b da mediana 1750ms y p90
+# 3765ms. Cualquier timeout por intento que deje lugar a un reintento dentro
+# de un techo de 4s (1.75s, 2s, 2.5s) mataría entre el 25% y el 50% de los
+# intentos SANOS. Y acá el fail-safe falla ABIERTO — se rutea solo por
+# keywords, el modo que se come los planes velados (ver config.py) — así que
+# subir la tasa de fail-safe es una regresión de seguridad, no un empate.
+# Dentro de 4s se puede tener techo o reintento, no las dos cosas.
+#
+# Entonces: se baja de 2 reintentos a 1. El techo pasa de ~13s a ~8.6s sin
+# cambiar la tasa de reintento ni la de fail-safe. Los números finales salen
+# del p90 real de producción (scripts/p90_router_logs.py); esto es la cota
+# que se puede poner sin ese dato.
+_TIMEOUT_SECONDS = 4   # por intento
+_REINTENTOS = 1        # 2 intentos como máximo
 
 # Vocabularios cerrados: tienen que coincidir con lo que espera el merge en
 # seleccionar_modulos(). Si agregás un valor acá, agregá el mapeo allá.
@@ -186,9 +210,16 @@ def clasificar_contexto(conversation: list) -> dict:
     inicio = time.perf_counter()
 
     def _con_tiempo(resultado: dict) -> dict:
+        latencia = round((time.perf_counter() - inicio) * 1000, 1)
         resultado["_router"] = {
             "provider": proveedor, "model": modelo,
-            "latency_ms": round((time.perf_counter() - inicio) * 1000, 1),
+            "latency_ms": latencia,
+            # Una clasificación EXITOSA por encima del timeout por intento
+            # implica que hubo reintento: un intento suelto que se pasa muere
+            # con APITimeoutError. Sin esta marca, en el log no se distingue
+            # "el modelo tardó" de "se cortó, reintentó y la segunda entró",
+            # que es justo lo que hacía falta saber para elegir el timeout.
+            "reintento": latencia > _TIMEOUT_SECONDS * 1000,
         }
         return resultado
 
@@ -198,6 +229,11 @@ def clasificar_contexto(conversation: list) -> dict:
             return _con_tiempo(dict(_RESULTADO_VACIO))
 
         cliente, proveedor, modelo = get_context_router_target()
+        # Cliente DERIVADO solo para el router: with_options devuelve una copia
+        # con su propia política de reintentos, así que el chat principal y el
+        # verificador de crisis (que comparten el cliente cacheado de
+        # core/llm.py) siguen con los defaults del SDK.
+        cliente = cliente.with_options(max_retries=_REINTENTOS)
         extra = extra_body_for(proveedor, modelo)
         if proveedor == "openrouter" and config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS:
             pinned = [p.strip() for p in config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS.split(",") if p.strip()]
