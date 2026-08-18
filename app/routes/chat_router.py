@@ -968,11 +968,15 @@ def _stream_ndjson_fijo(payload: Dict[str, Any]):
 
 def _stream_chat_respuesta(
     turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks, email: Optional[str] = None,
-    modo_llamada: bool = False,
+    modo_llamada: bool = False, t_inicio_request: Optional[float] = None,
 ):
     """Generador principal: llama al LLM en streaming, va filtrando/emitiendo
     oraciones vía BufferStreamingMensaje (sección 5 del plan) y al final
-    dispara el mismo post-procesamiento de memorias/background que /chat."""
+    dispara el mismo post-procesamiento de memorias/background que /chat.
+
+    t_inicio_request: perf_counter() tomado al ENTRAR al endpoint. Sirve para
+    medir t_primer_delta_ms — ver el bloque de instrumentación más abajo.
+    """
     conversation = turno["conversation"]
     crisis_score = turno["crisis_score"]
     ultimo_mensaje = turno["ultimo_mensaje"]
@@ -1001,6 +1005,34 @@ def _stream_chat_respuesta(
         retencion=0 if modo_llamada else BufferStreamingMensaje.RETENCION_DEFAULT,
     )
 
+    # ── Instrumentación de latencia PERCIBIDA ────────────────────────
+    # llm_latency_ms mide el stream COMPLETO (se calcula recién al parsear el
+    # JSON de metadata, que el LLM manda último), así que NO es lo que el
+    # usuario siente en una llamada: para cuando ese número está, Numa ya venía
+    # hablando hace rato. Estos dos miden lo que realmente importa:
+    #
+    #   t_primer_delta_ms      → desde que entra el request hasta que sale la
+    #                            PRIMERA oración. Es el silencio que el usuario
+    #                            escucha después de dejar de hablar (sumado al
+    #                            STT y la red, que se miden aparte).
+    #   t_llm_primer_token_ms  → desde que arranca el generador hasta el primer
+    #                            pedazo de texto del LLM.
+    #
+    # La diferencia entre los dos es lo que cuesta esperar a que cierre una
+    # oración completa + la retención del buffer. Con retencion=0 (llamada)
+    # deberían quedar cerca; con retencion=2 (chat escrito) el primer delta
+    # llega bastante después. Ese gap es el que justifica todo el trabajo del
+    # buffer, y hasta ahora lo estábamos suponiendo en vez de midiéndolo.
+    t_inicio_stream = time.perf_counter()
+    t_primer_delta_ms: Optional[float] = None
+    t_llm_primer_token_ms: Optional[float] = None
+
+    def _marcar_primer_delta() -> None:
+        nonlocal t_primer_delta_ms
+        if t_primer_delta_ms is None:
+            base = t_inicio_request if t_inicio_request is not None else t_inicio_stream
+            t_primer_delta_ms = round((time.perf_counter() - base) * 1000, 1)
+
     metadata: Optional[Dict[str, Any]] = None
     try:
         for tipo, valor in llm.generate_response_stream(
@@ -1009,11 +1041,15 @@ def _stream_chat_respuesta(
             modo_llamada=modo_llamada,
         ):
             if tipo == "mensaje":
+                if t_llm_primer_token_ms is None:
+                    t_llm_primer_token_ms = round((time.perf_counter() - t_inicio_stream) * 1000, 1)
                 for oracion in buf.feed(valor):
+                    _marcar_primer_delta()
                     yield _evento_ndjson({"type": "delta", "text": oracion})
             else:
                 metadata = valor
         for oracion in buf.cerrar():
+            _marcar_primer_delta()
             yield _evento_ndjson({"type": "delta", "text": oracion})
     except Exception as e:
         # El stream se cortó a mitad de camino (ver docs/plan_streaming_voz.md
@@ -1056,6 +1092,10 @@ def _stream_chat_respuesta(
         llm_fallback=llm_info.get("fallback"),
         llm_latency_ms=llm_info.get("latency_ms"),
         llm_cut=llm_info.get("cut"),
+        # OJO al leer estos dos contra llm_latency_ms: aquél es el stream
+        # entero, éstos son hasta el primer audio. Ver el bloque de arriba.
+        t_primer_delta_ms=t_primer_delta_ms,
+        t_llm_primer_token_ms=t_llm_primer_token_ms,
         t_preparar_turno_ms=_sumar_tiempos(tiempos),
         router_provider=router_meta.get("provider"),
         router_model=router_meta.get("model"),
@@ -1100,6 +1140,10 @@ def chat_stream_endpoint(
 ):
     user_id = auth_user_id
     email = getattr(request.state, "user_email", None)
+    # Antes de _preparar_turno a propósito: t_primer_delta_ms tiene que incluir
+    # el trabajo previo (memorias, proactivo, prompt), no solo el LLM — es el
+    # silencio completo que el usuario escucha del lado del servidor.
+    t_inicio_request = time.perf_counter()
     try:
         turno = _preparar_turno(body, user_id, background_tasks)
     except Exception:
@@ -1120,6 +1164,7 @@ def chat_stream_endpoint(
         generador = _stream_chat_respuesta(
             turno, user_id, background_tasks, email=email,
             modo_llamada=bool(body.modo_llamada),
+            t_inicio_request=t_inicio_request,
         )
 
     # background=background_tasks es necesario: a diferencia de devolver un
