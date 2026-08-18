@@ -1260,14 +1260,19 @@ Casi todos los ajustes están en 👤 Perfil (la última pestaña, abajo a la de
   Perfil → sección "Tema" → 📱 Auto · ☀️ Claro · 🌙 Oscuro.
   Atajo: en la pantalla de Chat, arriba, hay un botoncito de sol/luna para cambiar claro/oscuro al toque.
 
-- Mandar un audio / "¿cómo te hablo?":
-  En el Chat, al lado de donde escribís, está el ícono del micrófono 🎤. Lo tocás para empezar
-  a grabar y lo volvés a tocar para frenar y mandar el audio.
+- ¿Numa habla? / ¿tiene voz? / llamada:
+  SÍ. Hay un modo llamada: en el Chat, arriba, está el ícono del teléfono 📞. Lo tocás y
+  hablás con Numa como en una llamada — vos hablás, ella te contesta con voz, sin botones.
+  Mientras Numa habla podés TOCAR LA PANTALLA para interrumpirla y hablar vos.
+  Para salir, la ✕ arriba.
+  (En el chat escrito Numa sigue respondiendo por texto: la voz es del modo llamada.)
 
-- ¿Numa habla? / ¿tiene voz?:
-  Por ahora Numa NO tiene voz propia: te responde por mensajes de texto. Sí puede ESCUCHARTE:
-  le podés mandar audios con el micrófono 🎤. Una voz para Numa es algo que está en desarrollo
-  y que más adelante puede llegar — hoy todavía no.
+- Cambiar la voz de Numa / "¿podés hablar con otra voz?":
+  Perfil → sección "Voz de Numa" → hay dos, Rosa (cálida y alegre) y Jorge (relajada y
+  cercana). Tocás la que quieras para elegirla, y el ▶ al lado para escucharla antes de decidir.
+
+- Mandar un audio en el chat escrito / "¿cómo te hablo?":
+  En el Chat, al lado de donde escribís, está el ícono del micrófono 🎤.
 
 - Borrar algo que Numa recuerda / "que te olvides de esto":
   Perfil → "🧠 Lo que Numa recuerda de vos" → cada recuerdo tiene una ✕ para borrarlo.
@@ -1293,20 +1298,25 @@ El usuario quiere saber qué más ofrece Numa aparte de la charla ("¿qué más 
 "¿solo escuchás?", "¿para qué servís?", "¿cuál es tu función?"). Contale con calidez y en
 CORTO, como un amigo que le muestra la app — NO como un folleto ni recitando toda la lista.
 
-⚠️ NO INVENTES NADA. Solo existe lo de abajo. Si preguntan por algo que no está (una llamada,
-una voz para Numa, un profesional en vivo…), decí con honestidad que todavía no, que Numa está
-en desarrollo y capaz más adelante. Nunca prometas funciones que no existen.
+⚠️ NO INVENTES NADA. Solo existe lo de abajo. Si preguntan por algo que no está (un
+profesional en vivo, videollamada…), decí con honestidad que todavía no, que Numa está en
+desarrollo y capaz más adelante. Nunca prometas funciones que no existen.
 
 LO QUE SÍ EXISTE, además de acompañarte por chat:
 
-1) EJERCICIOS para los momentos difíciles:
+1) HABLAR POR VOZ (modo llamada):
+   - En el Chat, arriba, el ícono del teléfono 📞 abre una llamada: hablás y Numa te contesta
+     con voz, sin botones de por medio. Tocando la pantalla la interrumpís para hablar vos.
+   - La voz se elige en Perfil → "Voz de Numa": Rosa o Jorge, con un ▶ para escucharlas.
+
+2) EJERCICIOS para los momentos difíciles:
    - Te puedo sugerir uno acá mismo en el chat cuando lo veo útil (respiración para bajar la
      ansiedad, algo para dormir, para frenar la mente…).
    - Y en la pestaña 🧘 Ejercicios los elegís vos: respiración, meditación, yoga y lecturas cortas.
    - Se pueden hacer con un sonido de fondo (lluvia, olas, fuego, bosque) o en silencio, para
      armar un clima más tranquilo.
 
-2) TU ESTADO en la pestaña 📊 Mi estado:
+3) TU ESTADO en la pestaña 📊 Mi estado:
    - Numa arma un resumen de cómo venís: tu ánimo a lo largo de los días, los temas que más
      aparecen, y una observación de la semana.
    - Sirve para parar la pelota y pensar qué te está ayudando y qué no.
@@ -1315,9 +1325,9 @@ CÓMO CONTARLO:
 - Elegí lo que más le sirva a ESTA persona según lo que venía hablando; no tires todo junto.
 - Corto y humano. Aclarar que lo principal sigue siendo escucharte y acompañarte; lo demás son
   herramientas para cuando las necesites. No sos terapia ni reemplazás a un profesional.
-BIEN → "Bastante más que solo escucharte: te puedo pasar ejercicios de respiración o meditación
-        (con sonido de fondo si querés, tipo lluvia u olas), y en 📊 Mi estado armo un resumen de
-        cómo venís en la semana para ver qué te ayuda y qué no. ¿Te muestro alguno?"
+BIEN → "Bastante más que solo escucharte: si querés podemos hablar por voz (el teléfono 📞
+        arriba del chat), te puedo pasar ejercicios de respiración o meditación, y en 📊 Mi estado
+        armo un resumen de cómo venís en la semana. ¿Probamos alguno?"
 MAL  → un párrafo enorme listando cada función como un manual de usuario.
 """,
 }
@@ -1575,6 +1585,8 @@ def _detectar_pregunta_app(mensaje: str) -> bool:
         "mandar un audio", "mandarte un audio", "enviarte un audio",
         "nota de voz", "el micrófono", "el microfono",
         "numa habla", "numa tiene voz", "tenés voz", "tenes voz",
+        "modo llamada", "hablar por voz", "hablarte por voz", "llamarte",
+        "cambiar la voz", "cambiar tu voz", "otra voz",
         "borrar la conversación", "borrar la conversacion", "borrar conversaciones",
         "borrar lo que recordás", "borrar lo que recordas",
         "eliminar mi cuenta", "cerrar sesión", "cerrar sesion",
@@ -1591,6 +1603,7 @@ def _detectar_pregunta_app(mensaje: str) -> bool:
     FEATURES = [
         "letra", "texto", "fuente", "tema", "modo",
         "audio", "micrófono", "microfono", "grabar", "voz", "hablar", "hablás", "hablas",
+        "llamada", "llamar", "llamarte",
         "borrar", "eliminar", "olvides", "recuerda", "recordás", "recordas",
         "notificación", "notificacion", "la app", "esta app", "aplicación",
         "aplicacion", "perfil", "pestaña", "pestana", "botón", "boton",
@@ -1610,6 +1623,7 @@ def _detectar_pregunta_capacidades(mensaje: str) -> bool:
         "ademas de escuchar", "además de escuchar", "aparte de escuchar",
         "ademas de charlar", "además de charlar", "aparte de charlar",
         "ademas de decir", "además de decir",
+        "podes hablar", "podés hablar", "sabes hablar", "sabés hablar",
         "solo escuchas", "sólo escuchás", "solo escuchar", "solo sabes escuchar",
         "solo servis", "solo sirves", "nada mas que escuchar", "nada más que escuchar",
         "para que servis", "para qué servís", "para que sirves", "para qué sirves",
