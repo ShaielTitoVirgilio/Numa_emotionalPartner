@@ -1,0 +1,590 @@
+{
+  "muestras": 16,
+  "datos": {
+    "openai/gpt-5.6-luna": [
+      {
+        "ttft_ms": 2097.0864140000003,
+        "total_ms": 3174.457004,
+        "chunks": 94,
+        "ms_por_chunk": 6.81478522580645,
+        "mensaje_chars": 156,
+        "trajo_json": true,
+        "completion_tokens": 98
+      },
+      {
+        "ttft_ms": 851.5321599999996,
+        "total_ms": 1456.133101999999,
+        "chunks": 92,
+        "ms_por_chunk": 5.344953263736262,
+        "mensaje_chars": 126,
+        "trajo_json": true,
+        "completion_tokens": 96
+      },
+      {
+        "ttft_ms": 781.4425079999978,
+        "total_ms": 1481.9407449999992,
+        "chunks": 97,
+        "ms_por_chunk": 5.873935187500012,
+        "mensaje_chars": 122,
+        "trajo_json": true,
+        "completion_tokens": 101
+      },
+      {
+        "ttft_ms": 750.4501770000012,
+        "total_ms": 1426.3037119999992,
+        "chunks": 86,
+        "ms_por_chunk": 6.549374000000001,
+        "mensaje_chars": 105,
+        "trajo_json": true,
+        "completion_tokens": 90
+      },
+      {
+        "ttft_ms": 699.2142279999989,
+        "total_ms": 1485.7573990000005,
+        "chunks": 102,
+        "ms_por_chunk": 6.735559514851486,
+        "mensaje_chars": 168,
+        "trajo_json": true,
+        "completion_tokens": 106
+      },
+      {
+        "ttft_ms": 3039.5680440000065,
+        "total_ms": 3827.081117000006,
+        "chunks": 95,
+        "ms_por_chunk": 7.039346648936128,
+        "mensaje_chars": 145,
+        "trajo_json": true,
+        "completion_tokens": 99
+      },
+      {
+        "ttft_ms": 808.9100839999971,
+        "total_ms": 1846.9295680000002,
+        "chunks": 106,
+        "ms_por_chunk": 6.989178885714322,
+        "mensaje_chars": 163,
+        "trajo_json": true,
+        "completion_tokens": 110
+      },
+      {
+        "ttft_ms": 1106.5390680000037,
+        "total_ms": 2011.4940449999992,
+        "chunks": 103,
+        "ms_por_chunk": 8.430390137254905,
+        "mensaje_chars": 180,
+        "trajo_json": true,
+        "completion_tokens": 107
+      },
+      {
+        "ttft_ms": 820.6028339999989,
+        "total_ms": 1613.1029909999982,
+        "chunks": 101,
+        "ms_por_chunk": 6.628897040000013,
+        "mensaje_chars": 164,
+        "trajo_json": true,
+        "completion_tokens": 105
+      },
+      {
+        "ttft_ms": 733.2207799999964,
+        "total_ms": 1647.1447070000024,
+        "chunks": 102,
+        "ms_por_chunk": 8.19888067326732,
+        "mensaje_chars": 152,
+        "trajo_json": true,
+        "completion_tokens": 106
+      },
+      {
+        "ttft_ms": 741.6294460000046,
+        "total_ms": 1558.504049000007,
+        "chunks": 98,
+        "ms_por_chunk": 7.1595879072164665,
+        "mensaje_chars": 152,
+        "trajo_json": true,
+        "completion_tokens": 102
+      },
+      {
+        "ttft_ms": 3156.3039300000073,
+        "total_ms": 3335.744693999999,
+        "chunks": 55,
+        "ms_por_chunk": 3.2974134814814904,
+        "mensaje_chars": 159,
+        "trajo_json": true,
+        "completion_tokens": 139
+      },
+      {
+        "ttft_ms": 2725.058359000002,
+        "total_ms": 3140.236618000003,
+        "chunks": 60,
+        "ms_por_chunk": 6.297861644067788,
+        "mensaje_chars": 183,
+        "trajo_json": true,
+        "completion_tokens": 128
+      },
+      {
+        "ttft_ms": 705.2618120000034,
+        "total_ms": 1351.0113950000004,
+        "chunks": 91,
+        "ms_por_chunk": 5.807314111111201,
+        "mensaje_chars": 119,
+        "trajo_json": true,
+        "completion_tokens": 95
+      },
+      {
+        "ttft_ms": 3188.877763999997,
+        "total_ms": 3384.0418239999935,
+        "chunks": 56,
+        "ms_por_chunk": 3.5254805999998844,
+        "mensaje_chars": 150,
+        "trajo_json": true,
+        "completion_tokens": 128
+      },
+      {
+        "ttft_ms": 878.2561100000095,
+        "total_ms": 1634.7448759999993,
+        "chunks": 108,
+        "ms_por_chunk": 5.670084009345742,
+        "mensaje_chars": 194,
+        "trajo_json": true,
+        "completion_tokens": 112
+      }
+    ],
+    "openai/gpt-4o-mini": [
+      {
+        "ttft_ms": 604.1211209999994,
+        "total_ms": 985.7890199999995,
+        "chunks": 42,
+        "ms_por_chunk": 8.431871439024384,
+        "mensaje_chars": 73,
+        "trajo_json": true,
+        "completion_tokens": 42
+      },
+      {
+        "ttft_ms": 702.1778310000002,
+        "total_ms": 1188.6007480000007,
+        "chunks": 48,
+        "ms_por_chunk": 9.644541702127647,
+        "mensaje_chars": 96,
+        "trajo_json": true,
+        "completion_tokens": 48
+      },
+      {
+        "ttft_ms": 559.2489530000009,
+        "total_ms": 1079.048783000001,
+        "chunks": 54,
+        "ms_por_chunk": 8.90079796226412,
+        "mensaje_chars": 120,
+        "trajo_json": true,
+        "completion_tokens": 54
+      },
+      {
+        "ttft_ms": 764.0706229999985,
+        "total_ms": 1173.8044389999977,
+        "chunks": 44,
+        "ms_por_chunk": 8.783358720930194,
+        "mensaje_chars": 81,
+        "trajo_json": true,
+        "completion_tokens": 44
+      },
+      {
+        "ttft_ms": 587.7860079999983,
+        "total_ms": 1128.7563869999992,
+        "chunks": 45,
+        "ms_por_chunk": 11.922959272727324,
+        "mensaje_chars": 84,
+        "trajo_json": true,
+        "completion_tokens": 45
+      },
+      {
+        "ttft_ms": 980.2415039999985,
+        "total_ms": 1318.2851709999995,
+        "chunks": 42,
+        "ms_por_chunk": 7.348065292682876,
+        "mensaje_chars": 75,
+        "trajo_json": true,
+        "completion_tokens": 42
+      },
+      {
+        "ttft_ms": 966.5291279999976,
+        "total_ms": 1939.4099740000001,
+        "chunks": 52,
+        "ms_por_chunk": 18.281354549019643,
+        "mensaje_chars": 108,
+        "trajo_json": true,
+        "completion_tokens": 52
+      },
+      {
+        "ttft_ms": 586.1637470000005,
+        "total_ms": 1149.141433000004,
+        "chunks": 54,
+        "ms_por_chunk": 9.608932641509442,
+        "mensaje_chars": 129,
+        "trajo_json": true,
+        "completion_tokens": 54
+      },
+      {
+        "ttft_ms": 1064.4109190000038,
+        "total_ms": 1695.238971000002,
+        "chunks": 51,
+        "ms_por_chunk": 12.347336039999986,
+        "mensaje_chars": 115,
+        "trajo_json": true,
+        "completion_tokens": 51
+      },
+      {
+        "ttft_ms": 742.5713639999998,
+        "total_ms": 1243.11899300001,
+        "chunks": 51,
+        "ms_por_chunk": 9.804077360000177,
+        "mensaje_chars": 111,
+        "trajo_json": true,
+        "completion_tokens": 51
+      },
+      {
+        "ttft_ms": 1414.5122430000042,
+        "total_ms": 4234.34437600001,
+        "chunks": 47,
+        "ms_por_chunk": 60.95595645652173,
+        "mensaje_chars": 100,
+        "trajo_json": true,
+        "completion_tokens": 47
+      },
+      {
+        "ttft_ms": 832.8325169999999,
+        "total_ms": 1467.3290120000074,
+        "chunks": 56,
+        "ms_por_chunk": 11.06460867272729,
+        "mensaje_chars": 131,
+        "trajo_json": true,
+        "completion_tokens": 56
+      },
+      {
+        "ttft_ms": 577.8688329999966,
+        "total_ms": 1313.494269000003,
+        "chunks": 53,
+        "ms_por_chunk": 13.671866576923064,
+        "mensaje_chars": 107,
+        "trajo_json": true,
+        "completion_tokens": 53
+      },
+      {
+        "ttft_ms": 622.5952459999888,
+        "total_ms": 1175.2316119999905,
+        "chunks": 47,
+        "ms_por_chunk": 11.630830478260945,
+        "mensaje_chars": 98,
+        "trajo_json": true,
+        "completion_tokens": 47
+      },
+      {
+        "ttft_ms": 699.9371440000033,
+        "total_ms": 1250.0832169999967,
+        "chunks": 52,
+        "ms_por_chunk": 10.0775788431372,
+        "mensaje_chars": 114,
+        "trajo_json": true,
+        "completion_tokens": 52
+      },
+      {
+        "ttft_ms": 614.8020629999991,
+        "total_ms": 1284.2303989999948,
+        "chunks": 53,
+        "ms_por_chunk": 12.474562461538433,
+        "mensaje_chars": 117,
+        "trajo_json": true,
+        "completion_tokens": 53
+      }
+    ],
+    "openai/gpt-chat-latest": [
+      {
+        "ttft_ms": 971.0125430000005,
+        "total_ms": 1419.5747680000004,
+        "chunks": 34,
+        "ms_por_chunk": 10.301899333333308,
+        "mensaje_chars": 70,
+        "trajo_json": true,
+        "completion_tokens": 38
+      },
+      {
+        "ttft_ms": 944.3565079999985,
+        "total_ms": 1569.4594940000002,
+        "chunks": 43,
+        "ms_por_chunk": 13.999927690476191,
+        "mensaje_chars": 112,
+        "trajo_json": true,
+        "completion_tokens": 47
+      },
+      {
+        "ttft_ms": 950.6416259999994,
+        "total_ms": 1481.4080290000006,
+        "chunks": 48,
+        "ms_por_chunk": 8.670956978723426,
+        "mensaje_chars": 110,
+        "trajo_json": true,
+        "completion_tokens": 52
+      },
+      {
+        "ttft_ms": 940.6769619999977,
+        "total_ms": 1824.585430999999,
+        "chunks": 39,
+        "ms_por_chunk": 20.76650971052639,
+        "mensaje_chars": 88,
+        "trajo_json": true,
+        "completion_tokens": 43
+      },
+      {
+        "ttft_ms": 1295.3798370000022,
+        "total_ms": 1921.8295400000009,
+        "chunks": 39,
+        "ms_por_chunk": 13.076873000000013,
+        "mensaje_chars": 88,
+        "trajo_json": true,
+        "completion_tokens": 43
+      },
+      {
+        "ttft_ms": 1022.3662949999976,
+        "total_ms": 1444.2428870000015,
+        "chunks": 42,
+        "ms_por_chunk": 8.51460004878044,
+        "mensaje_chars": 95,
+        "trajo_json": true,
+        "completion_tokens": 46
+      },
+      {
+        "ttft_ms": 923.3673740000015,
+        "total_ms": 1366.0812270000022,
+        "chunks": 43,
+        "ms_por_chunk": 9.504026261904723,
+        "mensaje_chars": 102,
+        "trajo_json": true,
+        "completion_tokens": 47
+      },
+      {
+        "ttft_ms": 980.425935999996,
+        "total_ms": 1538.9380909999986,
+        "chunks": 44,
+        "ms_por_chunk": 10.961787348837207,
+        "mensaje_chars": 104,
+        "trajo_json": true,
+        "completion_tokens": 48
+      },
+      {
+        "ttft_ms": 1009.8557829999991,
+        "total_ms": 1509.8771400000005,
+        "chunks": 53,
+        "ms_por_chunk": 8.667247442307652,
+        "mensaje_chars": 134,
+        "trajo_json": true,
+        "completion_tokens": 57
+      },
+      {
+        "ttft_ms": 1064.619113000006,
+        "total_ms": 1573.8645459999957,
+        "chunks": 51,
+        "ms_por_chunk": 7.080216159999964,
+        "mensaje_chars": 140,
+        "trajo_json": true,
+        "completion_tokens": 55
+      },
+      {
+        "ttft_ms": 922.7673259999989,
+        "total_ms": 1367.7393199999983,
+        "chunks": 41,
+        "ms_por_chunk": 8.725126199999877,
+        "mensaje_chars": 94,
+        "trajo_json": true,
+        "completion_tokens": 45
+      },
+      {
+        "ttft_ms": 1065.1260719999982,
+        "total_ms": 1491.05741999999,
+        "chunks": 42,
+        "ms_por_chunk": 7.934784658536595,
+        "mensaje_chars": 107,
+        "trajo_json": true,
+        "completion_tokens": 46
+      },
+      {
+        "ttft_ms": 1005.7776279999899,
+        "total_ms": 1758.238844999994,
+        "chunks": 47,
+        "ms_por_chunk": 15.216243500000012,
+        "mensaje_chars": 119,
+        "trajo_json": true,
+        "completion_tokens": 51
+      },
+      {
+        "ttft_ms": 963.8239009999978,
+        "total_ms": 1515.085024000001,
+        "chunks": 44,
+        "ms_por_chunk": 9.623075209302296,
+        "mensaje_chars": 105,
+        "trajo_json": true,
+        "completion_tokens": 48
+      },
+      {
+        "ttft_ms": 868.9604789999947,
+        "total_ms": 1339.5170049999906,
+        "chunks": 48,
+        "ms_por_chunk": 7.05783970212762,
+        "mensaje_chars": 125,
+        "trajo_json": true,
+        "completion_tokens": 52
+      },
+      {
+        "ttft_ms": 1031.6874960000036,
+        "total_ms": 1736.0629860000074,
+        "chunks": 47,
+        "ms_por_chunk": 12.971237217391446,
+        "mensaje_chars": 116,
+        "trajo_json": true,
+        "completion_tokens": 51
+      }
+    ],
+    "openai/gpt-5.6-terra": [
+      {
+        "ttft_ms": 863.4376110000002,
+        "total_ms": 1536.0617100000002,
+        "chunks": 43,
+        "ms_por_chunk": 14.641175309523806,
+        "mensaje_chars": 101,
+        "trajo_json": true,
+        "completion_tokens": 47
+      },
+      {
+        "ttft_ms": 853.653331000002,
+        "total_ms": 1335.7582830000024,
+        "chunks": 37,
+        "ms_por_chunk": 11.243286444444404,
+        "mensaje_chars": 76,
+        "trajo_json": true,
+        "completion_tokens": 41
+      },
+      {
+        "ttft_ms": 870.3034390000006,
+        "total_ms": 1719.6210809999998,
+        "chunks": 49,
+        "ms_por_chunk": 15.143691354166636,
+        "mensaje_chars": 135,
+        "trajo_json": true,
+        "completion_tokens": 53
+      },
+      {
+        "ttft_ms": 912.455799,
+        "total_ms": 1535.5642370000028,
+        "chunks": 33,
+        "ms_por_chunk": 14.266359500000103,
+        "mensaje_chars": 64,
+        "trajo_json": true,
+        "completion_tokens": 37
+      },
+      {
+        "ttft_ms": 1088.0187670000012,
+        "total_ms": 1693.5862910000026,
+        "chunks": 36,
+        "ms_por_chunk": 14.052554199999992,
+        "mensaje_chars": 76,
+        "trajo_json": true,
+        "completion_tokens": 40
+      },
+      {
+        "ttft_ms": 956.630151000006,
+        "total_ms": 1424.2963920000022,
+        "chunks": 45,
+        "ms_por_chunk": 8.208660909090781,
+        "mensaje_chars": 96,
+        "trajo_json": true,
+        "completion_tokens": 49
+      },
+      {
+        "ttft_ms": 881.7294640000028,
+        "total_ms": 1690.7610410000018,
+        "chunks": 49,
+        "ms_por_chunk": 14.11360564583323,
+        "mensaje_chars": 112,
+        "trajo_json": true,
+        "completion_tokens": 53
+      },
+      {
+        "ttft_ms": 863.6962730000022,
+        "total_ms": 1998.0251089999967,
+        "chunks": 89,
+        "ms_por_chunk": 11.62686456818183,
+        "mensaje_chars": 128,
+        "trajo_json": true,
+        "completion_tokens": 93
+      },
+      {
+        "ttft_ms": 1161.168030000006,
+        "total_ms": 1977.645000999999,
+        "chunks": 49,
+        "ms_por_chunk": 14.0228231875,
+        "mensaje_chars": 120,
+        "trajo_json": true,
+        "completion_tokens": 53
+      },
+      {
+        "ttft_ms": 1101.1324360000003,
+        "total_ms": 1846.8005789999893,
+        "chunks": 49,
+        "ms_por_chunk": 12.727327541666611,
+        "mensaje_chars": 137,
+        "trajo_json": true,
+        "completion_tokens": 53
+      },
+      {
+        "ttft_ms": 1063.6415650000117,
+        "total_ms": 2039.438838999999,
+        "chunks": 80,
+        "ms_por_chunk": 10.00694764556946,
+        "mensaje_chars": 76,
+        "trajo_json": true,
+        "completion_tokens": 84
+      },
+      {
+        "ttft_ms": 947.8711950000047,
+        "total_ms": 1460.948290999994,
+        "chunks": 40,
+        "ms_por_chunk": 9.177708589743652,
+        "mensaje_chars": 87,
+        "trajo_json": true,
+        "completion_tokens": 44
+      },
+      {
+        "ttft_ms": 873.971295000004,
+        "total_ms": 1401.9863590000057,
+        "chunks": 37,
+        "ms_por_chunk": 11.173865305555823,
+        "mensaje_chars": 76,
+        "trajo_json": true,
+        "completion_tokens": 41
+      },
+      {
+        "ttft_ms": 1000.2727170000014,
+        "total_ms": 1417.8588409999975,
+        "chunks": 47,
+        "ms_por_chunk": 7.032119173913073,
+        "mensaje_chars": 121,
+        "trajo_json": true,
+        "completion_tokens": 51
+      },
+      {
+        "ttft_ms": 832.7447420000027,
+        "total_ms": 1319.4615799999951,
+        "chunks": 37,
+        "ms_por_chunk": 10.665072305555393,
+        "mensaje_chars": 76,
+        "trajo_json": true,
+        "completion_tokens": 41
+      },
+      {
+        "ttft_ms": 946.3769469999903,
+        "total_ms": 1483.8851999999888,
+        "chunks": 35,
+        "ms_por_chunk": 13.222983823529733,
+        "mensaje_chars": 64,
+        "trajo_json": true,
+        "completion_tokens": 39
+      }
+    ]
+  },
+  "caidos": {}
+}

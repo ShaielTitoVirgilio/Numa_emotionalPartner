@@ -38,7 +38,7 @@ from app.memory_service import (
     get_checkin_hoy_cached,
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
-from app.crisis_detector import detectar_crisis
+from app.crisis_detector import detectar_crisis, respuesta_contencion_generica
 from app.crisis_verifier import confirmar_riesgo_real
 from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
 from app.speech_service import speech_to_text
@@ -246,6 +246,23 @@ class ChatResponse(BaseModel):
 # pared de ese bloque, así que estos 4 quedan afuera de la suma.
 _TIEMPOS_EXCLUIDOS_DEL_TOTAL = {"t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms"}
 
+# Ejecutor propio para el context_router del modo llamada. Tiene que estar a
+# nivel de módulo (y no adentro de _preparar_turno) por dos motivos: el
+# ThreadPoolExecutor usado como context manager ESPERA a sus tareas al salir
+# del `with` — que es exactamente la latencia que se está sacando — y el
+# resultado se consulta más tarde, ya durante el streaming del LLM principal.
+# max_workers acota cuántos routers en vuelo puede haber a la vez: son
+# llamadas a un LLM chico, y sin tope una ráfaga de llamadas concurrentes
+# podría abrir un hilo por turno.
+_EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=8, thread_name_prefix="router-par")
+
+# Score del router a partir del cual se corta la llamada y se pasa al chat
+# escrito. 0.6 = "explicita" en score_riesgo_router. Se eligió ese corte y no
+# el de 0.35 ("implicita") a propósito: cortar una llamada a mitad de una
+# frase es brusco, y una señal implícita no lo justifica — esa se maneja con
+# los módulos de crisis en el turno siguiente, como en el chat escrito.
+UMBRAL_CORTE_LLAMADA = 0.6
+
 
 def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
     return round(sum(v for k, v in tiempos.items() if k not in _TIEMPOS_EXCLUIDOS_DEL_TOTAL), 1)
@@ -346,26 +363,31 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             ultimo_modulo_critico = True
             break
 
-    # ── context_router: apagado en modo llamada ──────────────────────
-    # Es una llamada a LLM aparte que se come 1.5-2s de los ~3s del turno. En
-    # el chat escrito eso se tolera; hablando por voz, 1.5s de silencio extra
-    # en CADA ida y vuelta rompe la sensación de conversación, que es
-    # justamente lo que el modo llamada tiene que lograr.
+    # ── context_router: EN PARALELO (no bloqueante) en modo llamada ──
+    # Es una llamada a LLM aparte que se come 1.5-2s. En el chat escrito se
+    # espera su resultado antes de armar el prompt; hablando por voz, esos
+    # 1.5s de silencio en CADA ida y vuelta rompen la conversación.
     #
-    # Saltearlo deja router_hints en ok=False, que NO es un estado nuevo: es
-    # exactamente el mismo que ya se usa cuando el router falla o da timeout
-    # (fail-safe de context_router.py). Todo lo de abajo ya lo contempla —
-    # construir_prompt hace rh = {}, la memoria contextual deja estado_r=None.
+    # Antes estaba directamente APAGADO en llamada, y eso abría un agujero
+    # real y medido (ver scripts/test_modo_llamada_router.py): frases con
+    # método o plan que las keywords NO matchean ("tengo pastillas y me las
+    # voy a tomar todas", "me quiero cortar las venas") quedaban en score 0.0,
+    # sin ningún módulo de crisis. Y es justo el escenario que la voz hace más
+    # probable, porque en voz la gente dice cosas que no escribiría.
     #
-    # LO QUE SE PIERDE EN LLAMADA (a propósito, decisión explícita):
-    #   - La escalada de riesgo por señal IMPLÍCITA (sin keywords). La
-    #     detección por keywords + crisis_verifier queda intacta, o sea lo
-    #     crítico/alto explícito se sigue frenando igual que siempre.
-    #   - estado_emocional → sin recursos ni temas abiertos en la memoria
-    #     contextual (los eventos proactivos con fecha SÍ siguen andando).
-    #   - pide_ejercicio / pregunta_app / pregunta_capacidades por vía
-    #     semántica (las keywords de esos casos siguen funcionando).
+    # Ahora corre igual, pero SIN bloquear: se lanza acá, el prompt se arma
+    # con keywords solamente (router_hints ok=False, el mismo estado que ya
+    # existe cuando el router falla), y el resultado se consulta MIENTRAS el
+    # LLM principal ya está generando. Si avisa riesgo explícito, el turno se
+    # corta y pasa al chat escrito — ver _stream_chat_respuesta.
+    #
+    # Lo que se sigue perdiendo en llamada, a propósito: estado_emocional para
+    # la memoria contextual (recursos/temas abiertos) y las señales
+    # pide_ejercicio/pregunta_app por vía semántica. Eso no es seguridad y no
+    # justifica pagar la latencia; los eventos proactivos con fecha y las
+    # keywords de esos casos siguen funcionando.
     modo_llamada = bool(body.modo_llamada)
+    fut_router_paralelo = None
 
     # ── Etapas independientes en paralelo ────────────────────────────
     # Medido en producción (ver docs/latencia): context_router (una llamada a
@@ -426,17 +448,23 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             print(f"⚠️ No se pudo cargar el check-in: {e}")
         return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
 
+    # En llamada el router se lanza en un ejecutor APARTE, que sobrevive a
+    # este bloque: el `with` de abajo espera a sus tareas al salir, que es
+    # justo lo que no queremos (ahí se iría la latencia que estamos sacando).
+    if modo_llamada:
+        fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
+
     _t_paralelo_inicio = time.perf_counter()
     with ThreadPoolExecutor(max_workers=4) as ejecutor:
-        # En llamada ni se lanza: apagado completo, no es una llamada al LLM
-        # que se descarta después (no se paga ni en tiempo ni en tokens).
         fut_router = None if modo_llamada else ejecutor.submit(_tarea_router)
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
 
         if fut_router is None:
-            # 0.0 en el log = se salteó (distinto de "tardó poco").
+            # 0.0 = no se esperó acá. En llamada el router corre igual, en
+            # paralelo, y su tiempo real se loguea aparte cuando se consulta
+            # (t_router_paralelo_ms en chat_turn).
             router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
         else:
             router_hints, tiempos["t_context_router_ms"] = fut_router.result()
@@ -578,6 +606,9 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "tema_abierto": tema_abierto,
         "_tiempos": tiempos,
         "_router": router_meta,
+        # Solo en modo llamada: el router sigue corriendo mientras el LLM
+        # principal genera. _stream_chat_respuesta lo consulta sin bloquear.
+        "_fut_router_paralelo": fut_router_paralelo,
         "memoria_ctx_id": memoria_ctx_id,
         "preguntas_seguidas": preguntas_seguidas,
         "ultimo_modulo_critico": ultimo_modulo_critico,
@@ -1053,6 +1084,39 @@ def _stream_chat_respuesta(
             base = t_inicio_request if t_inicio_request is not None else t_inicio_stream
             t_primer_delta_ms = round((time.perf_counter() - base) * 1000, 1)
 
+    # ── Vigilancia del context_router en paralelo (solo modo llamada) ─
+    # El router se lanzó al empezar el turno y sigue corriendo mientras el LLM
+    # principal genera. Se consulta SIN bloquear (done()) entre oración y
+    # oración: si nunca termina, la llamada sigue normal y no cuesta nada.
+    fut_router_par = turno.get("_fut_router_paralelo")
+    router_par_score = 0.0
+    t_router_paralelo_ms: Optional[float] = None
+    corte_por_riesgo = False
+
+    def _riesgo_detectado() -> bool:
+        """True si el router ya respondió y marcó riesgo explícito.
+
+        No bloquea: si todavía no terminó devuelve False y se sigue hablando.
+        Ese es el trade-off aceptado de correrlo en paralelo — puede llegar
+        tarde, pero llega, y es infinitamente mejor que no correrlo (que era
+        lo que había antes y dejaba las frases con método sin cobertura).
+        """
+        nonlocal router_par_score, t_router_paralelo_ms, corte_por_riesgo
+        if fut_router_par is None or corte_por_riesgo or not fut_router_par.done():
+            return False
+        try:
+            hints, t_router_paralelo_ms = fut_router_par.result()
+        except Exception as e:
+            # Fail-safe igual que el router sincrónico: si falla, se sigue con
+            # keywords. Un error acá NUNCA debe tumbar el turno.
+            capturar_error(e, contexto="router_paralelo")
+            return False
+        if not hints.get("ok"):
+            return False
+        router_par_score = score_riesgo_router(hints.get("senal_riesgo", "none"))
+        corte_por_riesgo = router_par_score >= UMBRAL_CORTE_LLAMADA
+        return corte_por_riesgo
+
     metadata: Optional[Dict[str, Any]] = None
     try:
         for tipo, valor in llm.generate_response_stream(
@@ -1067,13 +1131,41 @@ def _stream_chat_respuesta(
                 if t_llm_primer_token_ms is None:
                     t_llm_primer_token_ms = t_llm_ultimo_token_ms
                 for oracion in buf.feed(valor):
+                    # Se chequea ANTES de emitir, no después: si el router ya
+                    # avisó, esta oración no se habla. Lo que ya salió no se
+                    # puede despronunciar, pero de acá en más se corta.
+                    if _riesgo_detectado():
+                        break
                     _marcar_primer_delta()
                     yield _evento_ndjson({"type": "delta", "text": oracion})
             else:
                 metadata = valor
-        for oracion in buf.cerrar():
-            _marcar_primer_delta()
-            yield _evento_ndjson({"type": "delta", "text": oracion})
+            if corte_por_riesgo:
+                break
+
+        if not corte_por_riesgo:
+            for oracion in buf.cerrar():
+                if _riesgo_detectado():
+                    break
+                _marcar_primer_delta()
+                yield _evento_ndjson({"type": "delta", "text": oracion})
+
+        # Última chance: el router puede haber terminado justo al final, con
+        # el mensaje ya emitido. Igual conviene cortar la llamada y pasar al
+        # chat — el usuario dijo algo que necesita los teléfonos a la vista.
+        if not corte_por_riesgo and fut_router_par is not None:
+            _riesgo_detectado()
+
+        if corte_por_riesgo:
+            # Mismo tipo de evento que la crisis por keywords: el cliente ya
+            # sabe manejarlo (dice una frase puente, sale del modo llamada y
+            # muestra la tarjeta con los teléfonos tocables). `origen` es solo
+            # para poder distinguirlos en los logs.
+            yield _evento_ndjson({
+                "type": "crisis",
+                "text": respuesta_contencion_generica(),
+                "origen": "router_paralelo",
+            })
     except Exception as e:
         # El stream se cortó a mitad de camino (ver docs/plan_streaming_voz.md
         # sección 3.4): no se reintenta con otro proveedor para no mostrar un
@@ -1087,11 +1179,26 @@ def _stream_chat_respuesta(
     mensaje_final = buf.mensaje_completo()
     metadata = metadata or {"mood": "neutral", "suggested_action": None, "memories": []}
 
+    if corte_por_riesgo:
+        # Lo que se guarda como respuesta de Numa es la contención, no el
+        # mensaje a medio decir: si no, el historial del chat quedaría con una
+        # frase cortada y el turno siguiente arrancaría desde ahí.
+        mensaje_final = respuesta_contencion_generica()
+        # Y no se extraen memorias de un turno de crisis: el score real del
+        # turno era alto, aunque el prompt no lo supiera cuando se armó.
+        metadata["memories"] = []
+        metadata["suggested_action"] = None
+        crisis_score = max(crisis_score, router_par_score)
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_LLAMADA", "high",
+        )
+
     memorias_llm: List[Dict[str, Any]] = metadata.get("memories") or []
     memorias_validadas = _procesar_memorias_turno(
         memorias_llm, memorias_vigentes, ultimo_mensaje, hoy, crisis_score,
     )
-    risk_level = "medium" if crisis_score >= 0.35 else "none"
+    risk_level = "high" if corte_por_riesgo else ("medium" if crisis_score >= 0.35 else "none")
 
     llm_info = metadata.get("_llm") or {}
     etiquetar_request(
@@ -1105,11 +1212,15 @@ def _stream_chat_respuesta(
         endpoint="/chat/stream",
         user_id=user_id,
         email=email,
-        # Para poder filtrar los turnos de llamada en los logs y compararlos
-        # contra los del chat escrito: en llamada el router va apagado
-        # (t_context_router_ms=0) y el buffer sin retención.
+        # Para poder filtrar los turnos de llamada en los logs. En llamada el
+        # router NO se espera (t_context_router_ms=0) pero SÍ corre en
+        # paralelo: su tiempo real es t_router_paralelo_ms, y router_corte
+        # dice si llegó a tiempo de cortar el turno por riesgo.
         modo_llamada=modo_llamada,
-        context_router_off=modo_llamada,
+        router_paralelo=bool(fut_router_par),
+        t_router_paralelo_ms=t_router_paralelo_ms,
+        router_score=router_par_score or None,
+        router_corte=corte_por_riesgo or None,
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
         llm_fallback=llm_info.get("fallback"),

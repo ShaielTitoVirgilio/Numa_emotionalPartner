@@ -494,6 +494,24 @@ def _resultado_medio(category: str) -> CrisisResult:
 # HELPERS
 # ══════════════════════════════════════════════════════════════
 
+def respuesta_contencion_generica() -> str:
+    """Mensaje de contención con recursos, para cuando el riesgo lo detecta
+    algo que NO es el match de keywords.
+
+    Hoy lo usa el modo llamada: ahí el context_router corre EN PARALELO al LLM
+    principal (para no sumar 1.5-2s de silencio al turno), así que cuando
+    avisa que hay riesgo explícito, el prompt del mensaje que se está
+    generando ya se armó SIN los módulos de crisis. Esa respuesta no sirve
+    para el momento, y encima se está hablando por voz — donde los teléfonos
+    no se pueden tocar. Se corta con esto y se pasa al chat escrito.
+
+    Es una función y no una constante para que el mensaje se arme con el mismo
+    _formatear que el resto: si mañana cambian los recursos o el copy, cambia
+    en un solo lugar.
+    """
+    return _formatear(RESPONSES_IDEATION[0], RESOURCES["generico"])
+
+
 def _formatear(resp: dict, recursos: list[str]) -> str:
     """
     Arma el mensaje final concatenando el cuerpo principal

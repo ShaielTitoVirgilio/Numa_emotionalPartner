@@ -1,10 +1,13 @@
 """
-Verifica el apagado del context_router en modo llamada.
+Verifica cómo entra el context_router en modo llamada (paralelo, no bloqueante).
 
-Lo que importa acá NO es la latencia (eso se mide en los logs), es que el
-apagado esté acotado EXACTAMENTE al modo llamada y que no se haya llevado
-puesta la detección de crisis por keywords, que es la que frena los casos
-críticos/altos y sigue activa en los dos modos.
+Este archivo cubre el ARMADO DEL TURNO: que el router se lance sin que el
+turno lo espere, que el camino paralelo esté acotado EXACTAMENTE al modo
+llamada, y que nada de esto se haya llevado puesta la detección de crisis por
+keywords, que frena los casos críticos y sigue igual en los dos modos.
+
+Lo que pasa DESPUÉS (consultar el resultado durante el stream y cortar la
+llamada si hay riesgo explícito) se prueba en scripts/test_router_paralelo.py.
 
 Se mockea clasificar_contexto (para contar si se llamó o no) y todo lo que
 pega contra Supabase/LLM, así corre sin red ni credenciales.
@@ -76,24 +79,34 @@ turno_chat, n_chat = correr(NEUTRO, modo_llamada=False)
 turno_call, n_call = correr(NEUTRO, modo_llamada=True)
 
 check("chat escrito: el router SÍ se llama (sin cambios)", n_chat == 1, f"se llamó {n_chat} veces")
-check("modo llamada: el router NO se llama", n_call == 0, f"se llamó {n_call} veces")
+# En llamada TAMBIÉN se llama, pero en paralelo: se lanza y no se espera. Que
+# se llame es justamente lo que devolvió la cobertura de riesgo implícito que
+# el apagado había sacado — ver scripts/test_router_paralelo.py.
+check("modo llamada: el router SÍ se llama (en paralelo)", n_call == 1, f"se llamó {n_call} veces")
+check("modo llamada: deja el future para consultarlo durante el stream",
+      turno_call.get("_fut_router_paralelo") is not None)
+check("chat escrito: NO usa el camino paralelo",
+      turno_chat.get("_fut_router_paralelo") is None)
 
 # ── 2. El tiempo reportado distingue "salteado" de "tardó poco" ──────────
 check(
-    "modo llamada: t_context_router_ms = 0 (salteado)",
+    "modo llamada: t_context_router_ms = 0 (no se ESPERÓ acá)",
     turno_call["_tiempos"].get("t_context_router_ms") == 0.0,
     f"dio {turno_call['_tiempos'].get('t_context_router_ms')}",
 )
 
-# ── 3. Sin router, la señal implícita ya NO escala el riesgo ─────────────
-# Es el trade-off aceptado a propósito: en llamada solo escalan las keywords.
+# ── 3. Al armar el prompt, el router todavía no contestó ────────────────
 check(
     "chat escrito: la señal implícita del router escala el score",
     turno_chat["crisis_score"] >= 0.35,
     f"score={turno_chat['crisis_score']}",
 )
+# En el momento de armar el prompt el router todavía no contestó, así que el
+# score arranca en 0: eso NO cambió y es el precio de no bloquear. La
+# diferencia es que ahora el resultado llega igual, durante el stream, y ahí
+# se decide si cortar (test_router_paralelo.py cubre esa parte).
 check(
-    "modo llamada: la señal implícita ya no escala (trade-off aceptado)",
+    "modo llamada: al armar el prompt el score todavía no tiene al router",
     turno_call["crisis_score"] < 0.35,
     f"score={turno_call['crisis_score']}",
 )
@@ -121,21 +134,16 @@ for texto in CRITICOS_POR_KEYWORD:
         f"crisis_confirmada={t_chat.get('crisis_confirmada')}",
     )
 
-# ── 5. EL AGUJERO QUE ABRE ESTE CAMBIO (documentado, no es un bug) ───────
+# ── 5. EL AGUJERO QUE ESTE CAMBIO YA NO DEJA ABIERTO ────────────────────
+# (histórico) Cuando el router estaba APAGADO en llamada, estas frases
+# quedaban en score 0.0 y sin ningún módulo de crisis. Hoy el router corre en
+# paralelo y las cubre cortando el turno — ver test_router_paralelo.py. Lo que
+# sigue verificando este bloque es que el prompt SE ARMA sin esa señal (el
+# router todavía no contestó), que es distinto de quedarse sin cobertura.
 # Frases con MÉTODO o PLAN explícito que el detector por keywords NO matchea
-# (verificado: detectar_crisis les da score 0.0). Hoy las agarra ÚNICAMENTE
-# el context_router, que las clasifica "explicita" → 0.6 → activa los módulos
-# de crisis en el prompt.
+# (verificado: detectar_crisis les da score 0.0). Las agarra ÚNICAMENTE el
+# context_router, clasificándolas "explicita" → 0.6.
 #
-# Con el router apagado, en modo llamada estas frases pasan como un mensaje
-# cualquiera: score 0.0, CERO módulos de crisis. Y es justo el escenario que
-# una llamada de voz hace MÁS probable, porque en voz la gente dice cosas que
-# no escribiría.
-#
-# Este bloque NO falla el test a propósito: deja constancia ejecutable del
-# alcance real del trade-off. Si algún día se tapa (keywords nuevas, router
-# rápido, chequeo en paralelo), estos asserts se dan vuelta y hay que
-# actualizarlos — que es exactamente cuando uno quiere enterarse.
 # Ojo con las dos últimas: son variantes de FRASEO de cosas que la lista de
 # keywords sí tiene ("cortarme las venas", "no quiero seguir viviendo"), pero
 # dichas como las diría una persona de verdad. Que se escapen muestra que la
@@ -148,7 +156,7 @@ SOLO_LOS_AGARRA_EL_ROUTER = [
     "no quiero vivir más",
 ]
 print()
-print("-- agujero conocido: método/plan sin keyword --")
+print("-- método/plan sin keyword: el prompt arranca sin la señal (llega durante el stream) --")
 for texto in SOLO_LOS_AGARRA_EL_ROUTER:
     t_call, _ = correr(texto, modo_llamada=True)
     t_chat, _ = correr(texto, modo_llamada=False)
@@ -158,9 +166,9 @@ for texto in SOLO_LOS_AGARRA_EL_ROUTER:
         f"score={t_chat['crisis_score']}",
     )
     check(
-        f"modo llamada: queda SIN cobertura (score 0) → {texto[:34]!r}",
+        f"modo llamada: el prompt se arma sin la señal del router → {texto[:34]!r}",
         t_call["crisis_score"] == 0.0,
-        f"score={t_call['crisis_score']} (si ya no es 0, se tapó el agujero: actualizar este test)",
+        f"score={t_call['crisis_score']} — la cobertura llega después, durante el stream",
     )
 
 print()
