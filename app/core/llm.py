@@ -62,14 +62,23 @@ _REASONING_EFFORT = {
 }
 
 
-def get_chat_targets() -> list[tuple[OpenAI, str, str]]:
+def get_chat_targets(modo_llamada: bool = False) -> list[tuple[OpenAI, str, str]]:
     """Objetivos del chat principal, en orden de intento.
 
     Devuelve pares (cliente, proveedor, modelo): primero el primario
     (CHAT_PROVIDER/CHAT_MODEL) y después el fallback (CHAT_FALLBACK_*) si
     está configurado y es distinto.
+
+    `modo_llamada=True` usa CHAT_MODEL_LLAMADA en vez de CHAT_MODEL. El motivo
+    está en config.py: en voz lo que importa es la latencia del PEOR turno, no
+    la mediana, y el modelo del chat escrito tiene una cola de p90 tres veces
+    más alta. El fallback es el mismo para los dos — si el primario se cayó,
+    tener respuesta importa más que tenerla rápido.
     """
-    primario = (config.CHAT_PROVIDER, config.CHAT_MODEL)
+    if modo_llamada and config.CHAT_MODEL_LLAMADA:
+        primario = (config.CHAT_PROVIDER_LLAMADA, config.CHAT_MODEL_LLAMADA)
+    else:
+        primario = (config.CHAT_PROVIDER, config.CHAT_MODEL)
     targets = [(get_client(primario[0]), primario[0], primario[1])]
     respaldo = (config.CHAT_FALLBACK_PROVIDER, config.CHAT_FALLBACK_MODEL)
     if respaldo[1] and respaldo != primario:

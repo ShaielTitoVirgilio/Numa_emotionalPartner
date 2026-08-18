@@ -113,8 +113,12 @@ class LLMClient:
         self._model_override = model
         self._fallback_override = fallback_model
 
-    def _targets(self) -> list:
-        """Lista de (cliente, proveedor, modelo) a intentar en orden."""
+    def _targets(self, modo_llamada: bool = False) -> list:
+        """Lista de (cliente, proveedor, modelo) a intentar en orden.
+
+        `modo_llamada` elige el modelo pensado para voz (ver get_chat_targets).
+        No aplica cuando hay override de cliente/modelo: esos vienen de los
+        scripts de eval, que apuntan a un modelo específico a propósito."""
         if self._model_override:
             # Cliente inyectado (evals): proveedor desconocido → None hace que
             # extra_body/max_tokens caigan a la lógica Groq-legacy, salvo que
@@ -123,7 +127,7 @@ class LLMClient:
             if self._fallback_override and self._fallback_override != self._model_override:
                 targets.append((self._client_override, None, self._fallback_override))
             return targets
-        return get_chat_targets()
+        return get_chat_targets(modo_llamada=modo_llamada)
 
     def generate_response(
         self,
@@ -299,7 +303,7 @@ class LLMClient:
         system_prompt_streaming = system_prompt + instrucciones
 
         ultimo_error = None
-        for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
+        for i, (cliente, proveedor, modelo) in enumerate(self._targets(modo_llamada=modo_llamada)):
             ya_emitio_algo = False
             json_crudo: List[str] = []
             vimos_json = False

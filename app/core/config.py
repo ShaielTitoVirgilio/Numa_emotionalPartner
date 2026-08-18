@@ -47,6 +47,39 @@ class Config:
     CHAT_FALLBACK_PROVIDER: str = os.getenv("CHAT_FALLBACK_PROVIDER", "openrouter")
     CHAT_FALLBACK_MODEL: str = os.getenv("CHAT_FALLBACK_MODEL", "google/gemini-3-flash-preview")
 
+    # ── Modelo del MODO LLAMADA (voz) ──────────────────────────────────
+    # Distinto del chat escrito a propósito. Lo que manda en una llamada no es
+    # la latencia mediana sino la PEOR: un turno que tarda 3s rompe la
+    # sensación de conversación aunque el resto sean rápidos. Medido con
+    # scripts/bench_modelos_ttft.py (16 muestras por modelo, prompt real de
+    # ~39k chars, ronda robin para que un bache de red no sesgue a uno solo):
+    #
+    #     modelo             mediana   p90 (n=16)   p90 (n=24)   chars
+    #     gpt-5.6-luna         817ms      3156ms       1911ms      150
+    #     gpt-chat-latest     1028ms      1065ms       1332ms      108
+    #     gpt-5.6-terra        929ms      1101ms          —         92
+    #     gpt-4o-mini          701ms      1064ms          —        108
+    #
+    # ES UN CANJE, no una victoria limpia, y conviene tenerlo claro: se pagan
+    # ~200ms de mediana para ganar entre 600 y 2100ms de p90 (la cola de luna
+    # varía bastante entre corridas). Se eligió así porque lo reportado en
+    # dispositivo real fue "a veces tarda un montón", que es cola y no mediana;
+    # y de paso chat-latest genera respuestas más cortas (108 vs 150 chars),
+    # que en voz es menos tiempo hablando.
+    #
+    # Descartados: gpt-4o-mini era el más rápido pero falló 1/20 en registro
+    # rioplatense (eval_multimodelo.py) — inaceptable. terra pasó la eval
+    # mecánica pero responde notoriamente más frío y llegó a malinterpretar un
+    # mensaje ("El personaje se parece mucho a mi" → "¿A quién te referís?").
+    #
+    # Si al usarlo se siente peor que luna, revertir es cambiar esta variable
+    # de entorno: no hay nada más atado a la decisión.
+    #
+    # El chat ESCRITO sigue en CHAT_MODEL sin cambios: ahí 3s de cola no se
+    # sienten igual, y no hay motivo para tocar lo que funciona.
+    CHAT_PROVIDER_LLAMADA: str = os.getenv("CHAT_PROVIDER_LLAMADA", "openrouter")
+    CHAT_MODEL_LLAMADA: str = os.getenv("CHAT_MODEL_LLAMADA", "openai/gpt-chat-latest")
+
     # ── Verificador de crisis (capa 2, confirma si el riesgo es real) ───
     # 2026-07-18: se movió de Groq/Llama (bloqueado el 17/07) a OpenRouter, mismo
     # modelo que el fallback del chat. Deliberadamente separado de CHAT_FALLBACK_*
