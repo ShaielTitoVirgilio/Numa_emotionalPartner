@@ -303,6 +303,7 @@ class LLMClient:
             ya_emitio_algo = False
             json_crudo: List[str] = []
             vimos_json = False
+            uso = None
             inicio_intento = time.perf_counter()
             try:
                 stream = cliente.chat.completions.create(
@@ -310,6 +311,12 @@ class LLMClient:
                     temperature=0.7,
                     max_tokens=max_tokens_for_provider(max_tokens_base, proveedor, modelo),
                     stream=True,
+                    # Sin esto el stream no trae `usage` en ningún chunk. Se pide
+                    # para poder loguear cached_tokens: es el ÚNICO dato directo
+                    # sobre si el cacheo de prompt está funcionando en producción
+                    # (todo lo demás obliga a inferirlo de TTFTs, que tienen
+                    # demasiada varianza para concluir nada).
+                    stream_options={"include_usage": True},
                     messages=[
                         {"role": "system", "content": system_prompt_streaming},
                         *conversation,
@@ -317,6 +324,10 @@ class LLMClient:
                     extra_body=(extra_body if extra_body is not None else extra_body_for(proveedor, modelo)),
                 )
                 for chunk in stream:
+                    # El chunk que trae `usage` viene con choices vacío, así que
+                    # esto va ANTES del `continue` de abajo o se pierde.
+                    if getattr(chunk, "usage", None):
+                        uso = chunk.usage
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta.content or ""
@@ -342,6 +353,7 @@ class LLMClient:
                     "provider": proveedor, "model": modelo, "fallback": i > 0,
                     "ok": True, "cut": False,
                     "latency_ms": round((time.perf_counter() - inicio_intento) * 1000, 1),
+                    **_extraer_uso(uso),
                 }
                 yield ("metadata", metadata)
                 return  # este proveedor terminó bien -> no se prueban los siguientes
@@ -435,6 +447,37 @@ Nunca encadenes varias ideas en un mismo turno por las dudas. En una charla
 hablada el otro necesita poder meter bocado: un turno largo cuando alcanzaba
 con una línea se siente robótico, por más que el contenido esté bien.
 """
+
+
+def _extraer_uso(uso) -> dict:
+    """Saca del `usage` del stream los tokens que importan para diagnóstico.
+
+    cached_tokens es el objetivo: dice cuántos tokens del prompt salieron de
+    caché en vez de volver a procesarse. Con el prompt de Numa (~38k chars) la
+    diferencia entre pegar y no pegar en la caché son segundos de TTFT, y hasta
+    ahora eso se venía infiriendo de mediciones con demasiada varianza.
+
+    Tolerante a propósito: no todos los proveedores mandan `usage` en el
+    stream, y `prompt_tokens_details` viene como objeto o como dict según el
+    SDK. Si algo falta devuelve None en ese campo y no rompe el turno — es
+    telemetría, nunca debe tumbar una respuesta.
+    """
+    if not uso:
+        return {}
+
+    def _leer(obj, campo):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(campo)
+        return getattr(obj, campo, None)
+
+    detalles = _leer(uso, "prompt_tokens_details")
+    return {
+        "prompt_tokens": _leer(uso, "prompt_tokens"),
+        "completion_tokens": _leer(uso, "completion_tokens"),
+        "cached_tokens": _leer(detalles, "cached_tokens"),
+    }
 
 
 def _parsear_metadata_streaming(json_crudo: str) -> dict:

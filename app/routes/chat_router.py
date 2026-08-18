@@ -1124,6 +1124,14 @@ def _stream_chat_respuesta(
         t_llm_ultimo_token_ms=t_llm_ultimo_token_ms,
         llm_chunks=llm_chunks,
         mensaje_len=len(mensaje_final),
+        # El dato DIRECTO sobre el cacheo del prompt, en vez de inferirlo de
+        # TTFTs ruidosos: cached_tokens ≈ prompt_tokens significa que el prefijo
+        # pegó en caché; cached_tokens 0 o bajo significa que se reprocesaron
+        # ~38k caracteres de prompt, que es donde se van los segundos.
+        prompt_chars=len(turno.get("system_prompt") or ""),
+        prompt_tokens=llm_info.get("prompt_tokens"),
+        cached_tokens=llm_info.get("cached_tokens"),
+        completion_tokens=llm_info.get("completion_tokens"),
         t_preparar_turno_ms=_sumar_tiempos(tiempos),
         router_provider=router_meta.get("provider"),
         router_model=router_meta.get("model"),
