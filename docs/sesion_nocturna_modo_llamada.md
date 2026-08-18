@@ -11,7 +11,7 @@ Trabajo hecho mientras dormías. Todo en `staging`, **nada tocó producción**.
 | Pedido | Estado |
 |---|---|
 | `context_router` en paralelo (desbloquear el merge) | ✅ Hecho y testeado (17 casos) |
-| Probar modelos y elegir uno más rápido | ✅ Hecho, `gpt-chat-latest` solo en llamada |
+| Probar modelos y elegir uno más rápido | ⚠️ Probados 15, **ninguno adoptado** — ver abajo |
 | Que no corte cuando pausás para pensar | ✅ 1000 → 1500ms, con test que reproduce el bug |
 | Ejercicio sugerido → salir de la llamada | ✅ Hecho |
 | Riesgo ≥0.6 → cortar y pasar a chat | ✅ Hecho (reusa el evento que el cliente ya manejaba) |
@@ -150,7 +150,7 @@ que el turno no espere al router.
 
 ---
 
-## 2. Modelos — probé 15, elegí uno
+## 2. Modelos — probé 15, y al final NO cambié ninguno
 
 Benchmark propio (`scripts/bench_modelos_ttft.py`) con el prompt real de ~39k
 chars, la función real, **ronda robin** entre modelos (si corrés uno entero y
@@ -160,13 +160,34 @@ varianza de TTFT es enorme.
 | modelo | mediana | p90 (n=16) | p90 (n=24) | chars |
 |---|---|---|---|---|
 | `gpt-5.6-luna` (el que había) | 817ms | 3156ms | 1911ms | 150 |
-| **`gpt-chat-latest`** ← elegido | 1028ms | 1065ms | 1332ms | 108 |
+| `gpt-chat-latest` (probado, **descartado**) | 1028ms | 1065ms | 1332ms | 108 |
 | `gpt-5.6-terra` | 929ms | 1101ms | — | 92 |
 | `gpt-4o-mini` | 701ms | 1064ms | — | 108 |
 
-**Es un canje, no una victoria limpia:** se pagan ~200ms de mediana para ganar
-600-2100ms de p90. Lo prioricé así porque lo que reportaste fue *"a veces tarda
-un montón"*, que es cola y no mediana.
+### ⚠️ CORRECCIÓN — se revirtió, sigue `luna`
+
+Elegí `gpt-chat-latest` por latencia y **no miré el precio**. Error mío. Al
+revisarlo:
+
+| modelo | $/turno | $/llamada 20 turnos | vs luna |
+|---|---|---|---|
+| `gpt-5.6-luna` | $0.00055 | $0.011 | 1x |
+| `gpt-4o-mini` | $0.00102 | $0.020 | 1.9x |
+| `gpt-5.6-terra` | $0.00553 | $0.111 | 10x |
+| `gpt-chat-latest` | $0.01382 | **$0.276** | **25x** |
+
+Y hay un motivo peor que el costo: **`chat-latest` es un alias móvil**, resuelve
+"al último modelo Instant usado en ChatGPT". OpenAI lo cambia sin avisar, así
+que las evals de calidad y seguridad **vencen solas** y el comportamiento puede
+cambiar sin release nuestro. En una app de salud mental eso lo descalifica
+aunque fuera gratis.
+
+**Revertido: el modo llamada usa `luna`, igual que el chat escrito.** El
+mecanismo (`CHAT_MODEL_LLAMADA`) queda porque sirve, pero vacío.
+
+Si se quiere volver a atacar la latencia por acá, el único candidato con
+relación costo/beneficio razonable es **`gpt-4o-mini`** (1.9x, mejor p90), pero
+antes hay que resolver el 1/20 de tuteo con una eval de calidad más grande.
 
 **Descartados por calidad, no por velocidad:**
 - `gpt-4o-mini` era el más rápido pero **falló 1/20 en registro rioplatense**
@@ -280,8 +301,9 @@ limpio, y el import de la app funciona.
    `runtimeVersion` ya quedó por policy en `main`).
 3. **Re-tunear el barge-in** ahora que hay AEC en iOS — los umbrales siguen
    calibrados para audio sin cancelación de eco. Anda igual.
-4. **Decidir si `chat-latest` te gusta** como modelo de voz. Es un canje y es
-   reversible con una variable de entorno.
+4. **Evaluar `gpt-4o-mini` a fondo** si se quiere volver a atacar la latencia
+   por modelo: 1.9x de costo y el mejor p90, pero hay que resolver el 1/20 de
+   tuteo con una eval de calidad más grande.
 5. **El merge a `main`** ya no está bloqueado por seguridad. Pero conviene que
    pruebes 1 y 4 antes.
 

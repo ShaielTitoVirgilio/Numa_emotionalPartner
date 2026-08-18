@@ -48,37 +48,37 @@ class Config:
     CHAT_FALLBACK_MODEL: str = os.getenv("CHAT_FALLBACK_MODEL", "google/gemini-3-flash-preview")
 
     # ── Modelo del MODO LLAMADA (voz) ──────────────────────────────────
-    # Distinto del chat escrito a propósito. Lo que manda en una llamada no es
-    # la latencia mediana sino la PEOR: un turno que tarda 3s rompe la
-    # sensación de conversación aunque el resto sean rápidos. Medido con
-    # scripts/bench_modelos_ttft.py (16 muestras por modelo, prompt real de
-    # ~39k chars, ronda robin para que un bache de red no sesgue a uno solo):
+    # Vacío = usa CHAT_MODEL, o sea el mismo que el chat escrito. El mecanismo
+    # queda porque sirve, pero HOY NO SE USA. Por qué:
     #
-    #     modelo             mediana   p90 (n=16)   p90 (n=24)   chars
-    #     gpt-5.6-luna         817ms      3156ms       1911ms      150
-    #     gpt-chat-latest     1028ms      1065ms       1332ms      108
-    #     gpt-5.6-terra        929ms      1101ms          —         92
-    #     gpt-4o-mini          701ms      1064ms          —        108
+    # Se probó gpt-chat-latest, elegido por latencia de cola (p90 1332ms contra
+    # 1911-3156ms de luna, medido con scripts/bench_modelos_ttft.py). Se
+    # revirtió por dos motivos que pesan más que esos ~600ms:
     #
-    # ES UN CANJE, no una victoria limpia, y conviene tenerlo claro: se pagan
-    # ~200ms de mediana para ganar entre 600 y 2100ms de p90 (la cola de luna
-    # varía bastante entre corridas). Se eligió así porque lo reportado en
-    # dispositivo real fue "a veces tarda un montón", que es cola y no mediana;
-    # y de paso chat-latest genera respuestas más cortas (108 vs 150 chars),
-    # que en voz es menos tiempo hablando.
+    #   1. COSTO: 25x. Con los tokens reales de un turno (11.674 de entrada,
+    #      10.900 cacheados, 150 de salida) da USD 0.0138 por turno contra
+    #      0.00055 de luna — una llamada de 20 turnos pasa de 1 centavo a 28.
     #
-    # Descartados: gpt-4o-mini era el más rápido pero falló 1/20 en registro
-    # rioplatense (eval_multimodelo.py) — inaceptable. terra pasó la eval
-    # mecánica pero responde notoriamente más frío y llegó a malinterpretar un
-    # mensaje ("El personaje se parece mucho a mi" → "¿A quién te referís?").
+    #   2. ES UN ALIAS MÓVIL. chat-latest "siempre resuelve al último modelo
+    #      Instant usado en ChatGPT": OpenAI lo cambia sin avisar. Las evals de
+    #      calidad y seguridad que se le corran vencen solas, y el
+    #      comportamiento puede cambiar de un día para el otro sin release
+    #      nuestro. Para una app de salud mental eso no es aceptable, y
+    #      descalifica al modelo aunque fuese gratis.
     #
-    # Si al usarlo se siente peor que luna, revertir es cambiar esta variable
-    # de entorno: no hay nada más atado a la decisión.
+    # Costo por turno de los candidatos medidos (mismos tokens reales):
+    #     gpt-5.6-luna      USD 0.00055   (1x)     p90 1911-3156ms
+    #     gpt-4o-mini       USD 0.00102   (1.9x)   p90 1064ms
+    #     gpt-5.6-terra     USD 0.00553   (10x)    p90 1101ms
+    #     gpt-chat-latest   USD 0.01382   (25x)    p90 1332ms
     #
-    # El chat ESCRITO sigue en CHAT_MODEL sin cambios: ahí 3s de cola no se
-    # sienten igual, y no hay motivo para tocar lo que funciona.
+    # Si algún día se quiere volver a atacar la latencia por acá, el ÚNICO
+    # candidato con relación costo/beneficio razonable es gpt-4o-mini: 1.9x de
+    # costo y el mejor p90. Pero falló 1/20 en registro rioplatense (tuteo) en
+    # eval_multimodelo.py, así que antes hay que correr una eval de calidad más
+    # grande y ver si es un caso aislado o un problema sistemático.
     CHAT_PROVIDER_LLAMADA: str = os.getenv("CHAT_PROVIDER_LLAMADA", "openrouter")
-    CHAT_MODEL_LLAMADA: str = os.getenv("CHAT_MODEL_LLAMADA", "openai/gpt-chat-latest")
+    CHAT_MODEL_LLAMADA: str = os.getenv("CHAT_MODEL_LLAMADA", "")
 
     # ── Verificador de crisis (capa 2, confirma si el riesgo es real) ───
     # 2026-07-18: se movió de Groq/Llama (bloqueado el 17/07) a OpenRouter, mismo
