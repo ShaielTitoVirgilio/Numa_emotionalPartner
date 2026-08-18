@@ -168,6 +168,49 @@ eventos, log, _ = correr(None)   # chat escrito: no hay future
 check("sin future (chat escrito) el turno corre igual", any(e["type"] == "final" for e in eventos))
 check("sin future no se marca router_paralelo", not log.get("router_paralelo"))
 
+
+# ══════════════════════════════════════════════════════════════════════
+# Caché de memorias del modo llamada
+# ══════════════════════════════════════════════════════════════════════
+# La consulta de memorias es el pedazo más caro de preparar_turno (103-382ms
+# medidos en producción) y es idéntica turno a turno dentro de una llamada.
+# Se cachea SOLO en llamada. Lo delicado no es el ahorro sino no romper nada:
+# que no se sirva una lista mutada, que no se re-encolen desactivaciones ya
+# hechas, y que una memoria nueva invalide el caché.
+import app.memory_service as ms  # noqa: E402
+
+print()
+print("-- caché de memorias (modo llamada) --")
+_n = {"v": 0}
+
+
+def _memorias_falsas(user_id, days=30, max_items=12):
+    _n["v"] += 1
+    return ([{"content": "m1", "category": "trabajo", "priority": 3}], ["id-viejo"])
+
+
+with patch.object(ms, "get_recent_memories", _memorias_falsas):
+    ms._MEMORIAS_CACHE.clear()
+    a, ids_a = ms.get_recent_memories_cached("u1")
+    b, ids_b = ms.get_recent_memories_cached("u1")
+    ms.get_recent_memories_cached("u2")
+
+    check("golpea la base una sola vez por usuario", _n["v"] == 2, f"llamadas={_n['v']}")
+    check("el hit devuelve las mismas memorias", a == b)
+    check(
+        "el hit NO repite los ids a desactivar",
+        ids_a == ["id-viejo"] and ids_b == [],
+        "repetirlos encolaría la misma escritura en cada turno",
+    )
+
+    a.append({"content": "mutacion"})
+    d, _ = ms.get_recent_memories_cached("u1")
+    check("mutar el resultado no ensucia el caché", len(d) == 1, f"len={len(d)}")
+
+    ms.invalidate_patterns_cache("u1")
+    ms.get_recent_memories_cached("u1")
+    check("una memoria nueva invalida y relee", _n["v"] == 3, f"llamadas={_n['v']}")
+
 print()
 print("TODO OK" if fallos == 0 else f"{fallos} FALLO(S)")
 sys.exit(0 if fallos == 0 else 1)

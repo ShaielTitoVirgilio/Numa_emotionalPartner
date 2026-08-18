@@ -19,6 +19,19 @@ _PATTERNS_TTL_SECONDS = 300  # 5 minutos
 _CHECKIN_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[int]]] = {}
 _CHECKIN_TTL_SECONDS = 300  # 5 minutos
 
+# Caché de memorias SOLO para el modo llamada. TTL corto a propósito: en una
+# llamada los turnos se suceden cada 20-30s y las memorias de la base no
+# cambian entre uno y otro, pero fuera de una llamada no vale la pena
+# arriesgarse a servir algo viejo. El chat escrito NO lo usa.
+#
+# Por qué es seguro que quede levemente desactualizado: las memorias nuevas de
+# la sesión en curso NO vienen de acá — la app las arrastra en
+# `perfil._memorias_sesion` y se fusionan con estas en _preparar_turno. O sea
+# que lo que el usuario acaba de contar aparece igual en el prompt del turno
+# siguiente, venga o no del caché.
+_MEMORIAS_CACHE: Dict[str, Tuple[float, Tuple[List[Dict[str, Any]], List[str]]]] = {}
+_MEMORIAS_TTL_SECONDS = 90
+
 # ── Detector de eventos próximos ─────────────────────────────────────────────
 _PALABRAS_TIEMPO = [
     "mañana", "pasado mañana", "esta noche", "hoy a la tarde", "hoy a la noche",
@@ -194,8 +207,43 @@ def get_topic_patterns_cached(
 
 
 def invalidate_patterns_cache(user_id: str) -> None:
-    """Borra el caché de patrones de un usuario (llamar al guardar una memoria nueva)."""
+    """Borra el caché de patrones de un usuario (llamar al guardar una memoria nueva).
+
+    Borra también el de memorias del modo llamada: los dos se invalidan por el
+    mismo motivo (hay una memoria nueva) y en el mismo punto del flujo, así que
+    tenerlos separados solo daría lugar a que alguien invalide uno y se olvide
+    del otro."""
     _PATTERNS_CACHE.pop(user_id, None)
+    _MEMORIAS_CACHE.pop(user_id, None)
+
+
+def get_recent_memories_cached(
+    user_id: str,
+    days: int = MEMORY_WINDOW_DAYS_DEFAULT,
+    max_items: int = MAX_MEMORIES_DEFAULT,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Versión cacheada de get_recent_memories, pensada para el modo llamada.
+
+    Medido: la consulta de memorias es el pedazo más grande de preparar_turno
+    (103-382ms por turno) y es idéntica turno a turno dentro de una llamada.
+    Cachearla saca esos ms de TODOS los turnos menos el primero.
+
+    Devuelve una COPIA de la lista: el caller la muta (le fusiona las memorias
+    de sesión) y sin copiar se ensuciaría el valor cacheado para los turnos
+    siguientes. `ids_a_desactivar` va vacío en los hits: esos ids ya se
+    mandaron a desactivar en el turno que llenó el caché, y repetirlos sería
+    encolar la misma escritura una y otra vez.
+    """
+    ahora = time.time()
+    cacheado = _MEMORIAS_CACHE.get(user_id)
+    if cacheado and cacheado[0] > ahora:
+        vigentes, _ = cacheado[1]
+        return list(vigentes), []
+
+    resultado = get_recent_memories(user_id=user_id, days=days, max_items=max_items)
+    _MEMORIAS_CACHE[user_id] = (ahora + _MEMORIAS_TTL_SECONDS, resultado)
+    vigentes, ids = resultado
+    return list(vigentes), ids
 
 
 def get_checkin_hoy_cached(user_id: str) -> Optional[int]:

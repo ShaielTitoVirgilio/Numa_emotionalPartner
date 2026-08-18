@@ -20,6 +20,7 @@ from app.numa_prompt import construir_prompt
 from app.streaming_buffer import BufferStreamingMensaje
 from app.memory_service import (
     get_recent_memories,
+    get_recent_memories_cached,
     get_topic_patterns_cached,
     invalidate_patterns_cache,
     get_proactive_memories,
@@ -407,7 +408,12 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         t0 = time.perf_counter()
         vigentes, ids_old = memorias_sesion or [], []
         try:
-            m_db, ids_old = get_recent_memories(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
+            # En llamada se usa la variante cacheada: es la consulta más cara
+            # de este bloque (103-382ms medidos) y no cambia entre turnos de
+            # una misma llamada. Lo que el usuario acaba de contar igual llega
+            # al prompt, porque viene aparte en memorias_sesion.
+            traer = get_recent_memories_cached if modo_llamada else get_recent_memories
+            m_db, ids_old = traer(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
             seen = set()
             merged = []
             for m in (memorias_sesion or []) + m_db:
