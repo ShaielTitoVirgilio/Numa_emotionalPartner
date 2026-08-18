@@ -80,6 +80,27 @@ class Config:
     CHAT_PROVIDER_LLAMADA: str = os.getenv("CHAT_PROVIDER_LLAMADA", "openrouter")
     CHAT_MODEL_LLAMADA: str = os.getenv("CHAT_MODEL_LLAMADA", "")
 
+    # ── Voz de Numa en el modo llamada (Cartesia) ──────────────────────
+    # La app NO lleva esta clave: pide un token de corta duración a
+    # /tts/token y con ese token habla directo con Cartesia. Así el audio no
+    # pasa por nuestro servidor (un salto de red menos, que en una llamada se
+    # nota) y la clave permanente nunca sale de acá.
+    #
+    # TTS_CARTESIA_HABILITADO=false apaga Cartesia y la app vuelve al TTS del
+    # sistema (expo-speech) sin necesidad de un deploy ni de un build nuevo.
+    # Existe para dos casos concretos: que Cartesia se caiga, y que el consumo
+    # de créditos se dispare y haya que frenarlo YA.
+    CARTESIA_API_KEY: str = os.getenv("CARTESIA_API_KEY", "")
+    CARTESIA_VERSION: str = os.getenv("CARTESIA_VERSION", "2026-08-14")
+
+    @property
+    def tts_cartesia_habilitado(self) -> bool:
+        """Cartesia se usa solo si está prendido Y hay clave. Sin clave se
+        apaga solo en vez de romper la llamada: la voz del sistema es peor,
+        pero que Numa no hable directamente sería un bug."""
+        prendido = os.getenv("TTS_CARTESIA_HABILITADO", "true").strip().lower() not in ("false", "0", "no")
+        return prendido and bool(self.CARTESIA_API_KEY)
+
     # ── Verificador de crisis (capa 2, confirma si el riesgo es real) ───
     # 2026-07-18: se movió de Groq/Llama (bloqueado el 17/07) a OpenRouter, mismo
     # modelo que el fallback del chat. Deliberadamente separado de CHAT_FALLBACK_*

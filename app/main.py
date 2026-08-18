@@ -33,6 +33,7 @@ from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
 from app.routes.memories_router import router as memories_router
 from app.routes.diag_router import router as diag_router
+from app.routes.tts_router import router as tts_router
 from app.supabase_client import supabase
 from app.core.errors import NumaError, MENSAJE_GENERICO
 
@@ -110,7 +111,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _PREFIJOS_API = (
         "/chat", "/auth", "/onboarding", "/feedback", "/checkin",
         "/dashboard", "/account", "/apple", "/memories", "/subscribe",
-        "/api/", "/speech-to-text",
+        "/api/", "/speech-to-text", "/tts",
     )
 
     async def dispatch(self, request: Request, call_next):
@@ -320,3 +321,5 @@ app.include_router(memories_router)
 # Diagnóstico de latencia del stream (ADMIN_KEY por header). Hace llamadas
 # reales al LLM, así que no se expone sin la key — ver diag_router.py.
 app.include_router(diag_router)
+# Token efimero de Cartesia para la voz del modo llamada (ver tts_router.py).
+app.include_router(tts_router)
