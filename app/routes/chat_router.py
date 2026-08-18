@@ -1023,6 +1023,26 @@ def _stream_chat_respuesta(
     # deberían quedar cerca; con retencion=2 (chat escrito) el primer delta
     # llega bastante después. Ese gap es el que justifica todo el trabajo del
     # buffer, y hasta ahora lo estábamos suponiendo en vez de midiéndolo.
+    # ── Forma del stream (llm_chunks / t_llm_ultimo_token_ms) ────────
+    # Medido 2026-08-18: en Railway el primer token tarda ~2605ms y TODO lo
+    # demás llega en los 62ms siguientes. Corriendo el mismo modelo, proveedor
+    # y pin de provider desde una máquina de desarrollo, el mismo pedido da
+    # ~845ms de TTFT y 40 chunks repartidos en ~520ms
+    # (scripts/diag_ttft_streaming.py). O sea que ese perfil NO lo produce el
+    # modelo, y descarta también al reasoning (medido: effort low/minimal/none
+    # dan lo mismo).
+    #
+    # Quedan tres candidatos con arreglos distintos, y estos campos los
+    # separan sin adivinar:
+    #   - Muchos chunks en muy poco tiempo → los chunks se acumularon en el
+    #     socket y se leyeron de golpe: el cuello es NUESTRO (el proceso no
+    #     drena el stream), no del proveedor.
+    #   - Pocos chunks → el modelo generó poco texto y el tiempo se fue en
+    #     producirlo: hay que ir por el tamaño del prompt (prefill).
+    #   - mensaje_len da la escala para interpretar los dos casos de arriba.
+    llm_chunks = 0
+    t_llm_ultimo_token_ms: Optional[float] = None
+
     t_inicio_stream = time.perf_counter()
     t_primer_delta_ms: Optional[float] = None
     t_llm_primer_token_ms: Optional[float] = None
@@ -1041,8 +1061,11 @@ def _stream_chat_respuesta(
             modo_llamada=modo_llamada,
         ):
             if tipo == "mensaje":
+                ahora = time.perf_counter()
+                llm_chunks += 1
+                t_llm_ultimo_token_ms = round((ahora - t_inicio_stream) * 1000, 1)
                 if t_llm_primer_token_ms is None:
-                    t_llm_primer_token_ms = round((time.perf_counter() - t_inicio_stream) * 1000, 1)
+                    t_llm_primer_token_ms = t_llm_ultimo_token_ms
                 for oracion in buf.feed(valor):
                     _marcar_primer_delta()
                     yield _evento_ndjson({"type": "delta", "text": oracion})
@@ -1096,6 +1119,11 @@ def _stream_chat_respuesta(
         # entero, éstos son hasta el primer audio. Ver el bloque de arriba.
         t_primer_delta_ms=t_primer_delta_ms,
         t_llm_primer_token_ms=t_llm_primer_token_ms,
+        # Forma del stream: (ultimo - primer) token vs llm_chunks dice si el
+        # texto vino goteando o de golpe. Ver el bloque de arriba.
+        t_llm_ultimo_token_ms=t_llm_ultimo_token_ms,
+        llm_chunks=llm_chunks,
+        mensaje_len=len(mensaje_final),
         t_preparar_turno_ms=_sumar_tiempos(tiempos),
         router_provider=router_meta.get("provider"),
         router_model=router_meta.get("model"),

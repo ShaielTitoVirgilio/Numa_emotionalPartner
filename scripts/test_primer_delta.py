@@ -149,6 +149,33 @@ check(
     f"dio {pd_con_prep}ms, se esperaba >=500ms (500 de prep + ~100 del LLM)",
 )
 
+# ── 5. Forma del stream: llm_chunks / t_llm_ultimo_token_ms / mensaje_len ─
+# Sirven para distinguir "el modelo generó despacio" de "los chunks se
+# acumularon y se leyeron de golpe". El stream falso manda 4 oraciones
+# separadas 100ms, o sea que el caso "goteando" tiene que verse como tal.
+chunks = log_llamada.get("llm_chunks")
+ultimo = log_llamada.get("t_llm_ultimo_token_ms")
+largo = log_llamada.get("mensaje_len")
+
+check("llm_chunks cuenta los chunks de texto", chunks == len(ORACIONES), f"dio {chunks}, se esperaban {len(ORACIONES)}")
+check("mensaje_len es el largo del mensaje final", isinstance(largo, int) and largo > 0, f"dio {largo}")
+check(
+    "t_llm_ultimo_token_ms >= t_llm_primer_token_ms",
+    ultimo is not None and pt is not None and ultimo >= pt,
+    f"primer={pt}ms ultimo={ultimo}ms",
+)
+# Con 100ms entre oraciones, primer→último tiene que dar ~300ms (3 saltos).
+# Si diera ~0 seria el perfil "llegó todo junto", que es justo lo que se
+# quiere poder detectar en produccion.
+spread = (ultimo - pt) if (ultimo is not None and pt is not None) else None
+check(
+    "el spread primer→último refleja que el texto vino goteando",
+    spread is not None and spread > 150,
+    f"spread={spread}ms (con ~0 seria 'llego todo junto')",
+)
+if spread is not None:
+    print(f"   → spread={round(spread)}ms sobre {chunks} chunks (perfil 'goteando', el sano)")
+
 print()
 print("TODO OK" if fallos == 0 else f"{fallos} FALLO(S)")
 sys.exit(0 if fallos == 0 else 1)
