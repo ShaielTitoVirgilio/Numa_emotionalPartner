@@ -32,6 +32,7 @@ from app.routes.dashboard_router import router as dashboard_router
 from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
 from app.routes.memories_router import router as memories_router
+from app.routes.diag_router import router as diag_router
 from app.supabase_client import supabase
 from app.core.errors import NumaError, MENSAJE_GENERICO
 
@@ -316,3 +317,6 @@ app.include_router(dashboard_router)
 app.include_router(account_router)
 app.include_router(apple_router)
 app.include_router(memories_router)
+# Diagnóstico de latencia del stream (ADMIN_KEY por header). Hace llamadas
+# reales al LLM, así que no se expone sin la key — ver diag_router.py.
+app.include_router(diag_router)
