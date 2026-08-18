@@ -150,6 +150,18 @@ def _normalizar(data: dict) -> dict:
     }
 
 
+def resultado_vacio() -> dict:
+    """El resultado neutro (ok=False): el mismo que devuelve clasificar_contexto()
+    ante cualquier error, o sea "no hay capa semántica, ruteá solo por keywords".
+
+    Es público para que un caller pueda SALTEAR el router a propósito (hoy: el
+    modo llamada, que lo apaga para no pagar 1.5-2s de latencia en una charla
+    hablada) sin duplicar la forma del dict ni tener que importar la constante
+    privada. Devuelve una copia: el caller le hace .pop() encima.
+    """
+    return dict(_RESULTADO_VACIO)
+
+
 def clasificar_contexto(conversation: list) -> dict:
     """Clasifica el contexto de la conversación con el LLM chico.
 

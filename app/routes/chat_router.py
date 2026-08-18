@@ -40,7 +40,7 @@ from app.memory_service import (
 )
 from app.crisis_detector import detectar_crisis
 from app.crisis_verifier import confirmar_riesgo_real
-from app.context_router import clasificar_contexto, score_riesgo_router
+from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
@@ -346,6 +346,27 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             ultimo_modulo_critico = True
             break
 
+    # ── context_router: apagado en modo llamada ──────────────────────
+    # Es una llamada a LLM aparte que se come 1.5-2s de los ~3s del turno. En
+    # el chat escrito eso se tolera; hablando por voz, 1.5s de silencio extra
+    # en CADA ida y vuelta rompe la sensación de conversación, que es
+    # justamente lo que el modo llamada tiene que lograr.
+    #
+    # Saltearlo deja router_hints en ok=False, que NO es un estado nuevo: es
+    # exactamente el mismo que ya se usa cuando el router falla o da timeout
+    # (fail-safe de context_router.py). Todo lo de abajo ya lo contempla —
+    # construir_prompt hace rh = {}, la memoria contextual deja estado_r=None.
+    #
+    # LO QUE SE PIERDE EN LLAMADA (a propósito, decisión explícita):
+    #   - La escalada de riesgo por señal IMPLÍCITA (sin keywords). La
+    #     detección por keywords + crisis_verifier queda intacta, o sea lo
+    #     crítico/alto explícito se sigue frenando igual que siempre.
+    #   - estado_emocional → sin recursos ni temas abiertos en la memoria
+    #     contextual (los eventos proactivos con fecha SÍ siguen andando).
+    #   - pide_ejercicio / pregunta_app / pregunta_capacidades por vía
+    #     semántica (las keywords de esos casos siguen funcionando).
+    modo_llamada = bool(body.modo_llamada)
+
     # ── Etapas independientes en paralelo ────────────────────────────
     # Medido en producción (ver docs/latencia): context_router (una llamada a
     # LLM aparte de la principal, SOLO para rutear módulos) se come 1.5-2s por
@@ -407,12 +428,18 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
 
     _t_paralelo_inicio = time.perf_counter()
     with ThreadPoolExecutor(max_workers=4) as ejecutor:
-        fut_router = ejecutor.submit(_tarea_router)
+        # En llamada ni se lanza: apagado completo, no es una llamada al LLM
+        # que se descarta después (no se paga ni en tiempo ni en tokens).
+        fut_router = None if modo_llamada else ejecutor.submit(_tarea_router)
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
 
-        router_hints, tiempos["t_context_router_ms"] = fut_router.result()
+        if fut_router is None:
+            # 0.0 en el log = se salteó (distinto de "tardó poco").
+            router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
+        else:
+            router_hints, tiempos["t_context_router_ms"] = fut_router.result()
         memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
         patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
         dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
@@ -1019,6 +1046,11 @@ def _stream_chat_respuesta(
         endpoint="/chat/stream",
         user_id=user_id,
         email=email,
+        # Para poder filtrar los turnos de llamada en los logs y compararlos
+        # contra los del chat escrito: en llamada el router va apagado
+        # (t_context_router_ms=0) y el buffer sin retención.
+        modo_llamada=modo_llamada,
+        context_router_off=modo_llamada,
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
         llm_fallback=llm_info.get("fallback"),
@@ -1078,6 +1110,8 @@ def chat_stream_endpoint(
     if turno["crisis_confirmada"]:
         log_event(
             "chat_turn", endpoint="/chat/stream", user_id=user_id, email=email,
+            modo_llamada=bool(body.modo_llamada),
+            context_router_off=bool(body.modo_llamada),
             crisis_hardcoded=True, risk_level="high", llm_provider=None,
             **turno.get("_tiempos", {}),
         )
