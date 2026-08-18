@@ -35,6 +35,41 @@ Hace llamadas REALES al LLM (gasta tokens, poco). Va detrás de ADMIN_KEY por
 header, igual que los /admin/* de feedback_router.
 
 NO loguea ni devuelve contenido de mensajes: solo tamaños y tiempos.
+
+═══════════════════════════════════════════════════════════════════════
+RESULTADOS MEDIDOS EN RAILWAY (staging) — 2026-08-18
+═══════════════════════════════════════════════════════════════════════
+
+    /admin/diag-stream-real       TTFT 596-646ms   9.9-23.0 ms/chunk
+    /admin/diag-stream-real-sse   TTFT 552-1080ms  9.1-11.1 ms/chunk
+    /chat/stream (produccion)     TTFT 2154-4438ms 1.1-3.1 ms/chunk
+
+Los dos de diagnóstico usan EL MISMO generate_response_stream, EL MISMO
+prompt de construir_prompt (38276 chars), EL MISMO contenedor y la misma
+caché (10734/10737 tokens). El "-sse" además va dentro de una
+StreamingResponse yieldeando por oración, igual que /chat/stream.
+
+O sea que quedan descartados, con medición y no por deducción: el modelo, el
+reasoning, el tamaño y el contenido del prompt, el cacheo, la red de Railway,
+los middlewares, el buffer de streaming, y la propia StreamingResponse.
+
+Lo único que /chat/stream tiene y estos no:
+  1. El CLIENTE REAL (el celular en red móvil) del otro lado. Con el
+     generador sincrónico de _stream_chat_respuesta, cada yield espera a que
+     el event loop escriba al cliente antes de volver a pedir el próximo
+     chunk. Si el cliente es lento, dejamos de leer del LLM y los chunks se
+     apilan en el socket → se leen después de golpe. Explica el lote (1-3
+     ms/chunk) de forma directa.
+  2. El historial de conversación (~1000 tokens más, y sin cachear: la caché
+     cubre el prefijo del system prompt, no lo que se agrega después).
+  3. La concurrencia de una llamada real (subidas de audio de 100-230KB al
+     STT entre turno y turno).
+
+PRÓXIMO PASO SUGERIDO (no implementado): desacoplar la lectura del LLM de la
+escritura al cliente — leer el stream en una tarea aparte que llene una cola,
+y que el generador que responde consuma de esa cola. Así un cliente lento no
+puede frenar la lectura del LLM, y las oraciones están listas para hablarse
+apenas se generan, que es justo lo que el modo llamada necesita.
 """
 import hmac
 import json
