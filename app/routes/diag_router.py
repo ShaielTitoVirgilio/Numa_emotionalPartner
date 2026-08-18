@@ -65,11 +65,42 @@ Lo único que /chat/stream tiene y estos no:
   3. La concurrencia de una llamada real (subidas de audio de 100-230KB al
      STT entre turno y turno).
 
-PRÓXIMO PASO SUGERIDO (no implementado): desacoplar la lectura del LLM de la
-escritura al cliente — leer el stream en una tarea aparte que llene una cola,
-y que el generador que responde consuma de esa cola. Así un cliente lento no
-puede frenar la lectura del LLM, y las oraciones están listas para hablarse
-apenas se generan, que es justo lo que el modo llamada necesita.
+───────────────────────────────────────────────────────────────────────
+Y LA RESPUESTA FINAL: es VARIANZA DEL PROVEEDOR — 2026-08-18
+───────────────────────────────────────────────────────────────────────
+
+Se probaron las dos diferencias de entrada que quedaban, y ninguna era:
+
+  - Historial de conversación: 0, 2 y 5 pares de mensajes dan lo mismo
+    (0 pares: 2875ms y 683ms; 5 pares: 2750ms y 1812ms). No correlaciona.
+  - Conexión fría entre turnos: 3 corridas seguidas (1340/1232/2946ms)
+    contra 3 separadas 25s como en una llamada real (922/1087/2461ms).
+    Mismo patrón. Tampoco es.
+
+Lo que sí se ve, con 18 corridas IDÉNTICAS (mismo prompt, mismo mensaje,
+misma máquina, una atrás de otra):
+
+    705  719  740  742  781  831  922  958 1086
+   1087 1232 1340 1578 2120 2194 2461 2648 2946   (ms de TTFT)
+
+    mediana ~1086ms, y 28% de las corridas por encima de 2000ms.
+
+O sea: el TTFT de este modelo es intrínsecamente MUY variable, y las
+mediciones de producción (1166-4438ms) caen dentro de esa distribución, en la
+cola alta. No hay un bug escondido: la latencia ES el TTFT del modelo.
+
+Corolario práctico, para no seguir buscando donde no hay:
+
+  - El código del servidor está limpio y verificado. No hay nada que
+    reescribir ahí.
+  - Las palancas que quedan son (a) el modelo — un modelo con TTFT más bajo
+    y más estable movería la aguja más que todo lo demás junto — y (b)
+    generar menos tokens, que ayuda en las corridas donde la respuesta llega
+    en lote (ahí el TTFT termina siendo el tiempo de generación completo).
+  - Sigue valiendo desacoplar la lectura del LLM de la escritura al cliente
+    (leer a una cola desde una tarea aparte), para que un celular lento no
+    frene la lectura. Pero eso ataca el LOTE (~400ms), no el TTFT: no
+    esperar de ahí el segundo y medio.
 """
 import hmac
 import json
