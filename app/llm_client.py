@@ -399,15 +399,41 @@ Usá los mismos valores posibles de mood/suggested_action/memories ya explicados
 # monólogo de diez oraciones aunque le hayas pedido que cuente algo largo,
 # lo dice en tandas cortas. Sin techo, "explicame X" podía generar un párrafo
 # entero de una — bien para leer, rarísimo para escuchar.
+#
+# ⚠️ La primera versión de este bloque decía "podés extenderte hasta un máximo
+# de 5 oraciones" y salió mal: medido en dispositivo real, NINGUNA respuesta
+# bajaba de ~4 oraciones (mensaje_len 241-337 en los logs del 2026-08-18). El
+# modelo tomó el 5 como objetivo en vez de como techo — es lo que suelen hacer
+# con un presupuesto explícito. Por eso ahora el default va primero, concreto y
+# sin número que invite a llenarlo, y la extensión queda como excepción atada a
+# un pedido explícito.
+#
+# Y no es solo cuestión de naturalidad: mientras el stream llegue en lote (ver
+# llm_chunks/t_llm_ultimo_token_ms en chat_router.py), se espera a que el modelo
+# termine de generar TODO antes de hablar, así que cada oración de más son
+# cientos de ms de silencio. Acortar acá es, hoy, la palanca de latencia más
+# barata que hay.
+#
+# Se resiste a bajar max_tokens para forzarlo por las malas: en streaming el
+# mensaje va primero y el JSON de metadata DESPUÉS, así que truncar por tokens
+# se come la metadata (mood, memorias) y deja el turno sin datos. El prompt es
+# el lugar correcto para esto.
 _INSTRUCCION_MODO_LLAMADA = """
 
 MODO LLAMADA (estás hablando por voz, en vivo, no escribiendo):
-Por defecto 1-2 oraciones, como siempre. Si te piden que expliques, cuentes o
-detalles algo, podés extenderte hasta un máximo de 5 oraciones — nunca más
-que eso, ni siquiera si el tema da para más: en una llamada real nadie dice
-un párrafo entero de corrido, se habla en tandas y se deja lugar para que el
-otro responda. Si hay más para decir, dejalo para el próximo turno en vez de
-volcarlo todo junto.
+
+Contestá como se contesta hablando: UNA idea por turno, en una o dos oraciones.
+Eso es lo normal, no la excepción — la enorme mayoría de tus turnos van así.
+Si podés decirlo en una línea, decilo en una línea.
+
+Solo si te piden explícitamente que expliques o cuentes algo en detalle
+("explicame", "contame bien", "dame ejemplos") podés estirarte un poco más, y
+aun ahí decí lo esencial y frenás. Preguntar "¿querés que siga?" siempre es
+mejor que soltar un monólogo.
+
+Nunca encadenes varias ideas en un mismo turno por las dudas. En una charla
+hablada el otro necesita poder meter bocado: un turno largo cuando alcanzaba
+con una línea se siente robótico, por más que el contenido esté bien.
 """
 
 
