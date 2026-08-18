@@ -33,7 +33,7 @@ Desde que dejás de hablar hasta que escuchás a Numa:
 |---|---|---|
 | VAD: confirmar que terminaste | **1500 ms** | Sí, pero es el bug que pediste arreglar |
 | Subida del audio + Whisper | 390 ms | Poco |
-| `preparar_turno` (memorias, prompt) | 200 ms | Poco |
+| `preparar_turno` (memorias, prompt) | 200 ms → ~50 ms | ✅ Ya bajado (caché) |
 | LLM hasta la primera oración | **1227 ms** | Ya optimizado (era ~2500) |
 | Arranque del TTS | 100 ms | No |
 | **TOTAL** | **~3.4 s** | |
@@ -59,12 +59,55 @@ grabar → parar → subir → transcribir. Con eso, cuando terminás de hablar 
 texto ya está listo, y desaparecen la subida (390ms) y buena parte de la espera.
 El LLM podría arrancar casi en el momento en que cerrás la boca.
 
-Eso es un cambio de arquitectura del cliente (Whisper streaming o Deepgram/
-AssemblyAI, que están pensados para esto), no un número que se toca. **No lo
+Eso es un cambio de arquitectura del cliente, no un número que se toca. **No lo
 hice porque no puedo probarlo sin tu dispositivo**, y meter algo así a ciegas en
 el camino del audio era la mejor forma de romper lo que hoy funciona.
 
-Estimación si se hace: **~2.0-2.2s** de punta a punta.
+### Investigué las opciones — la mejor es `expo-speech-recognition`
+
+Lo busqué en vez de suponerlo. La opción que mejor encaja con lo que ya tenés:
+
+**[`expo-speech-recognition`](https://github.com/jamsch/expo-speech-recognition)**
+— usa `SFSpeechRecognizer` en iOS y `SpeechRecognizer` en Android, o sea el
+reconocedor del sistema operativo:
+
+- **Transcribe mientras hablás** (`continuous: true` + `interimResults: true`),
+  así que cuando terminás el texto **ya está**: se van los 390ms de subida +
+  Whisper enteros.
+- **Corre en el dispositivo** (`requiresOnDeviceRecognition: true`), sin red.
+  Sin latencia de red, y además la conversación no sale del teléfono — que para
+  una app de salud mental no es un detalle menor.
+- **Trae su propio endpointing** (evento `speechend`), que es semántico y no
+  por decibeles. Eso podría reemplazar nuestra ventana de 1500ms por algo más
+  corto Y más inteligente, atacando las dos puntas del problema a la vez.
+- En Android el silencio es configurable
+  (`EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS`).
+
+**Presupuesto estimado con eso:**
+
+| Etapa | Ahora | Con STT en streaming |
+|---|---|---|
+| VAD / endpointing | 1500 ms | ~800 ms (del sistema) |
+| Subida + Whisper | 390 ms | **0 ms** |
+| `preparar_turno` | 200 ms | ~50 ms (ya cacheado) |
+| LLM | 1227 ms | 1227 ms |
+| TTS | 100 ms | 100 ms |
+| **TOTAL** | **~3.4 s** | **~2.2 s** |
+
+**Los dos riesgos reales**, para que no te los lleves de sorpresa:
+
+1. **Necesita build nativo**, no alcanza `eas update`. Y el paquete no anda en
+   Expo Go.
+2. **La calidad puede bajar.** Whisper es muy bueno con el español rioplatense;
+   el reconocedor del sistema es decente pero no lo mismo. Hay que probarlo con
+   tu voz antes de confiar. Si la calidad no alcanza, queda la variante híbrida:
+   usar el reconocedor del sistema solo para el *endpointing* (cuándo dejaste de
+   hablar) y seguir mandando el audio a Whisper — se gana la ventana del VAD
+   pero no los 390ms.
+
+Alternativa paga si lo on-device no alcanza:
+[ElevenLabs Scribe v2 Realtime](https://elevenlabs.io/realtime-speech-to-text-api),
+que declara 150ms de latencia. Pero vuelve a meter la red en el camino.
 
 ---
 
@@ -171,7 +214,25 @@ test sigue pasando.
 
 ---
 
-## 4. Ejercicio sugerido → sale de la llamada
+## 4. Caché de memorias — 103-382ms menos por turno
+
+La consulta de memorias era el pedazo más caro de `preparar_turno` y devolvía
+exactamente lo mismo turno a turno dentro de una llamada. Ahora se cachea 90s,
+**solo en modo llamada**.
+
+Es seguro que quede levemente desactualizado porque las memorias nuevas de la
+sesión **no salen de esa consulta**: la app las arrastra en `_memorias_sesion` y
+se fusionan aparte, así que lo que acabás de contar llega igual al prompt del
+turno siguiente.
+
+Dos cosas que estaban fáciles de hacer mal y quedaron cubiertas por test:
+devuelve una **copia** de la lista (el caller la muta, y sin copiar se ensuciaba
+el caché), y no repite los `ids_a_desactivar` en los hits (si no, encolaría la
+misma escritura a Supabase en cada turno).
+
+---
+
+## 5. Ejercicio sugerido → sale de la llamada
 
 Si Numa sugiere un ejercicio durante una llamada, ahora se sale del modo llamada
 y aparece la tarjeta en el chat, igual que escribiendo.
@@ -211,8 +272,10 @@ limpio, y el import de la app funciona.
 
 **Pendiente, en orden de impacto:**
 
-1. **STT en streaming** — la única vía real a menos de 2 segundos. Necesita tu
-   dispositivo para probarse.
+1. **STT en streaming con `expo-speech-recognition`** — la única vía real a
+   menos de 2 segundos (estimado ~2.2s). Necesita build nativo y tu voz para
+   validar la calidad del reconocedor del sistema contra Whisper. El detalle
+   está arriba en "Investigué las opciones".
 2. **Bumpear `version` a 1.1.0** cuando mandes el AEC a la App Store (el
    `runtimeVersion` ya quedó por policy en `main`).
 3. **Re-tunear el barge-in** ahora que hay AEC en iOS — los umbrales siguen
@@ -229,7 +292,7 @@ limpio, y el import de la app funciona.
 | Archivo | Para qué |
 |---|---|
 | `scripts/bench_modelos_ttft.py` | Benchmark de modelos, ronda robin, N configurable |
-| `scripts/test_router_paralelo.py` | 17 casos del router en paralelo (seguridad) |
+| `scripts/test_router_paralelo.py` | 22 casos: router en paralelo (seguridad) + caché de memorias |
 | `bench_modelos_ttft_resultados.json` | Crudo del último benchmark |
 | `docs/sesion_nocturna_modo_llamada.md` | Este documento |
 
