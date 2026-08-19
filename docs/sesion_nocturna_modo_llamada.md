@@ -297,10 +297,14 @@ limpio, y el import de la app funciona.
    menos de 2 segundos (estimado ~2.2s). Necesita build nativo y tu voz para
    validar la calidad del reconocedor del sistema contra Whisper. El detalle
    está arriba en "Investigué las opciones".
-2. **Bumpear `version` a 1.1.0** cuando mandes el AEC a la App Store (el
-   `runtimeVersion` ya quedó por policy en `main`).
-3. **Re-tunear el barge-in** ahora que hay AEC en iOS — los umbrales siguen
-   calibrados para audio sin cancelación de eco. Anda igual.
+2. ~~**Bumpear `version` a 1.1.0** cuando mandes el AEC a la App Store~~ — el
+   patch de AEC se sacó (ver más abajo): con el micrófono cerrado mientras Numa
+   habla no hay eco que cancelar. Si el modo llamada no vuelve a necesitar
+   código nativo, puede ir a producción por OTA y no hace falta bumpear nada.
+3. ~~**Re-tunear el barge-in** ahora que hay AEC en iOS~~ — el barge-in por voz
+   se reemplazó por tocar la pantalla: exigía el micrófono abierto mientras
+   Numa habla, y eso obliga a .playAndRecord, que en iOS baja tanto el volumen
+   que la llamada no se escuchaba.
 4. **Evaluar `gpt-4o-mini` a fondo** si se quiere volver a atacar la latencia
    por modelo: 1.9x de costo y el mejor p90, pero hay que resolver el 1/20 de
    tuteo con una eval de calidad más grande.
