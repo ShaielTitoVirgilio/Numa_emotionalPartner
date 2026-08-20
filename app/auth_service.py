@@ -1,4 +1,5 @@
 from supabase import create_client
+from supabase_auth.errors import AuthApiError
 from app.core.db import supabase
 from app.core.config import config
 from app.core.errors import NumaError, es_credencial_invalida
@@ -75,7 +76,24 @@ def login_user(email: str, password: str):
 
 
 def refresh_session(refresh_token: str):
-    response = _auth_client().auth.refresh_session(refresh_token)
+    try:
+        response = _auth_client().auth.refresh_session(refresh_token)
+    except AuthApiError as e:
+        # Los refresh tokens de Supabase son de un solo uso: si el celular ya
+        # lo usó (reintento de red que sí llegó pero perdió la respuesta) o
+        # está vencido/revocado, Supabase responde con un AuthApiError (400,
+        # ej. "Invalid Refresh Token: Already Used") — no con un error de
+        # servidor. Es flujo normal de auth, como una contraseña incorrecta,
+        # no un incidente nuestro: se lo mapea a NumaError (401, sin pasar por
+        # Sentry) para que el celular lo distinga de un 500 transitorio y
+        # sepa que tiene que desloguear en vez de reintentar. Antes caía acá
+        # como Exception genérica → 500 → el celular nunca se enteraba de que
+        # el token estaba muerto y se quedaba reintentando para siempre.
+        #
+        # AuthRetryableError (network real, 502/503/504) no hereda de
+        # AuthApiError y sigue cayendo al except Exception del router de
+        # siempre — eso sí sigue siendo "keep, reintentar después".
+        raise NumaError(e.message or "No se pudo renovar la sesión")
     session = response.session
     user = response.user
     if not session or not user:
