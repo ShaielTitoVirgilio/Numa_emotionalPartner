@@ -34,7 +34,7 @@ import statistics
 import sys
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -78,11 +78,11 @@ def _solo_contexto_dinamico() -> str:
     ) + _INSTRUCCION_FORMATO_STREAMING + _INSTRUCCION_MODO_LLAMADA
 
 
-def _corrida(cliente, system_prompt: str) -> Dict[str, Any]:
+def _corrida(cliente, system_prompt: str, cache_key: Optional[str] = None) -> Dict[str, Any]:
     inicio = time.perf_counter()
     marcas: List[float] = []
     uso = None
-    stream = cliente.chat.completions.create(
+    kwargs = dict(
         model=MODELO,
         temperature=0.7,
         max_tokens=max_tokens_for_provider(600, "openrouter", MODELO),
@@ -92,6 +92,15 @@ def _corrida(cliente, system_prompt: str) -> Dict[str, Any]:
                   {"role": "user", "content": MENSAJE}],
         extra_body=extra_body_for("openrouter", MODELO),
     )
+    # prompt_cache_key es un hint de ROUTING (no de qué se cachea): ayuda a que
+    # requests con el mismo prefijo largo caigan en la misma máquina que ya
+    # tiene la KV-cache tibia. Sin esto, OpenAI/OpenRouter deciden solo con un
+    # hash de los primeros ~256 tokens, que puede repartir tráfico entre
+    # varias máquinas igual de "elegibles" y perder el hit aunque el prefijo
+    # sea idéntico.
+    if cache_key:
+        kwargs["prompt_cache_key"] = cache_key
+    stream = cliente.chat.completions.create(**kwargs)
     for chunk in stream:
         if getattr(chunk, "usage", None):
             uso = chunk.usage
@@ -141,20 +150,33 @@ def main() -> None:
     print(f"prompt real: {len(prompt_real)} chars | prompt solo-dinámico: {len(prompt_dinamico)} chars")
     print(f"{muestras} muestras por condición, ronda robin\n")
 
+    CACHE_KEY = "numa-chat-modulos-v1"  # fijo a propósito: mismo prefijo → mismo key
+
     # Pre-calentar la caché del prompt real: la primera vez SIEMPRE es miss.
+    # Se precalienta CON y SIN key, cada una por su lado.
     print("precalentando caché del prompt real...")
     for _ in range(2):
         _corrida(cliente, prompt_real)
+        _corrida(cliente, prompt_real, cache_key=CACHE_KEY)
     print("listo.\n")
 
-    resultados: Dict[str, List[Dict[str, Any]]] = {"A_real_cache": [], "B_real_nomiss": [], "C_solo_dinamico": []}
+    resultados: Dict[str, List[Dict[str, Any]]] = {
+        "A_real_cache": [], "B_real_nomiss": [], "C_solo_dinamico": [], "D_real_con_cache_key": [],
+    }
 
     for vuelta in range(1, muestras + 1):
-        # A: prompt real tal cual — debería pegar en caché (caliente).
+        # A: prompt real tal cual, SIN prompt_cache_key — como está en producción hoy.
         try:
             resultados["A_real_cache"].append(_corrida(cliente, prompt_real))
         except Exception as e:
             resultados["A_real_cache"].append({"error": str(e)[:120]})
+
+        # D: prompt real + prompt_cache_key fijo — hint de routing para que caiga
+        # siempre en la misma máquina que tiene la KV-cache tibia.
+        try:
+            resultados["D_real_con_cache_key"].append(_corrida(cliente, prompt_real, cache_key=CACHE_KEY))
+        except Exception as e:
+            resultados["D_real_con_cache_key"].append({"error": str(e)[:120]})
 
         # B: mismo prompt real + nonce único al PRINCIPIO → garantiza cache miss,
         # mismo tamaño/contenido que A.
@@ -173,7 +195,8 @@ def main() -> None:
         print(f"  vuelta {vuelta}/{muestras} lista", flush=True)
 
     print("\n" + "=" * 100)
-    _resumen("A) real, caché caliente (HOY)", resultados["A_real_cache"])
+    _resumen("A) real, caché caliente, SIN cache_key", resultados["A_real_cache"])
+    _resumen("D) real, caché caliente, CON cache_key", resultados["D_real_con_cache_key"])
     _resumen("B) real, cache-miss forzado", resultados["B_real_nomiss"])
     _resumen("C) solo contexto dinámico", resultados["C_solo_dinamico"])
     print("=" * 100)
@@ -185,10 +208,15 @@ def main() -> None:
     a = [r["ttft_ms"] for r in resultados["A_real_cache"] if "error" not in r]
     b = [r["ttft_ms"] for r in resultados["B_real_nomiss"] if "error" not in r]
     c = [r["ttft_ms"] for r in resultados["C_solo_dinamico"] if "error" not in r]
+    d = [r["ttft_ms"] for r in resultados["D_real_con_cache_key"] if "error" not in r]
     if a and b:
-        print(f"\nA-B (lo que ahorra la caché HOY):        {statistics.median(b) - statistics.median(a):+.0f}ms mediana")
+        print(f"\nA-B (lo que ahorra la caché HOY, sin key):     {statistics.median(b) - statistics.median(a):+.0f}ms mediana")
     if a and c:
         print(f"A-C (techo extra de sacar el prompt estático, más allá de la caché): {statistics.median(a) - statistics.median(c):+.0f}ms mediana")
+    if a and d:
+        print(f"A-D (lo que suma agregar prompt_cache_key):    {statistics.median(a) - statistics.median(d):+.0f}ms mediana")
+    if b and d:
+        print(f"D-B (caché con key vs cache-miss forzado):     {statistics.median(b) - statistics.median(d):+.0f}ms mediana")
 
 
 if __name__ == "__main__":
