@@ -24,11 +24,112 @@ export function getAuthUser() {
     }
 }
 
-export function authHeaders(extra = {}) {
+// ── Sesión: refresco resiliente + proactivo ────────────────────────────
+//
+// Mismo problema y misma solución que numa-mobile (ver
+// numa-mobile/src/services/tokenRefresh.ts y api.ts, y el backend
+// app/auth_service.py): antes SOLO se refrescaba una vez, al cargar la
+// página (init() en app.js), y CUALQUIER fallo — un hipo de red, un cold
+// start de Railway — cerraba la sesión directo, sin distinguir un 401
+// genuino de un error transitorio. Como el access_token dura 1 hora,
+// dejar la pestaña abierta ese tiempo bastaba para que la siguiente
+// llamada reventara con 401 sin haber intentado refrescar antes.
+//
+// authHeaders() ahora es async y llama a ensureFreshToken() antes de
+// armar el header — así CUALQUIER llamada autenticada (no solo el
+// arranque de la página) dispara el refresco si hace falta.
+//
+// _enVuelo dedupea llamadas concurrentes: varias secciones piden datos
+// a la vez al abrir la página (perfil, checkin, memorias...), y cada una
+// refrescando por su cuenta mandaría dos /refresh con el MISMO
+// refresh_token — de un solo uso, reenviarlo revoca toda la familia de
+// tokens (Supabase: "Invalid Refresh Token: Already Used").
+
+let _enVuelo = null;
+let _onSessionInvalid = null;
+
+/** Se llama cuando el refresh token resultó genuinamente inválido, para
+ *  que sea app.js (dueño del estado de sesión/pantallas) quien haga el
+ *  logout completo — limpiar el chat, mostrar la pantalla de login —
+ *  en vez de que este módulo lo haga a medias. */
+export function setSessionInvalidHandler(cb) {
+    _onSessionInvalid = cb;
+}
+
+/** ¿El JWT ya venció? */
+export function tokenExpired(token) {
+    try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        return payload.exp < Date.now() / 1000;
+    } catch {
+        return true;
+    }
+}
+
+/**
+ * Un solo intento de /refresh. NUNCA reintenta con el mismo refresh_token:
+ * un fetch que tira no garantiza que el pedido no haya llegado al server
+ * (pudo procesarlo y rotar el token igual, y perderse la respuesta en el
+ * camino) — reintentar a ciegas ahí es lo que mandaba el mismo token dos
+ * veces y disparaba el "Already Used" (ver el fix idéntico en
+ * numa-mobile/src/services/api.ts, refreshResilient).
+ *
+ * Devuelve el user actualizado, 'keep' (fallo transitorio, no desloguear)
+ * o 'clear' (401: el refresh token está muerto).
+ */
+async function refreshResilient(refreshToken) {
+    try {
+        const r = await fetch('/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+        if (r.ok) return await r.json();
+        return r.status === 401 ? 'clear' : 'keep';
+    } catch {
+        // Sin respuesta HTTP: no hay forma de saber si el pedido llegó al
+        // server. Se conserva la sesión y se reintenta en la próxima
+        // llamada, nunca reenviando el mismo refresh_token acá mismo.
+        return 'keep';
+    }
+}
+
+/** Devuelve un access_token en condiciones de usarse, refrescándolo antes
+ *  si ya venció. `force=true` lo refresca aunque el JWT diga que sigue
+ *  vigente (backstop para cuando el server lo rechaza por otro motivo).
+ *  Llamadas concurrentes mientras hay un refresh en curso esperan la
+ *  MISMA promesa — nunca disparan un segundo /refresh por su cuenta. */
+export async function ensureFreshToken(force = false) {
     const user = getAuthUser();
+    if (!user?.access_token) return null;
+    if (!force && !tokenExpired(user.access_token)) return user.access_token;
+    if (_enVuelo) return _enVuelo;
+    if (!user.refresh_token) return user.access_token; // nada con qué renovar
+
+    _enVuelo = (async () => {
+        try {
+            const resultado = await refreshResilient(user.refresh_token);
+            if (resultado === 'clear') {
+                localStorage.removeItem('numa_user');
+                _onSessionInvalid?.();
+                return null;
+            }
+            if (resultado === 'keep') return user.access_token;
+            const actualizado = { ...user, ...resultado };
+            localStorage.setItem('numa_user', JSON.stringify(actualizado));
+            return actualizado.access_token;
+        } finally {
+            _enVuelo = null;
+        }
+    })();
+    return _enVuelo;
+}
+
+export async function authHeaders(extra = {}) {
     const headers = { ...extra };
-    if (user?.access_token) {
-        headers['Authorization'] = `Bearer ${user.access_token}`;
+    const token = await ensureFreshToken();
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
 }

@@ -99,7 +99,7 @@ export async function inicializarChat() {
   const user = JSON.parse(numaUser);
 
   try {
-    const res = await fetch(`/profile/${user.user_id}`, { headers: authHeaders() });
+    const res = await fetch(`/profile/${user.user_id}`, { headers: await authHeaders() });
     if (res.ok) {
       perfilCacheado = await res.json();
     }
@@ -114,7 +114,7 @@ export async function inicializarChat() {
 
 async function _rehidratarHistorial() {
   try {
-    const res = await fetch('/chat/history?limit=12', { headers: authHeaders() });
+    const res = await fetch('/chat/history?limit=12', { headers: await authHeaders() });
     if (!res.ok) return false;
 
     const data = await res.json();
@@ -201,7 +201,7 @@ export async function recibirFeedbackEjercicio(textoOpcion, valor, ejercicio) {
   if (userId && ejercicio?.id && VALOR_A_RATING[valor]) {
     fetch("/exercise-rating", {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
+      headers: await authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         user_id: userId,
         exercise_id: ejercicio.id,
@@ -277,7 +277,7 @@ async function _llamarBackend(texto) {
   try {
     res = await fetch("/chat", {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
+      headers: await authHeaders({ "Content-Type": "application/json" }),
       signal: controller.signal,
       body: JSON.stringify({
         conversation: conversationToSend,
@@ -303,7 +303,6 @@ if (!res.ok) {
 
   return await res.json();
 }
-
 
 
 function _procesarRespuesta(data, textoUsuario) {
@@ -663,7 +662,7 @@ async function procesarAudio(blob) {
   try {
     const res = await fetch("/speech-to-text", {
       method: "POST",
-      headers: authHeaders(),
+      headers: await authHeaders(),
       body: formData,
     });
 

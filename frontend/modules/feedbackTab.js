@@ -105,7 +105,7 @@ window.feedbackSubmit = async () => {
   try {
     const res = await fetch('/feedback', {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         texto: texto || null,
         categoria: 'general',

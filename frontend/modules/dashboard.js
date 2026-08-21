@@ -24,7 +24,7 @@ export async function initDashboard() {
   contenedor.innerHTML = _htmlCargando();
 
   try {
-    const res = await fetch('/dashboard', { headers: authHeaders() });
+    const res = await fetch('/dashboard', { headers: await authHeaders() });
     if (!res.ok) throw new Error("Error al cargar datos");
     const data = await res.json();
 

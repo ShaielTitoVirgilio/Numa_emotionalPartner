@@ -31,7 +31,7 @@ export async function verificarCheckinDiario() {
   if (!userId) return;
 
   try {
-    const res = await fetch('/checkin/today', { headers: authHeaders() });
+    const res = await fetch('/checkin/today', { headers: await authHeaders() });
     const data = await res.json();
     if (!data.checkin) {
       // No hizo check-in hoy → mostrar modal con pequeño delay para no interrumpir
@@ -101,7 +101,7 @@ async function _guardarCheckin(userId, moodValue, overlay) {
   try {
     await fetch("/checkin", {
       method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
+      headers: await authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ mood_value: moodValue }),
     });
     _checkinHechoEnSesion = true;

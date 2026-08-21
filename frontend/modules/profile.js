@@ -32,10 +32,16 @@ export async function initProfile() {
   contenedor.innerHTML = _htmlCargando();
 
   try {
+    // Headers resueltos UNA vez y reusados en las 3: si no, cada await
+    // authHeaders() de abajo dispara su propio ensureFreshToken() antes de
+    // arrancar el siguiente fetch, serializando lo que debería salir junto
+    // (y si justo hay que refrescar, es el mismo trabajo 3 veces en vez de
+    // 1 — el dedup de ensureFreshToken lo evita, pero mejor no depender de eso).
+    const headers = await authHeaders();
     const [profileRes, checkinRes, memoriasRes] = await Promise.all([
-      fetch(`/profile/${user_id}`, { headers: authHeaders() }),
-      fetch('/checkin/today', { headers: authHeaders() }),
-      fetch('/memories', { headers: authHeaders() }),
+      fetch(`/profile/${user_id}`, { headers }),
+      fetch('/checkin/today', { headers }),
+      fetch('/memories', { headers }),
     ]);
 
     const profile  = profileRes.ok ? await profileRes.json() : {};
@@ -253,7 +259,7 @@ function _bindEvents(contenedor, userId) {
 
 async function _borrarMemoria(id) {
   try {
-    const res = await fetch(`/memories/${id}`, { method: 'DELETE', headers: authHeaders() });
+    const res = await fetch(`/memories/${id}`, { method: 'DELETE', headers: await authHeaders() });
     if (!res.ok) throw new Error('No se pudo borrar');
     // Actualizar el estado local y re-renderizar: así las "últimas 2" visibles
     // y el contador de "Mostrar más" quedan siempre correctos.
@@ -336,7 +342,7 @@ async function _guardarCheckin(userId, moodValue) {
   try {
     const res = await fetch('/checkin', {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ mood_value: moodValue }),
     });
     const data = res.ok ? await res.json() : {};
@@ -408,7 +414,7 @@ async function _eliminarCuenta(userId, modal) {
   try {
     const res = await fetch('/account/delete', {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ reason }),
     });
 

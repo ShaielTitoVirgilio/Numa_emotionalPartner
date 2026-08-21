@@ -479,6 +479,16 @@ function _logout() {
     showAuthScreen();
 }
 
+// Exportado con otro nombre para que quede claro en el call site (app.js,
+// setSessionInvalidHandler) que no es un logout manual del usuario sino la
+// reacción a un refresh token genuinamente muerto (ver utils.js,
+// ensureFreshToken). localStorage.removeItem ya lo hizo ensureFreshToken
+// antes de llamar acá; _logout() lo repite sin problema (idempotente) y
+// además limpia currentUser + el chat + muestra el login.
+export function cerrarSesionInvalida() {
+    _logout();
+}
+
 // ============================================
 // FORGOT PASSWORD — PASO 1: Ingresá tu email
 // ============================================
