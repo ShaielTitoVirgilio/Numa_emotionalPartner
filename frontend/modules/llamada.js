@@ -348,7 +348,7 @@ async function _transcribir(blob) {
 
   const res = await fetch('/speech-to-text', {
     method: 'POST',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body: formData,
     signal: abortoTurno?.signal,
   });

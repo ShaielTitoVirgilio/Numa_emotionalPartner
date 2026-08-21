@@ -11,9 +11,9 @@ import {
 import { detenerRespiracion } from './modules/motorRespiracion.js';
 import { detenerGuiado } from './modules/motorGuiado.js';
 import { showReading, nextReading, prevReading, closeReading } from './modules/lectura.js';
-import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth } from './modules/auth.js';
+import { showAuthScreen, hideAuthScreen, getCurrentUser, manejarCallbackOAuth, cerrarSesionInvalida } from './modules/auth.js';
 import { showOnboarding, hideOnboarding } from './modules/onboarding.js';
-import { mostrarAvisoTesterCada, mostrarAvisoDescargarApp, authHeaders } from './modules/utils.js';
+import { mostrarAvisoTesterCada, mostrarAvisoDescargarApp, authHeaders, getAuthUser, ensureFreshToken, setSessionInvalidHandler } from './modules/utils.js';
 import { initDashboard } from './modules/dashboard.js';
 import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternarTemaChat } from './modules/profile.js';
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
@@ -88,7 +88,7 @@ async function suscribirANotificaciones(userId) {
 
     await fetch('/subscribe', {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         subscription_data: suscripcion
       })
@@ -102,14 +102,10 @@ async function suscribirANotificaciones(userId) {
 // INICIALIZACIÓN
 // ============================================
 
-function _tokenExpired(token) {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return payload.exp < Date.now() / 1000;
-  } catch {
-    return true;
-  }
-}
+// Si el refresh token resulta genuinamente inválido (401), es
+// ensureFreshToken() (utils.js) quien lo detecta — acá solo se conecta con
+// el logout completo (limpiar chat, mostrar login) que vive en auth.js.
+setSessionInvalidHandler(cerrarSesionInvalida);
 
 async function init() {
   marcarEntornoDePruebas();   // no bloquea: si es producción, es no-op
@@ -126,37 +122,15 @@ async function init() {
 
   const user = JSON.parse(savedUser);
 
-  if (_tokenExpired(user.access_token)) {
-    if (user.refresh_token) {
-      try {
-        const r = await fetch('/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: user.refresh_token })
-        });
-        if (r.ok) {
-          const fresh = await r.json();
-          Object.assign(user, fresh);
-          localStorage.setItem('numa_user', JSON.stringify(user));
-        } else {
-          localStorage.removeItem('numa_user');
-          showAuthScreen();
-          return;
-        }
-      } catch {
-        localStorage.removeItem('numa_user');
-        showAuthScreen();
-        return;
-      }
-    } else {
-      localStorage.removeItem('numa_user');
-      showAuthScreen();
-      return;
-    }
-  }
+  // Refresca proactivamente si el access_token ya venció. Resiliente: un
+  // fallo transitorio (hipo de red, cold start de Railway) NO cierra la
+  // sesión — solo un refresh token genuinamente inválido lo hace, y en ese
+  // caso ensureFreshToken() ya disparó cerrarSesionInvalida() arriba.
+  await ensureFreshToken();
+  if (!getAuthUser()) return; // sesión cerrada por ensureFreshToken()
 
   try {
-    const res = await fetch(`/profile/${user.user_id}`, { headers: authHeaders() });
+    const res = await fetch(`/profile/${user.user_id}`, { headers: await authHeaders() });
 
     if (res.status === 401) {
       localStorage.removeItem('numa_user');

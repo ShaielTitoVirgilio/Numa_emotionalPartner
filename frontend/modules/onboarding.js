@@ -1,5 +1,5 @@
 // modules/onboarding.js
-import { mostrarAvisoTesterCada } from './utils.js';
+import { mostrarAvisoTesterCada, authHeaders } from './utils.js';
 
 // ============================================
 // PREGUNTAS
@@ -411,10 +411,10 @@ async function _enviarOnboarding() {
         const res = await fetch('/onboarding', {
             method: 'POST',
             signal: controller.signal,
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${user.access_token}`
-            },
+            // authHeaders() (no el access_token crudo de acá arriba): refresca
+            // el token si ya venció en vez de mandar uno muerto y comerse un
+            // 401 directo — el onboarding es largo, da tiempo a que expire.
+            headers: await authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 user_id: user.user_id,
                 answers: answers
