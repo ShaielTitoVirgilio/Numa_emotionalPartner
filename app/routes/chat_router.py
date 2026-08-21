@@ -596,6 +596,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         tema_abierto=tema_abierto,
         memoria_recurso=memoria_recurso,
         router_hints=router_hints,
+        modo_llamada=modo_llamada,
     )
     _checkpoint("t_prompt_ms")
 
