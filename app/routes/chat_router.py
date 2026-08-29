@@ -1,4 +1,6 @@
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
@@ -454,14 +456,112 @@ def chat_endpoint(
             crisis_score = 0.45
             crisis_log_level = "medium"
 
-        # ── Capa 2: clasificador semántico de contexto ──────────────
-        # Corre en cada turno (salvo cuando arriba ya devolvimos la respuesta
-        # hardcodeada). Lee el contexto que las keywords no ven y devuelve señales
-        # que se mergean en el ruteo de módulos. Puede ESCALAR el riesgo hacia
-        # M19/M20 (nunca bajarlo) — pero NO dispara la respuesta hardcodeada:
-        # ese bypass sigue siendo exclusivo de keyword + crisis_verifier.
-        # Fail-safe: si se cae, router_hints["ok"]=False y el ruteo usa solo keywords.
-        router_hints = clasificar_contexto([m.model_dump() for m in conversation])
+        memorias_sesion: List[Dict[str, Any]] = []
+        if perfil and "_memorias_sesion" in perfil:
+            raw = perfil.pop("_memorias_sesion", []) or []
+            memorias_sesion = [
+                m if isinstance(m, dict)
+                else {"content": str(m), "priority": 3, "category": "otro"}
+                for m in raw
+            ]
+
+        num_interacciones = len(conversation)
+
+        # ¿El turno anterior estuvo en territorio de crisis? (se mira el score
+        # de los últimos 2 mensajes previos del usuario que vienen en el request)
+        # Local/instantáneo (no pega a ningún servicio) — se calcula ANTES del
+        # paralelo de abajo para poder saltear la consulta a Supabase
+        # (hay_crisis_reciente) dentro de _tarea_metadatos si ya dio positivo.
+        ultimo_modulo_critico = False
+        previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
+        for msg_previo in previos_usuario:
+            if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
+                ultimo_modulo_critico = True
+                break
+
+        # ── Etapas independientes en paralelo ────────────────────────────
+        # Medido en producción: el context_router (Capa 2 — una llamada a LLM
+        # aparte de la principal, corre en TODOS los turnos, lee contexto que
+        # las keywords no ven y puede ESCALAR el riesgo hacia M19/M20, nunca
+        # bajarlo — NO dispara la respuesta hardcodeada, eso sigue siendo
+        # exclusivo de keyword + crisis_verifier; fail-safe: si se cae,
+        # router_hints["ok"]=False y el ruteo usa solo keywords) se comía
+        # 1.5-2s por su cuenta, y corría secuencial ANTES de memorias/
+        # patrones/metadatos — cada consulta a Supabase se sumaba encima de
+        # esos 1.5-2s. Ninguna de las 4 etapas de abajo depende de otra (solo
+        # la memoria proactiva, más abajo, necesita el resultado del router)
+        # — correrlas en paralelo no acelera al router en sí, pero evita que
+        # memorias/patrones/metadatos agreguen su propio tiempo arriba del suyo.
+        def _tarea_router():
+            t0 = time.perf_counter()
+            hints = clasificar_contexto([m.model_dump() for m in conversation])
+            return hints, round((time.perf_counter() - t0) * 1000, 1)
+
+        def _tarea_memorias():
+            t0 = time.perf_counter()
+            vigentes, ids_old = memorias_sesion or [], []
+            try:
+                m_db, ids_old = get_recent_memories(
+                    user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12
+                )
+                seen = set()
+                merged = []
+                for m in (memorias_sesion or []) + m_db:
+                    key = (m.get("content") or "").strip()
+                    if key and key not in seen:
+                        seen.add(key)
+                        merged.append(m)
+                vigentes = merged[:15]
+            except Exception as e:
+                capturar_error(e, contexto="cargar_memorias")
+                print(f"⚠️ No se pudieron cargar memorias: {e}")
+                vigentes, ids_old = memorias_sesion or [], []
+            return vigentes, ids_old, round((time.perf_counter() - t0) * 1000, 1)
+
+        def _tarea_patrones():
+            t0 = time.perf_counter()
+            pats: List[dict] = []
+            try:
+                pats = get_topic_patterns_cached(user_id=user_id)
+            except Exception as e:
+                capturar_error(e, contexto="cargar_patrones")
+                print(f"⚠️ No se pudieron cargar patrones: {e}")
+            return pats, round((time.perf_counter() - t0) * 1000, 1)
+
+        def _tarea_metadatos():
+            t0 = time.perf_counter()
+            dias_inactivo_ = 0
+            if num_interacciones <= 4:
+                dias_inactivo_ = get_dias_inactivo(user_id)
+            critico = ultimo_modulo_critico
+            # Respaldo stateless: si la sesión recién empieza (el historial
+            # del request no alcanza), mirar crisis_logs — el usuario pudo
+            # haber recargado la app justo después de una crisis.
+            if not critico and num_interacciones <= 4:
+                critico = feedback_repo.hay_crisis_reciente(user_id)
+            checkin = None
+            try:
+                checkin = get_checkin_hoy_cached(user_id)
+            except Exception as e:
+                capturar_error(e, contexto="cargar_checkin")
+                print(f"⚠️ No se pudo cargar el check-in: {e}")
+            return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
+
+        _t_paralelo_inicio = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=4) as ejecutor:
+            fut_router = ejecutor.submit(_tarea_router)
+            fut_memorias = ejecutor.submit(_tarea_memorias)
+            fut_patrones = ejecutor.submit(_tarea_patrones)
+            fut_metadatos = ejecutor.submit(_tarea_metadatos)
+
+            router_hints, t_router_ms = fut_router.result()
+            memorias_vigentes, ids_a_desactivar, t_memorias_ms = fut_memorias.result()
+            patrones, t_patrones_ms = fut_patrones.result()
+            dias_inactivo, ultimo_modulo_critico, checkin_hoy, t_metadatos_ms = fut_metadatos.result()
+        # Tiempo de PARED del bloque — el que importa para el total (sumar
+        # los 4 de arriba exagera, se solapan a propósito).
+        t_paralelo_ms = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
+
         if router_hints.get("ok"):
             score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
             if score_router > crisis_score:
@@ -481,45 +581,6 @@ def chat_endpoint(
                 crisis.get("category") or "ROUTER_RISK",
                 crisis_log_level,
             )
-
-        memorias_sesion: List[Dict[str, Any]] = []
-        if perfil and "_memorias_sesion" in perfil:
-            raw = perfil.pop("_memorias_sesion", []) or []
-            memorias_sesion = [
-                m if isinstance(m, dict)
-                else {"content": str(m), "priority": 3, "category": "otro"}
-                for m in raw
-            ]
-
-        memorias_vigentes: List[Dict[str, Any]] = []
-        ids_a_desactivar: List[str] = []
-        patrones: List[dict] = []
-
-        try:
-            m_db, ids_old = get_recent_memories(
-                user_id=user_id,
-                days=MEMORY_WINDOW_DAYS_DEFAULT,
-                max_items=12
-            )
-            seen = set()
-            merged = []
-            for m in (memorias_sesion or []) + m_db:
-                key = (m.get("content") or "").strip()
-                if key and key not in seen:
-                    seen.add(key)
-                    merged.append(m)
-            memorias_vigentes = merged[:15]
-            ids_a_desactivar = ids_old
-        except Exception as e:
-            capturar_error(e, contexto="cargar_memorias")
-            print(f"⚠️ No se pudieron cargar memorias: {e}")
-            memorias_vigentes = memorias_sesion or []
-
-        try:
-            patrones = get_topic_patterns_cached(user_id=user_id)
-        except Exception as e:
-            capturar_error(e, contexto="cargar_patrones")
-            print(f"⚠️ No se pudieron cargar patrones: {e}")
 
         # ── Memoria proactiva contextual ─────────────────────────────────
         # Se elige A LO SUMO UNA cosa para traer al prompt (evento con fecha,
@@ -574,39 +635,13 @@ def chat_endpoint(
                 print(f"⚠️ No se pudo elegir memoria contextual: {e}")
 
         es_inicio_sesion = len(conversation) == 1
-        num_interacciones = len(conversation)
+        # num_interacciones ya se calculó arriba, antes del bloque paralelo.
 
         # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
         es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
 
-        # Detectar reenganche: >5 días sin actividad
-        dias_inactivo = 0
-        if num_interacciones <= 4:
-            # Solo consultamos al principio de la sesión para no repetir la llamada
-            dias_inactivo = get_dias_inactivo(user_id)
-
-        # ¿El turno anterior estuvo en territorio de crisis? (se mira el score
-        # de los últimos 2 mensajes previos del usuario que vienen en el request)
-        ultimo_modulo_critico = False
-        previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
-        for msg_previo in previos_usuario:
-            if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
-                ultimo_modulo_critico = True
-                break
-
-        # Respaldo stateless: si la sesión recién empieza (el historial del
-        # request no alcanza), mirar crisis_logs — el usuario pudo haber
-        # recargado la app justo después de una crisis.
-        if not ultimo_modulo_critico and num_interacciones <= 4:
-            ultimo_modulo_critico = feedback_repo.hay_crisis_reciente(user_id)
-
-        # Check-in del día (1-4) — cacheado 5 min en memory_service
-        checkin_hoy = None
-        try:
-            checkin_hoy = get_checkin_hoy_cached(user_id)
-        except Exception as e:
-            capturar_error(e, contexto="cargar_checkin")
-            print(f"⚠️ No se pudo cargar el check-in: {e}")
+        # dias_inactivo, ultimo_modulo_critico y checkin_hoy ya se resolvieron
+        # arriba, dentro del bloque paralelo (_tarea_metadatos).
 
         # Últimos 4 mensajes para las detecciones del router de módulos
         historial_reciente = [m.model_dump() for m in conversation[-4:]]
@@ -785,6 +820,16 @@ def chat_endpoint(
             risk_level=risk_level,
             suggested_action=result.get("suggested_action"),
             memorias_nuevas=len(memorias_validadas),
+            # Desglose de latencia ANTES del LLM principal — ver el bloque
+            # paralelo más arriba. t_paralelo_ms es el tiempo de PARED real
+            # (router/memorias/patrones/metadatos se solapan a propósito);
+            # los 4 "t_*_ms" individuales quedan para diagnóstico, sumados
+            # exagerarían el total porque corren al mismo tiempo.
+            t_paralelo_ms=t_paralelo_ms,
+            t_router_ms=t_router_ms,
+            t_memorias_ms=t_memorias_ms,
+            t_patrones_ms=t_patrones_ms,
+            t_metadatos_ms=t_metadatos_ms,
         )
 
         # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
