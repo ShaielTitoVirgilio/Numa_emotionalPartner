@@ -1,13 +1,22 @@
 """
-Verifica cómo entra el context_router en modo llamada (paralelo, no bloqueante).
+Verifica cómo entra el context_router en _preparar_turno — chat escrito y
+modo llamada por igual.
 
-Este archivo cubre el ARMADO DEL TURNO: que el router se lance sin que el
-turno lo espere, que el camino paralelo esté acotado EXACTAMENTE al modo
-llamada, y que nada de esto se haya llevado puesta la detección de crisis por
-keywords, que frena los casos críticos y sigue igual en los dos modos.
+Hasta 2026-08-30 esto probaba una ASIMETRÍA a propósito: modo llamada
+lanzaba el router en paralelo sin esperarlo; chat escrito lo esperaba antes
+de armar el prompt (pagando sus 1.5-2s enteros). Ese día se unificó: los DOS
+modos arman el prompt SIN esperar al router (router_hints ok=False, solo
+keywords) y dejan el future para resolverlo después — ver
+scripts/test_router_paralelo.py (modo llamada, se consulta SIN bloquear
+mientras el LLM principal ya está generando, puede cortar el stream) y
+scripts/test_router_paralelo_chat.py (chat escrito, se BLOQUEA después del
+LLM principal — no hay nada que "deshacer" todavía — y puede cortar o
+regenerar la respuesta).
 
-Lo que pasa DESPUÉS (consultar el resultado durante el stream y cortar la
-llamada si hay riesgo explícito) se prueba en scripts/test_router_paralelo.py.
+Este archivo se queda con lo que sigue siendo cierto en los dos modos: que el
+router se lanza sin bloquear el armado del turno, y sobre todo, que nada de
+esto se llevó puesta la detección de crisis por KEYWORDS, que sigue frenando
+los casos críticos igual en los dos modos (eso NUNCA depende del router).
 
 Se mockea clasificar_contexto (para contar si se llamó o no) y todo lo que
 pega contra Supabase/LLM, así corre sin red ni credenciales.
@@ -51,8 +60,8 @@ def correr(texto, modo_llamada):
 
     def _router_espia(conversation):
         llamadas["n"] += 1
-        # Señal de riesgo implícito: si el router estuviera prendido, esto
-        # escalaría el crisis_score. Sirve para probar que en llamada NO pasa.
+        # Señal de riesgo implícito: sirve para confirmar que, aunque el
+        # router SÍ corrió, su resultado no llegó a tiempo para el prompt.
         return {"ok": True, "estado_emocional": "triste_vacio",
                 "senal_riesgo": "implicita", "pide_ejercicio": False,
                 "pregunta_app": False, "pregunta_capacidades": False}
@@ -74,37 +83,39 @@ def correr(texto, modo_llamada):
 
 NEUTRO = "Hoy estuve ordenando la casa y salió el sol un rato."
 
-# ── 1. El apagado está acotado al modo llamada ───────────────────────────
+# ── 1. El router se lanza en los DOS modos, sin bloquear a ninguno ───────
 turno_chat, n_chat = correr(NEUTRO, modo_llamada=False)
 turno_call, n_call = correr(NEUTRO, modo_llamada=True)
 
-check("chat escrito: el router SÍ se llama (sin cambios)", n_chat == 1, f"se llamó {n_chat} veces")
-# En llamada TAMBIÉN se llama, pero en paralelo: se lanza y no se espera. Que
-# se llame es justamente lo que devolvió la cobertura de riesgo implícito que
-# el apagado había sacado — ver scripts/test_router_paralelo.py.
-check("modo llamada: el router SÍ se llama (en paralelo)", n_call == 1, f"se llamó {n_call} veces")
+check("chat escrito: el router SÍ se llama", n_chat == 1, f"se llamó {n_chat} veces")
+check("modo llamada: el router SÍ se llama", n_call == 1, f"se llamó {n_call} veces")
+check("chat escrito: deja el future para resolverlo después del LLM principal",
+      turno_chat.get("_fut_router_paralelo") is not None)
 check("modo llamada: deja el future para consultarlo durante el stream",
       turno_call.get("_fut_router_paralelo") is not None)
-check("chat escrito: NO usa el camino paralelo",
-      turno_chat.get("_fut_router_paralelo") is None)
 
 # ── 2. El tiempo reportado distingue "salteado" de "tardó poco" ──────────
+check(
+    "chat escrito: t_context_router_ms = 0 (no se ESPERÓ acá)",
+    turno_chat["_tiempos"].get("t_context_router_ms") == 0.0,
+    f"dio {turno_chat['_tiempos'].get('t_context_router_ms')}",
+)
 check(
     "modo llamada: t_context_router_ms = 0 (no se ESPERÓ acá)",
     turno_call["_tiempos"].get("t_context_router_ms") == 0.0,
     f"dio {turno_call['_tiempos'].get('t_context_router_ms')}",
 )
 
-# ── 3. Al armar el prompt, el router todavía no contestó ────────────────
+# ── 3. Al armar el prompt, el router todavía no contestó — en NINGÚN modo ─
+# Antes esto distinguía los dos modos (chat escrito esperaba, así que acá ya
+# tenía el score); ahora es igual en los dos: el resultado llega DESPUÉS,
+# y quién lo resuelve y qué hace con él es justo lo que prueban
+# test_router_paralelo.py (llamada) y test_router_paralelo_chat.py (chat).
 check(
-    "chat escrito: la señal implícita del router escala el score",
-    turno_chat["crisis_score"] >= 0.35,
+    "chat escrito: al armar el prompt el score todavía no tiene al router",
+    turno_chat["crisis_score"] < 0.35,
     f"score={turno_chat['crisis_score']}",
 )
-# En el momento de armar el prompt el router todavía no contestó, así que el
-# score arranca en 0: eso NO cambió y es el precio de no bloquear. La
-# diferencia es que ahora el resultado llega igual, durante el stream, y ahí
-# se decide si cortar (test_router_paralelo.py cubre esa parte).
 check(
     "modo llamada: al armar el prompt el score todavía no tiene al router",
     turno_call["crisis_score"] < 0.35,
@@ -113,7 +124,9 @@ check(
 
 # ── 4. LO QUE NO SE PUEDE ROMPER: las keywords siguen frenando la crisis ─
 # Esto es lo único que separa un mensaje crítico de una respuesta normal del
-# LLM en modo llamada. Si algún día esto falla, el apagado se volvió inseguro.
+# LLM, en los dos modos. Si algún día esto falla, algo se volvió inseguro.
+# Nunca pasó por el router — detectar_crisis + confirmar_riesgo_real, sin
+# cambios en este trabajo.
 CRITICOS_POR_KEYWORD = [
     "me quiero matar",          # SUICIDAL_IDEATION
     "me voy a suicidar",        # SUICIDAL_IDEATION
@@ -134,21 +147,16 @@ for texto in CRITICOS_POR_KEYWORD:
         f"crisis_confirmada={t_chat.get('crisis_confirmada')}",
     )
 
-# ── 5. EL AGUJERO QUE ESTE CAMBIO YA NO DEJA ABIERTO ────────────────────
-# (histórico) Cuando el router estaba APAGADO en llamada, estas frases
-# quedaban en score 0.0 y sin ningún módulo de crisis. Hoy el router corre en
-# paralelo y las cubre cortando el turno — ver test_router_paralelo.py. Lo que
-# sigue verificando este bloque es que el prompt SE ARMA sin esa señal (el
-# router todavía no contestó), que es distinto de quedarse sin cobertura.
+# ── 5. El prompt arranca sin la señal del router — en los DOS modos ──────
 # Frases con MÉTODO o PLAN explícito que el detector por keywords NO matchea
 # (verificado: detectar_crisis les da score 0.0). Las agarra ÚNICAMENTE el
-# context_router, clasificándolas "explicita" → 0.6.
-#
-# Ojo con las dos últimas: son variantes de FRASEO de cosas que la lista de
-# keywords sí tiene ("cortarme las venas", "no quiero seguir viviendo"), pero
-# dichas como las diría una persona de verdad. Que se escapen muestra que la
-# capa de keywords es más frágil de lo que aparenta, y que el router venía
-# tapando esos huecos sin que se notara.
+# context_router, clasificándolas "explicita" → 0.6. Antes esto era EL
+# agujero que corría solo en modo llamada (chat escrito ya tenía cobertura
+# porque esperaba). Ahora los dos arrancan igual, sin la señal — la cobertura
+# real (que no se pierda del todo) la prueban test_router_paralelo.py
+# (corta el stream) y test_router_paralelo_chat.py (corta o regenera la
+# respuesta) por su cuenta, con el mecanismo genérico de score, no con estas
+# frases puntuales.
 SOLO_LOS_AGARRA_EL_ROUTER = [
     "tengo pastillas y me las voy a tomar todas",
     "guardé todo lo que necesito para terminar con esto",
@@ -156,14 +164,14 @@ SOLO_LOS_AGARRA_EL_ROUTER = [
     "no quiero vivir más",
 ]
 print()
-print("-- método/plan sin keyword: el prompt arranca sin la señal (llega durante el stream) --")
+print("-- método/plan sin keyword: el prompt arranca sin la señal en los dos modos --")
 for texto in SOLO_LOS_AGARRA_EL_ROUTER:
     t_call, _ = correr(texto, modo_llamada=True)
     t_chat, _ = correr(texto, modo_llamada=False)
     check(
-        f"chat escrito: el router lo escala → {texto[:34]!r}",
-        t_chat["crisis_score"] >= 0.35,
-        f"score={t_chat['crisis_score']}",
+        f"chat escrito: el prompt se arma sin la señal del router → {texto[:34]!r}",
+        t_chat["crisis_score"] == 0.0,
+        f"score={t_chat['crisis_score']} — la cobertura llega después de llamar al LLM",
     )
     check(
         f"modo llamada: el prompt se arma sin la señal del router → {texto[:34]!r}",
