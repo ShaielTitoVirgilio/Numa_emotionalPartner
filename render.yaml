@@ -1,0 +1,131 @@
+# Migración real de Railway a Render — producción (numa) y staging (numa-dev).
+#
+# Región Ohio (US-East) para los dos: es la que se probó y confirmó el
+# ahorro de latencia real contra Railway (ver docs/latencia o memoria del
+# 2026-08-30 — TTFT mediana 1060ms en Render vs ~2605ms en Railway, casi
+# empatando con los ~845ms medidos en local). Supabase de producción está en
+# sa-east-1 (Brasil) — hay una tensión real entre "cerca de Supabase" y
+# "cerca del LLM", pero el LLM es la parte que pesa varios segundos por
+# turno; Supabase son consultas chicas y ya paralelizadas.
+#
+# Todas las env vars con "sync: false" son secretos — NO se guardan acá, hay
+# que cargarlas a mano en el dashboard de cada servicio después del primer
+# deploy (Environment → Add Environment Variable). Las que NO son secretas
+# (proveedor/modelo, no credenciales) están hardcodeadas acá a propósito,
+# para que la config quede auditable en git — mismo criterio que ya usa
+# .env.example.
+services:
+  # ── Producción (soynuma.app) ──────────────────────────────────────
+  - type: web
+    name: numa
+    runtime: python
+    plan: starter  # pago, ~$7/mes — no se puede dormir, hay usuarios reales
+    region: ohio
+    branch: main   # apunta a main una vez que se mergee esta rama ahí
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENTORNO
+        value: production
+      - key: CHAT_PROVIDER
+        value: openrouter
+      - key: CHAT_MODEL
+        value: openai/gpt-5.6-luna
+      - key: CHAT_FALLBACK_PROVIDER
+        value: openrouter
+      - key: CHAT_FALLBACK_MODEL
+        value: google/gemini-3-flash-preview
+      - key: CONTEXT_ROUTER_PROVIDER
+        value: openrouter
+      - key: CONTEXT_ROUTER_MODEL
+        value: qwen/qwen3-32b
+      - key: CONTEXT_ROUTER_OPENROUTER_PROVIDERS
+        value: Nebius
+      - key: CRISIS_VERIFIER_PROVIDER
+        value: openrouter
+      - key: CRISIS_VERIFIER_MODEL
+        value: google/gemini-3-flash-preview
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_MODEL_ROUTER
+        value: openai/gpt-oss-120b
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"
+      # ── Secretos: cargar a mano en el dashboard, ver README_MIGRACION.md ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      # Sin CHAT_PROVIDER_LLAMADA/CHAT_MODEL_LLAMADA a propósito: vacíos por
+      # default en .env.example (caen a CHAT_PROVIDER/CHAT_MODEL) — si en
+      # Railway están seteados con algo distinto, avisar para agregarlos.
+
+  # ── Staging (numa-dev) ─────────────────────────────────────────────
+  - type: web
+    name: numa-dev
+    runtime: python
+    plan: free  # duerme con inactividad — sin usuarios reales, aceptado
+    region: ohio
+    branch: staging
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENTORNO
+        value: staging
+      - key: CHAT_PROVIDER
+        value: openrouter
+      - key: CHAT_MODEL
+        value: openai/gpt-5.6-luna
+      - key: CHAT_FALLBACK_PROVIDER
+        value: openrouter
+      - key: CHAT_FALLBACK_MODEL
+        value: google/gemini-3-flash-preview
+      - key: CONTEXT_ROUTER_PROVIDER
+        value: openrouter
+      - key: CONTEXT_ROUTER_MODEL
+        value: qwen/qwen3-32b
+      - key: CONTEXT_ROUTER_OPENROUTER_PROVIDERS
+        value: Nebius
+      - key: CRISIS_VERIFIER_PROVIDER
+        value: openrouter
+      - key: CRISIS_VERIFIER_MODEL
+        value: google/gemini-3-flash-preview
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_MODEL_ROUTER
+        value: openai/gpt-oss-120b
+      - key: SENTRY_ENVIRONMENT
+        value: staging
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.1"
+      # ── Secretos: cargar a mano en el dashboard ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
