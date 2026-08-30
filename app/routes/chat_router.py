@@ -247,15 +247,22 @@ class ChatResponse(BaseModel):
 # pared de ese bloque, así que estos 4 quedan afuera de la suma.
 _TIEMPOS_EXCLUIDOS_DEL_TOTAL = {"t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms"}
 
-# Ejecutor propio para el context_router del modo llamada. Tiene que estar a
-# nivel de módulo (y no adentro de _preparar_turno) por dos motivos: el
+# Ejecutor propio para el context_router en paralelo. Tiene que estar a nivel
+# de módulo (y no adentro de _preparar_turno) por dos motivos: el
 # ThreadPoolExecutor usado como context manager ESPERA a sus tareas al salir
 # del `with` — que es exactamente la latencia que se está sacando — y el
-# resultado se consulta más tarde, ya durante el streaming del LLM principal.
+# resultado se consulta más tarde (chat_endpoint, después del LLM principal;
+# _stream_chat_respuesta, mientras el LLM principal genera).
+#
 # max_workers acota cuántos routers en vuelo puede haber a la vez: son
-# llamadas a un LLM chico, y sin tope una ráfaga de llamadas concurrentes
-# podría abrir un hilo por turno.
-_EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=8, thread_name_prefix="router-par")
+# llamadas HTTP a un LLM chico (I/O-bound, los threads pasan la mayor parte
+# del tiempo esperando red, no CPU) — sin tope, una ráfaga de turnos
+# concurrentes abriría un hilo por turno. 64 y no 8: originalmente esto solo
+# lo usaba el modo llamada (tráfico chico); ahora TODO /chat pasa por acá
+# (ver _preparar_turno) — con 8 workers, cualquier pico de tráfico normal
+# encolaría routers esperando un hilo libre, y el router dejaría de estar
+# "escondido" detrás del LLM principal para volver a sumar su propio tiempo.
+_EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=64, thread_name_prefix="router-par")
 
 # Score del router a partir del cual se corta la llamada y se pasa al chat
 # escrito. 0.6 = "explicita" en score_riesgo_router. Se eligió ese corte y no
@@ -364,31 +371,35 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             ultimo_modulo_critico = True
             break
 
-    # ── context_router: EN PARALELO (no bloqueante) en modo llamada ──
-    # Es una llamada a LLM aparte que se come 1.5-2s. En el chat escrito se
-    # espera su resultado antes de armar el prompt; hablando por voz, esos
-    # 1.5s de silencio en CADA ida y vuelta rompen la conversación.
+    # ── context_router: EN PARALELO (no bloqueante) SIEMPRE ──────────
+    # Es una llamada a LLM aparte que se come 1.5-2s. Antes solo modo llamada
+    # la corría sin esperar (esos 1.5s de silencio en cada ida y vuelta rompen
+    # la conversación hablada); el chat escrito esperaba su resultado antes de
+    # armar el prompt, pagando esos 1.5-2s enteros SUMADOS al LLM principal.
     #
-    # Antes estaba directamente APAGADO en llamada, y eso abría un agujero
-    # real y medido (ver scripts/test_modo_llamada_router.py): frases con
-    # método o plan que las keywords NO matchean ("tengo pastillas y me las
-    # voy a tomar todas", "me quiero cortar las venas") quedaban en score 0.0,
-    # sin ningún módulo de crisis. Y es justo el escenario que la voz hace más
-    # probable, porque en voz la gente dice cosas que no escribiría.
+    # Medido: el LLM principal solo (TTFT + generación) ya tarda más que el
+    # router en la enorme mayoría de los turnos — correrlos en paralelo no
+    # acelera al router en sí, pero su tiempo queda "escondido" detrás del LLM
+    # principal en vez de sumarse antes. Ver _resolver_router_paralelo() más
+    # abajo para cómo se usa el resultado sin arriesgar la detección de riesgo:
+    # a diferencia de la llamada (que no puede "deshacer" lo ya hablado), acá
+    # todavía no se mandó nada al usuario cuando el router contesta, así que
+    # SÍ se puede esperar su resultado final antes de devolver la respuesta —
+    # solo que ahora esa espera ocurre DESPUÉS del LLM principal, no antes, y
+    # normalmente ya está resuelto (es más rápido) así que no cuesta nada extra.
     #
-    # Ahora corre igual, pero SIN bloquear: se lanza acá, el prompt se arma
-    # con keywords solamente (router_hints ok=False, el mismo estado que ya
-    # existe cuando el router falla), y el resultado se consulta MIENTRAS el
-    # LLM principal ya está generando. Si avisa riesgo explícito, el turno se
-    # corta y pasa al chat escrito — ver _stream_chat_respuesta.
+    # Sigue habiendo un agujero real y medido si esto estuviera apagado del
+    # todo (ver scripts/test_modo_llamada_router.py): frases con método o plan
+    # que las keywords NO matchean quedarían en score 0.0 sin ningún módulo de
+    # crisis. Por eso el router SIEMPRE corre — nunca se salta, solo se deja
+    # de esperar ANTES de generar.
     #
-    # Lo que se sigue perdiendo en llamada, a propósito: estado_emocional para
-    # la memoria contextual (recursos/temas abiertos) y las señales
-    # pide_ejercicio/pregunta_app por vía semántica. Eso no es seguridad y no
-    # justifica pagar la latencia; los eventos proactivos con fecha y las
-    # keywords de esos casos siguen funcionando.
+    # Lo que se sigue perdiendo, a propósito, únicamente en modo llamada (no
+    # en el chat escrito, que si espera el resultado final): estado_emocional
+    # para la memoria contextual (recursos/temas abiertos) por vía semántica.
+    # Eso no es seguridad y no justifica pagar la latencia ahí; los eventos
+    # proactivos con fecha y las keywords de esos casos siguen funcionando.
     modo_llamada = bool(body.modo_llamada)
-    fut_router_paralelo = None
 
     # ── Etapas independientes en paralelo ────────────────────────────
     # Medido en producción (ver docs/latencia): context_router (una llamada a
@@ -454,26 +465,22 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             print(f"⚠️ No se pudo cargar el check-in: {e}")
         return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
 
-    # En llamada el router se lanza en un ejecutor APARTE, que sobrevive a
-    # este bloque: el `with` de abajo espera a sus tareas al salir, que es
-    # justo lo que no queremos (ahí se iría la latencia que estamos sacando).
-    if modo_llamada:
-        fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
+    # El router se lanza en un ejecutor APARTE, que sobrevive a este bloque:
+    # el `with` de abajo espera a sus tareas al salir, que es justo lo que no
+    # queremos (ahí se iría la latencia que estamos sacando). Se lanza SIEMPRE
+    # ahora (antes solo en modo llamada) — ver el comentario de arriba.
+    fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
 
     _t_paralelo_inicio = time.perf_counter()
     with ThreadPoolExecutor(max_workers=4) as ejecutor:
-        fut_router = None if modo_llamada else ejecutor.submit(_tarea_router)
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
 
-        if fut_router is None:
-            # 0.0 = no se esperó acá. En llamada el router corre igual, en
-            # paralelo, y su tiempo real se loguea aparte cuando se consulta
-            # (t_router_paralelo_ms en chat_turn).
-            router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
-        else:
-            router_hints, tiempos["t_context_router_ms"] = fut_router.result()
+        # 0.0 = no se esperó acá. El router corre en paralelo y su tiempo real
+        # se loguea aparte cuando se consulta (t_router_paralelo_ms en
+        # chat_turn, resuelto en chat_endpoint/_stream_chat_respuesta).
+        router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
         memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
         patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
         dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
@@ -482,17 +489,16 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     tiempos["t_paralelo_ms"] = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
     _t0 = time.perf_counter()  # reengancha _checkpoint(): las etapas de acá para abajo vuelven a ser secuenciales
 
-    # Qué proveedor/modelo respondió (o se colgó) el context router — para
-    # poder cruzarlo con t_context_router_ms en el log sin adivinar. Separado
-    # de `tiempos` (que solo tiene números).
-    router_meta = router_hints.pop("_router", None) or {}
-    if router_hints.get("ok"):
-        score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
-        if score_router > crisis_score:
-            crisis_score = score_router
-            if crisis_log_level == "none":
-                crisis_log_level = "medium"
+    # router_hints acá SIEMPRE es resultado_vacio() (ok=False) — el router
+    # real está corriendo en fut_router_paralelo y todavía no se sabe su
+    # resultado. Por eso router_meta queda vacío: la metadata real (provider/
+    # model/reintento) y el posible escalado de crisis_score se resuelven más
+    # tarde, cuando cada endpoint (chat_endpoint/_stream_chat_respuesta)
+    # consulta fut_router_paralelo — ver _resolver_router_paralelo().
+    router_meta: Dict[str, Any] = {}
 
+    # crisis_score acá es SOLO keywords + crisis_verifier (líneas de arriba) —
+    # el aporte del router (si escala) se loguea aparte cuando se resuelve.
     if crisis_score >= 0.35:
         background_tasks.add_task(
             feedback_repo.save_crisis_log,
@@ -574,29 +580,53 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             previo_cierre_presencia = _cierra_con_presencia(m.content)
             break
 
-    system_prompt = construir_prompt(
-        perfil=perfil,
-        memorias=memorias_vigentes,
-        patrones=patrones,
-        es_inicio_sesion=es_inicio_sesion,
-        num_interacciones=num_interacciones,
-        es_primera_vez=es_primera_vez,
-        ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
-        dias_inactivo=dias_inactivo,
-        checkin_hoy=checkin_hoy,
-        checkin_recien_hecho=bool(body.checkin_recien_hecho),
-        crisis_score=crisis_score,
-        ultimo_modulo_critico=ultimo_modulo_critico,
-        historial_reciente=historial_reciente,
-        mood_actual=body.ultimo_mood,
-        ultimo_mensaje=ultimo_mensaje,
-        preguntas_seguidas=preguntas_seguidas,
-        hoy=hoy,
-        evento_proactivo=evento_proactivo,
-        tema_abierto=tema_abierto,
-        memoria_recurso=memoria_recurso,
-        router_hints=router_hints,
-        modo_llamada=modo_llamada,
+    def _reconstruir_prompt(
+        crisis_score_: float,
+        router_hints_: Dict[str, Any],
+        evento_proactivo_: Optional[Dict[str, Any]],
+        tema_abierto_: Optional[Dict[str, Any]],
+        memoria_recurso_: Optional[Dict[str, Any]],
+    ) -> str:
+        """Reconstruye el system_prompt con crisis_score/router_hints/memoria
+        proactiva actualizados, manteniendo todo lo demás (perfil, memorias,
+        patrones, historial, etc.) igual. La usa chat_endpoint para REGENERAR
+        la respuesta cuando el context_router — resuelto en paralelo, recién
+        después del LLM principal, ver _resolver_router_paralelo() — escala
+        el riesgo más de lo que sabían las keywords: caso raro (la inmensa
+        mayoría de los turnos no lo necesita), pero cuando pasa, el prompt
+        original no tenía los módulos de crisis activados.
+
+        Clausura sobre las variables locales de _preparar_turno a propósito:
+        así no hace falta devolverlas todas sueltas del dict solo para este
+        caso raro — un solo lugar arma el prompt, con los inputs que cambian
+        como parámetros explícitos."""
+        return construir_prompt(
+            perfil=perfil,
+            memorias=memorias_vigentes,
+            patrones=patrones,
+            es_inicio_sesion=es_inicio_sesion,
+            num_interacciones=num_interacciones,
+            es_primera_vez=es_primera_vez,
+            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
+            dias_inactivo=dias_inactivo,
+            checkin_hoy=checkin_hoy,
+            checkin_recien_hecho=bool(body.checkin_recien_hecho),
+            crisis_score=crisis_score_,
+            ultimo_modulo_critico=ultimo_modulo_critico,
+            historial_reciente=historial_reciente,
+            mood_actual=body.ultimo_mood,
+            ultimo_mensaje=ultimo_mensaje,
+            preguntas_seguidas=preguntas_seguidas,
+            hoy=hoy,
+            evento_proactivo=evento_proactivo_,
+            tema_abierto=tema_abierto_,
+            memoria_recurso=memoria_recurso_,
+            router_hints=router_hints_,
+            modo_llamada=modo_llamada,
+        )
+
+    system_prompt = _reconstruir_prompt(
+        crisis_score, router_hints, evento_proactivo, tema_abierto, memoria_recurso,
     )
     _checkpoint("t_prompt_ms")
 
@@ -613,15 +643,158 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "tema_abierto": tema_abierto,
         "_tiempos": tiempos,
         "_router": router_meta,
-        # Solo en modo llamada: el router sigue corriendo mientras el LLM
-        # principal genera. _stream_chat_respuesta lo consulta sin bloquear.
+        # El router sigue corriendo mientras el LLM principal genera.
+        # _stream_chat_respuesta lo consulta sin bloquear (modo llamada);
+        # chat_endpoint lo resuelve bloqueando después del LLM principal —
+        # ver _resolver_router_paralelo().
         "_fut_router_paralelo": fut_router_paralelo,
+        # Solo la usa chat_endpoint, para el caso raro de regenerar la
+        # respuesta si el router (resuelto después del LLM principal) escala
+        # el riesgo — ver _reconstruir_prompt() más arriba.
+        "_reconstruir_prompt": _reconstruir_prompt,
         "memoria_ctx_id": memoria_ctx_id,
         "preguntas_seguidas": preguntas_seguidas,
         "ultimo_modulo_critico": ultimo_modulo_critico,
         "familia_apertura_previa": familia_apertura_previa,
         "previo_cierre_presencia": previo_cierre_presencia,
     }
+
+
+def _resolver_router_paralelo(fut_router_paralelo) -> "tuple[Dict[str, Any], float, Optional[float], Dict[str, Any]]":
+    """Resuelve (bloqueando) el future del context_router lanzado en paralelo
+    en _preparar_turno. Usado por chat_endpoint DESPUÉS de llamar al LLM
+    principal — a diferencia de _stream_chat_respuesta (que lo consulta sin
+    bloquear porque no puede "deshacer" lo ya hablado), acá SÍ conviene
+    esperar el resultado final: todavía no se mandó nada al usuario, y en la
+    inmensa mayoría de los turnos el router ya terminó para cuando el LLM
+    principal contesta (es más rápido), así que este bloqueo no cuesta nada
+    en la práctica — ver el comentario sobre context_router en _preparar_turno.
+
+    Fail-safe: cualquier error (o que nunca se haya lanzado el future) se
+    trata como router caído — mismo router_hints "ok=False" que ya maneja
+    el resto del código cuando clasificar_contexto falla.
+
+    Devuelve (router_hints, score_router, t_router_paralelo_ms, router_meta).
+    score_router es 0.0 si el router no dio señal, falló, o no corrió.
+    """
+    if fut_router_paralelo is None:
+        return resultado_vacio(), 0.0, None, {}
+    try:
+        hints, t_router_ms = fut_router_paralelo.result()
+    except Exception as e:
+        capturar_error(e, contexto="router_paralelo_chat")
+        return resultado_vacio(), 0.0, None, {}
+    meta = hints.pop("_router", None) or {}
+    score = score_riesgo_router(hints.get("senal_riesgo", "none")) if hints.get("ok") else 0.0
+    return hints, score, t_router_ms, meta
+
+
+def _resolver_router_paralelo_chat(
+    *,
+    fut_router_paralelo,
+    crisis_score: float,
+    ultimo_mensaje: str,
+    user_id: str,
+    background_tasks: BackgroundTasks,
+    reconstruir_prompt,
+    llamar_llm,
+    evento_proactivo: Optional[Dict[str, Any]],
+    tema_abierto: Optional[Dict[str, Any]],
+    memoria_ctx_id: Optional[str],
+) -> Dict[str, Any]:
+    """Decide qué hacer con el resultado FINAL del router (ya resuelto vía
+    _resolver_router_paralelo) contra la respuesta que el LLM principal YA
+    generó con un prompt armado solo con keywords. Extraída aparte de
+    chat_endpoint para poder testearla sin pasar por FastAPI/slowapi (Depends,
+    rate limiting) — ver scripts/test_router_paralelo_chat.py.
+
+    Tres desenlaces posibles, en orden de gravedad:
+      - Riesgo EXPLÍCITO que las keywords no vieron (score >= 0.60, cruzando
+        una banda que crisis_score no había cruzado): se descarta lo generado
+        y se devuelve la contención hardcodeada — devuelve "respuesta_corte".
+      - Riesgo MEDIO que las keywords no vieron (score >= 0.35, cruzando esa
+        banda): se regenera con el prompt correcto (los módulos de crisis
+        activados) — `llamar_llm(nuevo_prompt)` se invoca UNA vez más.
+      - Cualquier otro caso (sin escalada, o escalada que no cruza una banda
+        nueva — ej. 0.50 a 0.55, mismos módulos): no hace nada, la respuesta
+        original queda como está. Es el caso común, el que gana la latencia.
+
+    El gate es "¿cruza una banda que crisis_score no había cruzado?", no
+    "¿el score subió?" — construir_prompt solo cambia de módulo en los cortes
+    0.35 y 0.60 (numa_prompt.py, seleccionar_modulos): un salto de 0.50 a 0.55
+    no cambiaría nada del prompt, y regenerar ahí sería puro gasto.
+
+    Devuelve un dict: "respuesta_corte" (no-None si hay que devolverla tal
+    cual, sin más post-procesamiento), "result" (la respuesta del LLM a usar
+    — None si no hubo regeneración, en cuyo caso el caller sigue usando la
+    que ya tenía), "crisis_score"/"evento_proactivo"/"tema_abierto"/
+    "memoria_ctx_id" (actualizados si hubo escalada, iguales a la entrada si
+    no), y "diag" (campos para el log: router_score_paralelo,
+    t_router_paralelo_ms, router_provider, router_model, router_reintento,
+    router_accion — None/"corte"/"regenero").
+    """
+    router_hints_par, router_score_par, t_router_paralelo_ms, router_meta_par = (
+        _resolver_router_paralelo(fut_router_paralelo)
+    )
+    diag: Dict[str, Any] = {
+        "router_score_paralelo": router_score_par or None,
+        "t_router_paralelo_ms": t_router_paralelo_ms,
+        "router_provider": router_meta_par.get("provider"),
+        "router_model": router_meta_par.get("model"),
+        "router_reintento": router_meta_par.get("reintento") or None,
+        "router_accion": None,
+    }
+    sin_cambios = {
+        "respuesta_corte": None, "result": None, "crisis_score": crisis_score,
+        "evento_proactivo": evento_proactivo, "tema_abierto": tema_abierto,
+        "memoria_ctx_id": memoria_ctx_id, "diag": diag,
+    }
+
+    if router_score_par >= UMBRAL_CORTE_LLAMADA and crisis_score < UMBRAL_CORTE_LLAMADA:
+        diag["router_accion"] = "corte"
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT", "high",
+        )
+        return {
+            "respuesta_corte": {
+                "message":          respuesta_contencion_generica(),
+                "mood":             "sad",
+                "suggested_action": None,
+                "risk_level":       "high",
+                "nuevas_memorias":  None,
+            },
+            "result": None,
+            "crisis_score": max(crisis_score, router_score_par),
+            "evento_proactivo": None, "tema_abierto": None, "memoria_ctx_id": None,
+            "diag": diag,
+        }
+
+    if router_score_par >= 0.35 and crisis_score < 0.35:
+        diag["router_accion"] = "regenero"
+        crisis_score = router_score_par
+        # La memoria proactiva se eligió con el crisis_score viejo (< 0.35);
+        # con el nuevo ya no correspondería mostrarla (mismo gate que en
+        # _preparar_turno) — se anula para no colarla en un turno de riesgo.
+        evento_proactivo = None
+        tema_abierto = None
+        memoria_ctx_id = None
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT", "medium",
+        )
+        nuevo_prompt = reconstruir_prompt(
+            crisis_score, router_hints_par, evento_proactivo, tema_abierto, None,
+        )
+        return {
+            "respuesta_corte": None,
+            "result": llamar_llm(nuevo_prompt),
+            "crisis_score": crisis_score,
+            "evento_proactivo": evento_proactivo, "tema_abierto": tema_abierto,
+            "memoria_ctx_id": memoria_ctx_id, "diag": diag,
+        }
+
+    return sin_cambios
 
 
 def _procesar_memorias_turno(
@@ -846,6 +1019,50 @@ def chat_endpoint(
             system_prompt=turno["system_prompt"],
         )
 
+        # ── Router en paralelo: se resuelve DESPUÉS del LLM principal ────
+        # El prompt de arriba se armó SIN esperar al router (router_hints
+        # ok=False, solo keywords) — ver _preparar_turno. Acá, con el LLM
+        # principal ya resuelto, se consulta el resultado FINAL del router
+        # (normalmente ya terminó — es más rápido — así que esto no bloquea
+        # nada en la práctica) y se decide si hace falta actuar — ver
+        # _resolver_router_paralelo_chat().
+        resolucion = _resolver_router_paralelo_chat(
+            fut_router_paralelo=turno.get("_fut_router_paralelo"),
+            crisis_score=crisis_score,
+            ultimo_mensaje=ultimo_mensaje,
+            user_id=user_id,
+            background_tasks=background_tasks,
+            reconstruir_prompt=turno["_reconstruir_prompt"],
+            llamar_llm=lambda system_prompt: llm.generate_response(
+                conversation=[m.model_dump() for m in conversation],
+                system_prompt=system_prompt,
+            ),
+            evento_proactivo=evento_proactivo,
+            tema_abierto=tema_abierto,
+            memoria_ctx_id=memoria_ctx_id,
+        )
+        router_diag = resolucion["diag"]
+
+        if resolucion["respuesta_corte"] is not None:
+            # Riesgo EXPLÍCITO que las keywords no vieron: log aparte porque
+            # acá se corta, el log_event de más abajo no llega a correr.
+            log_event(
+                "chat_turn", endpoint="/chat", user_id=user_id, email=email,
+                crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                **router_diag,
+                **turno.get("_tiempos", {}),
+            )
+            return resolucion["respuesta_corte"]
+
+        crisis_score = resolucion["crisis_score"]
+        evento_proactivo = resolucion["evento_proactivo"]
+        tema_abierto = resolucion["tema_abierto"]
+        memoria_ctx_id = resolucion["memoria_ctx_id"]
+        if resolucion["result"] is not None:
+            # Riesgo MEDIO que las keywords no vieron: se regeneró con el
+            # prompt correcto — esta es la respuesta a usar de acá en más.
+            result = resolucion["result"]
+
         # Filtro determinístico del "che": el modelo lo repite como muletilla
         # en casi cada mensaje a pesar del M02; se elimina acá.
         if result.get("message"):
@@ -907,7 +1124,6 @@ def chat_endpoint(
             llm_model=llm_info.get("model"),
         )
         tiempos = turno.get("_tiempos", {})
-        router_meta = turno.get("_router", {})
         t_preparar_turno_ms = _sumar_tiempos(tiempos)
         log_event(
             "chat_turn",
@@ -926,12 +1142,14 @@ def chat_endpoint(
             # principal — ver _checkpoint() en _preparar_turno. Sumado a
             # llm_latency_ms de arriba da el total real del turno.
             t_preparar_turno_ms=t_preparar_turno_ms,
-            router_provider=router_meta.get("provider"),
-            router_model=router_meta.get("model"),
-            # True = la clasificación se pasó del timeout por intento, o sea
-            # que hubo reintento. Es el campo que permite calcular la tasa
-            # real de reintentos en vez de inferirla de la latencia.
-            router_reintento=router_meta.get("reintento") or None,
+            # router_diag trae router_provider/router_model/router_reintento,
+            # y del router en paralelo (ver _resolver_router_paralelo_chat):
+            # t_router_paralelo_ms (tiempo real, normalmente solapado con el
+            # LLM principal, no sumado), router_score_paralelo, y
+            # router_accion (None si no escaló nada — el caso común — o
+            # "regenero" si este log ya corresponde a la respuesta regenerada;
+            # "corte" nunca llega acá, tiene su propio log_event más arriba).
+            **router_diag,
             **tiempos,
         )
 
