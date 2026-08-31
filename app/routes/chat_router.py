@@ -34,9 +34,9 @@ from app.memory_service import (
     get_checkin_hoy_cached,
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
-from app.crisis_detector import detectar_crisis
+from app.crisis_detector import detectar_crisis, respuesta_contencion_generica
 from app.crisis_verifier import confirmar_riesgo_real
-from app.context_router import clasificar_contexto, score_riesgo_router
+from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
@@ -392,6 +392,621 @@ def chat_history(limit: int = 30, user_id: str = Depends(get_current_user_id)):
         return {"messages": []}
 
 
+# t_context_router_ms/t_memorias_ms/t_patrones_ms/t_metadatos_ms se solapan a
+# propósito (corren en paralelo, ver _preparar_turno) — sumarlos exageraría
+# el total real. t_paralelo_ms ya representa el tiempo de pared de ese
+# bloque, así que estos 4 quedan afuera de la suma.
+_TIEMPOS_EXCLUIDOS_DEL_TOTAL = {"t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms"}
+
+# Ejecutor propio para el context_router en paralelo. A nivel de módulo (no
+# adentro de _preparar_turno) porque el ThreadPoolExecutor usado como context
+# manager ESPERA a sus tareas al salir del `with` — que es exactamente la
+# latencia que se está sacando — y el resultado se consulta más tarde
+# (chat_endpoint, después de llamar al LLM principal).
+#
+# max_workers: son llamadas HTTP a un LLM chico (I/O-bound, los threads pasan
+# la mayor parte del tiempo esperando red, no CPU) — sin tope, una ráfaga de
+# turnos concurrentes abriría un hilo por turno. 64 porque esto corre en
+# TODO /chat (todo el tráfico de producción, no un feature chico).
+_EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=64, thread_name_prefix="router-par")
+
+# Score del router a partir del cual se descarta la respuesta ya generada y
+# se corta directo a la contención hardcodeada. 0.6 = "explicita" en
+# score_riesgo_router — mismo umbral que separa los módulos M19/M20 en
+# numa_prompt.seleccionar_modulos.
+UMBRAL_CORTE_LLAMADA = 0.6
+
+
+def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
+    return round(sum(v for k, v in tiempos.items() if k not in _TIEMPOS_EXCLUIDOS_DEL_TOTAL), 1)
+
+
+def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """Todo el trabajo previo a llamar al LLM: límites, crisis, perfil,
+    memorias, patrones, memoria proactiva, prompt. Extraído de chat_endpoint
+    para poder testear el armado del turno por separado de la llamada al LLM.
+
+    Devuelve un dict. Si la crisis ya se resolvió con la respuesta
+    hardcodeada (sin pasar por el LLM): {"crisis_confirmada": True,
+    "respuesta_crisis": {...}}. Si no, el resto de las claves que hacen
+    falta para llamar al LLM y post-procesar la respuesta.
+    """
+    # Checkpoints de latencia por etapa — el log "chat_turn" trae
+    # t_perfil_ms, t_crisis_verifier_ms, t_context_router_ms, t_memorias_ms,
+    # t_patrones_ms, t_proactivo_ms, t_prompt_ms. Es la única forma de saber
+    # DÓNDE se va el tiempo de un turno en vez de adivinar.
+    tiempos: Dict[str, float] = {}
+    _t0 = time.perf_counter()
+
+    def _checkpoint(nombre: str) -> None:
+        nonlocal _t0
+        ahora = time.perf_counter()
+        tiempos[nombre] = round((ahora - _t0) * 1000, 1)
+        _t0 = ahora
+
+    # Límite server-side de tamaño de la conversación
+    conversation = body.conversation[-MAX_CONV_MESSAGES:]
+    for m in conversation:
+        if len(m.content) > MAX_MSG_CHARS:
+            m.content = m.content[:MAX_MSG_CHARS]
+
+    perfil = body.perfil
+    if perfil is None:
+        try:
+            perfil = user_repo.get_profile(user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_perfil")
+            perfil = None
+    _checkpoint("t_perfil_ms")
+
+    ultimo_mensaje = conversation[-1].content if conversation else ""
+    crisis = detectar_crisis(ultimo_mensaje)
+    crisis_score = crisis.get("score", 0.0)
+    crisis_log_level = crisis.get("log_level", "none")
+    _checkpoint("t_crisis_keywords_ms")
+
+    if crisis["detected"]:
+        # Verificación en dos pasos: las keywords dispararon crítico/alto;
+        # un clasificador LLM rápido confirma si el riesgo es real y actual.
+        # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
+        confirmado = confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or "")
+        _checkpoint("t_crisis_verifier_ms")
+        if confirmado:
+            background_tasks.add_task(
+                feedback_repo.save_crisis_log,
+                user_id, ultimo_mensaje, crisis["category"], crisis_log_level,
+            )
+            return {
+                "crisis_confirmada": True,
+                "respuesta_crisis": {
+                    "message":          crisis["message"],
+                    "mood":             "sad",
+                    "suggested_action": None,
+                    "risk_level":       "high",
+                    "nuevas_memorias":  None,
+                },
+                "_tiempos": tiempos,
+            }
+        # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
+        # se degrada a señal media → el LLM responde con módulos de crisis.
+        crisis_score = 0.45
+        crisis_log_level = "medium"
+
+    memorias_sesion: List[Dict[str, Any]] = []
+    if perfil and "_memorias_sesion" in perfil:
+        raw = perfil.pop("_memorias_sesion", []) or []
+        memorias_sesion = [
+            m if isinstance(m, dict) else {"content": str(m), "priority": 3, "category": "otro"}
+            for m in raw
+        ]
+
+    num_interacciones = len(conversation)
+
+    # ultimo_modulo_critico: local/instantáneo (detectar_crisis por keywords
+    # sobre los últimos mensajes propios, no pega a ningún servicio) — se
+    # calcula ANTES del paralelo de abajo para poder saltear la consulta a
+    # Supabase (hay_crisis_reciente) si ya dio positivo.
+    ultimo_modulo_critico = False
+    previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
+    for msg_previo in previos_usuario:
+        if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
+            ultimo_modulo_critico = True
+            break
+
+    # ── context_router: EN PARALELO (no bloqueante) con el LLM principal ──
+    # Es una llamada a LLM aparte que se come 1.5-2s. Antes se esperaba su
+    # resultado antes de armar el prompt, pagando esos 1.5-2s SUMADOS al LLM
+    # principal. Medido: el LLM principal solo (TTFT + generación) ya tarda
+    # más que el router en la enorme mayoría de los turnos — correrlo en
+    # paralelo no acelera al router en sí, pero su tiempo queda "escondido"
+    # detrás del LLM principal en vez de sumarse antes. Ver
+    # _resolver_router_paralelo_chat() más abajo para cómo se usa el
+    # resultado sin arriesgar la detección de riesgo: todavía no se mandó
+    # nada al usuario cuando el router contesta, así que SÍ se puede esperar
+    # su resultado final antes de devolver la respuesta — solo que esa espera
+    # ocurre DESPUÉS del LLM principal, no antes, y normalmente ya está
+    # resuelto (es más rápido) así que no cuesta nada extra en la práctica.
+    #
+    # El router SIEMPRE corre — nunca se salta, solo se deja de esperar ANTES
+    # de generar: frases con método o plan que las keywords no matchean
+    # ("tengo pastillas y me las voy a tomar todas") solo las agarra el
+    # router, y sin él quedarían en score 0.0 sin ningún módulo de crisis.
+
+    # ── Etapas independientes en paralelo ────────────────────────────
+    # context_router (una llamada a LLM aparte de la principal, SOLO para
+    # rutear módulos) se come 1.5-2s por su cuenta. Ninguna de las 4 etapas
+    # de abajo depende de otra (solo la memoria proactiva, más abajo,
+    # necesita el resultado de context_router) — correrlas en paralelo evita
+    # que memorias/patrones/metadatos agreguen su propio tiempo arriba del
+    # router.
+    def _tarea_router():
+        t0 = time.perf_counter()
+        hints = clasificar_contexto([m.model_dump() for m in conversation])
+        return hints, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_memorias():
+        t0 = time.perf_counter()
+        vigentes, ids_old = memorias_sesion or [], []
+        try:
+            m_db, ids_old = get_recent_memories(
+                user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12
+            )
+            seen = set()
+            merged = []
+            for m in (memorias_sesion or []) + m_db:
+                key = (m.get("content") or "").strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(m)
+            vigentes = merged[:15]
+        except Exception as e:
+            capturar_error(e, contexto="cargar_memorias")
+            print(f"⚠️ No se pudieron cargar memorias: {e}")
+            vigentes, ids_old = memorias_sesion or [], []
+        return vigentes, ids_old, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_patrones():
+        t0 = time.perf_counter()
+        pats: List[dict] = []
+        try:
+            pats = get_topic_patterns_cached(user_id=user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_patrones")
+            print(f"⚠️ No se pudieron cargar patrones: {e}")
+        return pats, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_metadatos():
+        t0 = time.perf_counter()
+        dias_inactivo_ = 0
+        if num_interacciones <= 4:
+            dias_inactivo_ = get_dias_inactivo(user_id)
+        critico = ultimo_modulo_critico
+        # Respaldo stateless: si la sesión recién empieza (el historial del
+        # request no alcanza), mirar crisis_logs — el usuario pudo haber
+        # recargado la app justo después de una crisis.
+        if not critico and num_interacciones <= 4:
+            critico = feedback_repo.hay_crisis_reciente(user_id)
+        checkin = None
+        try:
+            checkin = get_checkin_hoy_cached(user_id)
+        except Exception as e:
+            capturar_error(e, contexto="cargar_checkin")
+            print(f"⚠️ No se pudo cargar el check-in: {e}")
+        return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
+
+    # El router se lanza en un ejecutor APARTE, que sobrevive a este bloque:
+    # el `with` de abajo espera a sus tareas al salir, que es justo lo que no
+    # queremos (ahí se iría la latencia que estamos sacando).
+    fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
+
+    _t_paralelo_inicio = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=4) as ejecutor:
+        fut_memorias = ejecutor.submit(_tarea_memorias)
+        fut_patrones = ejecutor.submit(_tarea_patrones)
+        fut_metadatos = ejecutor.submit(_tarea_metadatos)
+
+        # 0.0 = no se esperó acá. El router corre en paralelo y su tiempo
+        # real se loguea aparte cuando se resuelve (t_router_paralelo_ms en
+        # chat_turn, ver _resolver_router_paralelo_chat).
+        router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
+        memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
+        patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
+        dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
+    # Tiempo de PARED del bloque paralelo — es el que importa para el total
+    # (sumar los 4 de arriba exageraría, se solapan a propósito).
+    tiempos["t_paralelo_ms"] = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
+    _t0 = time.perf_counter()  # reengancha _checkpoint(): las etapas de acá para abajo vuelven a ser secuenciales
+
+    # crisis_score acá es SOLO keywords + crisis_verifier (líneas de arriba)
+    # — el aporte del router (si escala) se loguea aparte cuando se resuelve,
+    # ver _resolver_router_paralelo_chat.
+    if crisis_score >= 0.35:
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, crisis.get("category") or "ROUTER_RISK", crisis_log_level,
+        )
+
+    # ── Memoria proactiva contextual ─────────────────────────────────
+    # Se elige A LO SUMO UNA cosa para traer al prompt (evento con fecha,
+    # tema abierto sin resolver, o recurso propio del usuario) según el
+    # estado emocional que ya clasificó el router. Solo fuera de contexto de
+    # riesgo. router_hints acá SIEMPRE es resultado_vacio() (ok=False) — el
+    # router real todavía no contestó — así que esto naturalmente no elige
+    # nada basado en estado emocional (solo el evento con fecha, que no
+    # depende del router), y se degrada bien.
+    hoy = date.today()
+    evento_proactivo: Optional[Dict[str, Any]] = None
+    tema_abierto: Optional[Dict[str, Any]] = None
+    memoria_recurso: Optional[Dict[str, Any]] = None
+    memoria_ctx_id: Optional[str] = None
+    if crisis_score < 0.35:
+        try:
+            eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
+            evento_top = eventos[0] if eventos else None
+
+            router_ok = bool(router_hints.get("ok"))
+            estado_r = router_hints.get("estado_emocional") if router_ok else None
+
+            recursos = (
+                get_resource_memories(user_id=user_id)
+                if estado_r in ("triste_vacio", "ansioso", "abrumado")
+                else []
+            )
+            temas = (
+                get_open_topics(user_id=user_id)
+                if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
+                else []
+            )
+
+            eleccion = elegir_memoria_contextual(
+                estado_emocional=estado_r,
+                router_ok=router_ok,
+                riesgo_score=crisis_score,
+                evento=evento_top,
+                temas_abiertos=temas,
+                recursos=recursos,
+            )
+            if eleccion:
+                memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
+                if eleccion["tipo"] == "evento":
+                    evento_proactivo = eleccion["memoria"]
+                elif eleccion["tipo"] == "tema_abierto":
+                    tema_abierto = eleccion["memoria"]
+                elif eleccion["tipo"] == "recurso":
+                    memoria_recurso = eleccion["memoria"]
+        except Exception as e:
+            capturar_error(e, contexto="memoria_contextual")
+            print(f"⚠️ No se pudo elegir memoria contextual: {e}")
+    _checkpoint("t_proactivo_ms")
+
+    es_inicio_sesion = len(conversation) == 1
+    es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
+
+    historial_reciente = [m.model_dump() for m in conversation[-4:]]
+
+    mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
+    preguntas_seguidas = 0
+    for contenido in reversed(mensajes_numa):
+        if contenido.rstrip().rstrip('"\'').endswith("?"):
+            preguntas_seguidas += 1
+        else:
+            break
+
+    # Apertura/cierre del ÚLTIMO mensaje de Numa: dependen solo del historial
+    # (no del mensaje nuevo, que todavía no existe acá).
+    familia_apertura_previa = None
+    previo_cierre_presencia = False
+    for m in reversed(conversation[:-1]):
+        if m.role == "assistant":
+            familia_apertura_previa = _familia_apertura(m.content)
+            previo_cierre_presencia = _cierra_con_presencia(m.content)
+            break
+
+    def _reconstruir_prompt(
+        crisis_score_: float,
+        router_hints_: Dict[str, Any],
+        evento_proactivo_: Optional[Dict[str, Any]],
+        tema_abierto_: Optional[Dict[str, Any]],
+        memoria_recurso_: Optional[Dict[str, Any]],
+    ) -> str:
+        """Reconstruye el system_prompt con crisis_score/router_hints/memoria
+        proactiva actualizados, manteniendo todo lo demás igual. La usa
+        chat_endpoint para REGENERAR la respuesta cuando el context_router
+        — resuelto en paralelo, recién después del LLM principal, ver
+        _resolver_router_paralelo() — escala el riesgo más de lo que sabían
+        las keywords: caso raro, pero cuando pasa, el prompt original no
+        tenía los módulos de crisis activados.
+
+        Clausura sobre las variables locales de _preparar_turno a propósito:
+        así no hace falta devolverlas todas sueltas solo para este caso raro."""
+        return construir_prompt(
+            perfil=perfil,
+            memorias=memorias_vigentes,
+            patrones=patrones,
+            es_inicio_sesion=es_inicio_sesion,
+            num_interacciones=num_interacciones,
+            es_primera_vez=es_primera_vez,
+            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
+            dias_inactivo=dias_inactivo,
+            checkin_hoy=checkin_hoy,
+            checkin_recien_hecho=bool(body.checkin_recien_hecho),
+            crisis_score=crisis_score_,
+            ultimo_modulo_critico=ultimo_modulo_critico,
+            historial_reciente=historial_reciente,
+            mood_actual=body.ultimo_mood,
+            ultimo_mensaje=ultimo_mensaje,
+            preguntas_seguidas=preguntas_seguidas,
+            hoy=hoy,
+            evento_proactivo=evento_proactivo_,
+            tema_abierto=tema_abierto_,
+            memoria_recurso=memoria_recurso_,
+            router_hints=router_hints_,
+        )
+
+    system_prompt = _reconstruir_prompt(
+        crisis_score, router_hints, evento_proactivo, tema_abierto, memoria_recurso,
+    )
+    _checkpoint("t_prompt_ms")
+
+    return {
+        "crisis_confirmada": False,
+        "conversation": conversation,
+        "system_prompt": system_prompt,
+        "crisis_score": crisis_score,
+        "ultimo_mensaje": ultimo_mensaje,
+        "hoy": hoy,
+        "memorias_vigentes": memorias_vigentes,
+        "ids_a_desactivar": ids_a_desactivar,
+        "evento_proactivo": evento_proactivo,
+        "tema_abierto": tema_abierto,
+        "_tiempos": tiempos,
+        # El router sigue corriendo mientras el LLM principal genera.
+        # chat_endpoint lo resuelve bloqueando, después del LLM principal —
+        # ver _resolver_router_paralelo().
+        "_fut_router_paralelo": fut_router_paralelo,
+        # Solo la usa chat_endpoint, para el caso raro de regenerar la
+        # respuesta si el router escala el riesgo — ver _reconstruir_prompt().
+        "_reconstruir_prompt": _reconstruir_prompt,
+        "memoria_ctx_id": memoria_ctx_id,
+        "preguntas_seguidas": preguntas_seguidas,
+        "ultimo_modulo_critico": ultimo_modulo_critico,
+        "familia_apertura_previa": familia_apertura_previa,
+        "previo_cierre_presencia": previo_cierre_presencia,
+    }
+
+
+def _resolver_router_paralelo(fut_router_paralelo) -> "tuple[Dict[str, Any], float, Optional[float], Dict[str, Any]]":
+    """Resuelve (bloqueando) el future del context_router lanzado en paralelo
+    en _preparar_turno. Usado por chat_endpoint DESPUÉS de llamar al LLM
+    principal: todavía no se mandó nada al usuario, y en la inmensa mayoría
+    de los turnos el router ya terminó para cuando el LLM principal contesta
+    (es más rápido), así que este bloqueo no cuesta nada en la práctica.
+
+    Fail-safe: cualquier error (o que nunca se haya lanzado el future) se
+    trata como router caído — mismo router_hints "ok=False" que ya maneja
+    el resto del código cuando clasificar_contexto falla.
+
+    Devuelve (router_hints, score_router, t_router_paralelo_ms, router_meta).
+    score_router es 0.0 si el router no dio señal, falló, o no corrió.
+    """
+    if fut_router_paralelo is None:
+        return resultado_vacio(), 0.0, None, {}
+    try:
+        hints, t_router_ms = fut_router_paralelo.result()
+    except Exception as e:
+        capturar_error(e, contexto="router_paralelo_chat")
+        return resultado_vacio(), 0.0, None, {}
+    meta = hints.pop("_router", None) or {}
+    score = score_riesgo_router(hints.get("senal_riesgo", "none")) if hints.get("ok") else 0.0
+    return hints, score, t_router_ms, meta
+
+
+def _resolver_router_paralelo_chat(
+    *,
+    fut_router_paralelo,
+    crisis_score: float,
+    ultimo_mensaje: str,
+    user_id: str,
+    background_tasks: BackgroundTasks,
+    reconstruir_prompt,
+    llamar_llm,
+    evento_proactivo: Optional[Dict[str, Any]],
+    tema_abierto: Optional[Dict[str, Any]],
+    memoria_ctx_id: Optional[str],
+) -> Dict[str, Any]:
+    """Decide qué hacer con el resultado FINAL del router (ya resuelto vía
+    _resolver_router_paralelo) contra la respuesta que el LLM principal YA
+    generó con un prompt armado solo con keywords.
+
+    Tres desenlaces posibles, en orden de gravedad:
+      - Riesgo EXPLÍCITO que las keywords no vieron (score >= 0.60, cruzando
+        una banda que crisis_score no había cruzado): se descarta lo generado
+        y se devuelve la contención hardcodeada — devuelve "respuesta_corte".
+      - Riesgo MEDIO que las keywords no vieron (score >= 0.35, cruzando esa
+        banda): se regenera con el prompt correcto (los módulos de crisis
+        activados) — `llamar_llm(nuevo_prompt)` se invoca UNA vez más.
+      - Cualquier otro caso (sin escalada, o escalada que no cruza una banda
+        nueva — ej. 0.50 a 0.55, mismos módulos): no hace nada, la respuesta
+        original queda como está. Es el caso común, el que gana la latencia.
+
+    El gate es "¿cruza una banda que crisis_score no había cruzado?", no
+    "¿el score subió?" — construir_prompt solo cambia de módulo en los cortes
+    0.35 y 0.60 (numa_prompt.py, seleccionar_modulos): un salto de 0.50 a 0.55
+    no cambiaría nada del prompt, y regenerar ahí sería puro gasto.
+
+    Devuelve un dict: "respuesta_corte" (no-None si hay que devolverla tal
+    cual, sin más post-procesamiento), "result" (la respuesta del LLM a usar
+    — None si no hubo regeneración), "crisis_score"/"evento_proactivo"/
+    "tema_abierto"/"memoria_ctx_id" (actualizados si hubo escalada), y "diag"
+    (campos para el log).
+    """
+    router_hints_par, router_score_par, t_router_paralelo_ms, router_meta_par = (
+        _resolver_router_paralelo(fut_router_paralelo)
+    )
+    diag: Dict[str, Any] = {
+        "router_score_paralelo": router_score_par or None,
+        "t_router_paralelo_ms": t_router_paralelo_ms,
+        "router_provider": router_meta_par.get("provider"),
+        "router_model": router_meta_par.get("model"),
+        "router_reintento": router_meta_par.get("reintento") or None,
+        "router_accion": None,
+    }
+    sin_cambios = {
+        "respuesta_corte": None, "result": None, "crisis_score": crisis_score,
+        "evento_proactivo": evento_proactivo, "tema_abierto": tema_abierto,
+        "memoria_ctx_id": memoria_ctx_id, "diag": diag,
+    }
+
+    if router_score_par >= UMBRAL_CORTE_LLAMADA and crisis_score < UMBRAL_CORTE_LLAMADA:
+        diag["router_accion"] = "corte"
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT", "high",
+        )
+        return {
+            "respuesta_corte": {
+                "message":          respuesta_contencion_generica(),
+                "mood":             "sad",
+                "suggested_action": None,
+                "risk_level":       "high",
+                "nuevas_memorias":  None,
+            },
+            "result": None,
+            "crisis_score": max(crisis_score, router_score_par),
+            "evento_proactivo": None, "tema_abierto": None, "memoria_ctx_id": None,
+            "diag": diag,
+        }
+
+    if router_score_par >= 0.35 and crisis_score < 0.35:
+        diag["router_accion"] = "regenero"
+        crisis_score = router_score_par
+        # La memoria proactiva se eligió con el crisis_score viejo (< 0.35);
+        # con el nuevo ya no correspondería mostrarla — se anula para no
+        # colarla en un turno de riesgo.
+        evento_proactivo = None
+        tema_abierto = None
+        memoria_ctx_id = None
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT", "medium",
+        )
+        nuevo_prompt = reconstruir_prompt(
+            crisis_score, router_hints_par, evento_proactivo, tema_abierto, None,
+        )
+        return {
+            "respuesta_corte": None,
+            "result": llamar_llm(nuevo_prompt),
+            "crisis_score": crisis_score,
+            "evento_proactivo": evento_proactivo, "tema_abierto": tema_abierto,
+            "memoria_ctx_id": memoria_ctx_id, "diag": diag,
+        }
+
+    return sin_cambios
+
+
+def _procesar_memorias_turno(
+    memorias_llm: List[Dict[str, Any]],
+    memorias_vigentes: List[Dict[str, Any]],
+    ultimo_mensaje: str,
+    hoy: date,
+    crisis_score: float,
+) -> List[Dict[str, Any]]:
+    """Valida/clampea/dedupea las memorias que devolvió el LLM antes de
+    persistir. Extraído de chat_endpoint."""
+    es_post_ejercicio = ultimo_mensaje.strip().startswith("[Post-ejercicio")
+    contenidos_conocidos = [(m.get("content") or "") for m in memorias_vigentes]
+    memorias_validadas: List[Dict[str, Any]] = []
+    for m in memorias_llm:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if _es_memoria_duplicada(content, contenidos_conocidos):
+            continue
+        prioridad = _normalizar_prioridad(
+            content,
+            _validar_priority(m.get("priority")),
+            crisis_score,
+            es_post_ejercicio,
+        )
+        mem: Dict[str, Any] = {
+            "content":  content,
+            "category": _validar_category(m.get("category")),
+            "priority": prioridad,
+        }
+        # Memoria proactiva: si el LLM marcó un evento con fecha, lo validamos.
+        event_title, event_date = _validar_evento(m.get("event"), content, hoy)
+        if event_title and event_date:
+            mem["event_title"] = event_title
+            mem["event_date"] = event_date
+        # Tema abierto: solo memorias SIN fecha (el ciclo de los eventos ya
+        # lo maneja followed_up). Recurso: algo que el usuario dijo que le
+        # hizo bien. Ambos son booleanos del LLM → clampeo estricto.
+        if m.get("open") is True and not (event_title and event_date):
+            mem["status"] = "open"
+        if m.get("helped") is True:
+            mem["helped_before"] = True
+        # Respaldo server-side de los flags: el LLM sub-produce open/helped y
+        # sin ellos el canal proactivo se queda sin material.
+        if "status" not in mem and not (event_title and event_date) and detectar_tema_abierto(content):
+            mem["status"] = "open"
+        if "helped_before" not in mem and detectar_recurso(content):
+            mem["helped_before"] = True
+        memorias_validadas.append(mem)
+        contenidos_conocidos.append(content)
+
+    # Respaldo: si el LLM no guardó ninguna memoria, detectar evento próximo con fecha
+    if not memorias_validadas:
+        evento = detectar_evento_con_fecha(ultimo_mensaje, hoy)
+        if evento:
+            memorias_validadas.append(evento)
+
+    return memorias_validadas
+
+
+def _disparar_tareas_turno(
+    background_tasks: BackgroundTasks,
+    *,
+    user_id: str,
+    conversation: List["Message"],
+    mensaje_final: str,
+    mood: Optional[str],
+    memorias_validadas: List[Dict[str, Any]],
+    ids_a_desactivar: List[str],
+    evento_proactivo: Optional[Dict[str, Any]],
+    tema_abierto: Optional[Dict[str, Any]],
+    memoria_ctx_id: Optional[str],
+    ultimo_mensaje: str,
+    hoy: date,
+) -> None:
+    """Tareas de background que se disparan una vez que hay respuesta final:
+    guardar conversación/memorias, follow-up de eventos, cierre de temas
+    abiertos, cooldown de mención proactiva. Extraído de chat_endpoint."""
+    background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
+    background_tasks.add_task(cerrar_temas_abiertos, user_id, ultimo_mensaje)
+
+    if memoria_ctx_id:
+        cierre = None
+        if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
+            cierre = "followup"
+        elif tema_abierto:
+            cierre = "cerrar_tema"
+        background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id, cierre)
+
+    if conversation:
+        background_tasks.add_task(
+            conversation_repo.save,
+            user_id,
+            conversation[-1].content,
+            mensaje_final,
+            memorias_validadas,
+            mood,
+        )
+        if ids_a_desactivar:
+            background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
+        if memorias_validadas:
+            invalidate_patterns_cache(user_id)
+
+
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit("18/minute")
 def chat_endpoint(
@@ -407,285 +1022,75 @@ def chat_endpoint(
         # con contenido de mensajes. Ver docstring de get_current_user_id.
         email = getattr(request.state, "user_email", None)
 
-        # Límite server-side de tamaño de la conversación
-        conversation = body.conversation[-MAX_CONV_MESSAGES:]
-        for m in conversation:
-            if len(m.content) > MAX_MSG_CHARS:
-                m.content = m.content[:MAX_MSG_CHARS]
-
-        perfil = body.perfil
-
-        if perfil is None:
-            try:
-                perfil = user_repo.get_profile(user_id)
-            except Exception as e:
-                capturar_error(e, contexto="cargar_perfil")
-                perfil = None
-
-        ultimo_mensaje = conversation[-1].content if conversation else ""
-        crisis = detectar_crisis(ultimo_mensaje)
-        crisis_score = crisis.get("score", 0.0)
-        crisis_log_level = crisis.get("log_level", "none")
-
-        if crisis["detected"]:
-            # Verificación en dos pasos: las keywords dispararon crítico/alto;
-            # un clasificador LLM rápido confirma si el riesgo es real y actual.
-            # Fail-safe: ante error o duda, se mantiene la respuesta de emergencia.
-            if confirmar_riesgo_real(ultimo_mensaje, crisis["category"] or ""):
-                # Respuesta determinística, sin LLM principal.
-                background_tasks.add_task(
-                    feedback_repo.save_crisis_log,
-                    user_id,
-                    ultimo_mensaje,
-                    crisis["category"],
-                    crisis_log_level,
-                )
-                log_event(
-                    "chat_turn", endpoint="/chat", user_id=user_id, email=email,
-                    crisis_hardcoded=True, risk_level="high", llm_provider=None,
-                )
-                return {
-                    "message":          crisis["message"],
-                    "mood":             "sad",
-                    "suggested_action": None,
-                    "risk_level":       "high",
-                    "nuevas_memorias":  None,
-                }
-            # El verificador descartó riesgo actual (hipérbole/tercero/pasado):
-            # se degrada a señal media → el LLM responde con módulos de crisis.
-            crisis_score = 0.45
-            crisis_log_level = "medium"
-
-        memorias_sesion: List[Dict[str, Any]] = []
-        if perfil and "_memorias_sesion" in perfil:
-            raw = perfil.pop("_memorias_sesion", []) or []
-            memorias_sesion = [
-                m if isinstance(m, dict)
-                else {"content": str(m), "priority": 3, "category": "otro"}
-                for m in raw
-            ]
-
-        num_interacciones = len(conversation)
-
-        # ¿El turno anterior estuvo en territorio de crisis? (se mira el score
-        # de los últimos 2 mensajes previos del usuario que vienen en el request)
-        # Local/instantáneo (no pega a ningún servicio) — se calcula ANTES del
-        # paralelo de abajo para poder saltear la consulta a Supabase
-        # (hay_crisis_reciente) dentro de _tarea_metadatos si ya dio positivo.
-        ultimo_modulo_critico = False
-        previos_usuario = [m.content for m in conversation[:-1] if m.role == "user"][-2:]
-        for msg_previo in previos_usuario:
-            if detectar_crisis(msg_previo).get("score", 0.0) >= 0.35:
-                ultimo_modulo_critico = True
-                break
-
-        # ── Etapas independientes en paralelo ────────────────────────────
-        # Medido en producción: el context_router (Capa 2 — una llamada a LLM
-        # aparte de la principal, corre en TODOS los turnos, lee contexto que
-        # las keywords no ven y puede ESCALAR el riesgo hacia M19/M20, nunca
-        # bajarlo — NO dispara la respuesta hardcodeada, eso sigue siendo
-        # exclusivo de keyword + crisis_verifier; fail-safe: si se cae,
-        # router_hints["ok"]=False y el ruteo usa solo keywords) se comía
-        # 1.5-2s por su cuenta, y corría secuencial ANTES de memorias/
-        # patrones/metadatos — cada consulta a Supabase se sumaba encima de
-        # esos 1.5-2s. Ninguna de las 4 etapas de abajo depende de otra (solo
-        # la memoria proactiva, más abajo, necesita el resultado del router)
-        # — correrlas en paralelo no acelera al router en sí, pero evita que
-        # memorias/patrones/metadatos agreguen su propio tiempo arriba del suyo.
-        def _tarea_router():
-            t0 = time.perf_counter()
-            hints = clasificar_contexto([m.model_dump() for m in conversation])
-            return hints, round((time.perf_counter() - t0) * 1000, 1)
-
-        def _tarea_memorias():
-            t0 = time.perf_counter()
-            vigentes, ids_old = memorias_sesion or [], []
-            try:
-                m_db, ids_old = get_recent_memories(
-                    user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12
-                )
-                seen = set()
-                merged = []
-                for m in (memorias_sesion or []) + m_db:
-                    key = (m.get("content") or "").strip()
-                    if key and key not in seen:
-                        seen.add(key)
-                        merged.append(m)
-                vigentes = merged[:15]
-            except Exception as e:
-                capturar_error(e, contexto="cargar_memorias")
-                print(f"⚠️ No se pudieron cargar memorias: {e}")
-                vigentes, ids_old = memorias_sesion or [], []
-            return vigentes, ids_old, round((time.perf_counter() - t0) * 1000, 1)
-
-        def _tarea_patrones():
-            t0 = time.perf_counter()
-            pats: List[dict] = []
-            try:
-                pats = get_topic_patterns_cached(user_id=user_id)
-            except Exception as e:
-                capturar_error(e, contexto="cargar_patrones")
-                print(f"⚠️ No se pudieron cargar patrones: {e}")
-            return pats, round((time.perf_counter() - t0) * 1000, 1)
-
-        def _tarea_metadatos():
-            t0 = time.perf_counter()
-            dias_inactivo_ = 0
-            if num_interacciones <= 4:
-                dias_inactivo_ = get_dias_inactivo(user_id)
-            critico = ultimo_modulo_critico
-            # Respaldo stateless: si la sesión recién empieza (el historial
-            # del request no alcanza), mirar crisis_logs — el usuario pudo
-            # haber recargado la app justo después de una crisis.
-            if not critico and num_interacciones <= 4:
-                critico = feedback_repo.hay_crisis_reciente(user_id)
-            checkin = None
-            try:
-                checkin = get_checkin_hoy_cached(user_id)
-            except Exception as e:
-                capturar_error(e, contexto="cargar_checkin")
-                print(f"⚠️ No se pudo cargar el check-in: {e}")
-            return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
-
-        _t_paralelo_inicio = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=4) as ejecutor:
-            fut_router = ejecutor.submit(_tarea_router)
-            fut_memorias = ejecutor.submit(_tarea_memorias)
-            fut_patrones = ejecutor.submit(_tarea_patrones)
-            fut_metadatos = ejecutor.submit(_tarea_metadatos)
-
-            router_hints, t_router_ms = fut_router.result()
-            memorias_vigentes, ids_a_desactivar, t_memorias_ms = fut_memorias.result()
-            patrones, t_patrones_ms = fut_patrones.result()
-            dias_inactivo, ultimo_modulo_critico, checkin_hoy, t_metadatos_ms = fut_metadatos.result()
-        # Tiempo de PARED del bloque — el que importa para el total (sumar
-        # los 4 de arriba exagera, se solapan a propósito).
-        t_paralelo_ms = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
-
-        if router_hints.get("ok"):
-            score_router = score_riesgo_router(router_hints.get("senal_riesgo", "none"))
-            if score_router > crisis_score:
-                crisis_score = score_router
-                # Riesgo que el léxico no había marcado: subimos el nivel de log.
-                if crisis_log_level == "none":
-                    crisis_log_level = "medium"
-
-        # Señal media (desborde/implícitas/degradadas/router): va al LLM con el
-        # módulo de crisis activado. Se loguea igual para trazabilidad del equipo.
-        # category cae a "ROUTER_RISK" cuando la señal la aportó solo el clasificador.
-        if crisis_score >= 0.35:
-            background_tasks.add_task(
-                feedback_repo.save_crisis_log,
-                user_id,
-                ultimo_mensaje,
-                crisis.get("category") or "ROUTER_RISK",
-                crisis_log_level,
+        turno = _preparar_turno(body, user_id, background_tasks)
+        if turno["crisis_confirmada"]:
+            log_event(
+                "chat_turn", endpoint="/chat", user_id=user_id, email=email,
+                crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                **turno.get("_tiempos", {}),
             )
+            return turno["respuesta_crisis"]
 
-        # ── Memoria proactiva contextual ─────────────────────────────────
-        # Se elige A LO SUMO UNA cosa para traer al prompt (evento con fecha,
-        # tema abierto sin resolver, o recurso propio del usuario) según el
-        # estado emocional que ya clasificó el router (Qwen). En un momento
-        # triste no se pregunta por el partido del finde; sí se puede recordar
-        # "correr te despejó la última vez". Solo fuera de contexto de riesgo.
-        hoy = date.today()
-        evento_proactivo: Optional[Dict[str, Any]] = None
-        tema_abierto: Optional[Dict[str, Any]] = None
-        memoria_recurso: Optional[Dict[str, Any]] = None
-        memoria_ctx_id: Optional[str] = None
-        if crisis_score < 0.35:
-            try:
-                eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
-                evento_top = eventos[0] if eventos else None
-
-                router_ok = bool(router_hints.get("ok"))
-                estado_r = router_hints.get("estado_emocional") if router_ok else None
-
-                # Solo se consulta lo que la política puede llegar a usar
-                # (ver elegir_memoria_contextual) para no sumar queries al turno.
-                recursos = (
-                    get_resource_memories(user_id=user_id)
-                    if estado_r in ("triste_vacio", "ansioso", "abrumado")
-                    else []
-                )
-                temas = (
-                    get_open_topics(user_id=user_id)
-                    if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
-                    else []
-                )
-
-                eleccion = elegir_memoria_contextual(
-                    estado_emocional=estado_r,
-                    router_ok=router_ok,
-                    riesgo_score=crisis_score,
-                    evento=evento_top,
-                    temas_abiertos=temas,
-                    recursos=recursos,
-                )
-                if eleccion:
-                    memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
-                    if eleccion["tipo"] == "evento":
-                        evento_proactivo = eleccion["memoria"]
-                    elif eleccion["tipo"] == "tema_abierto":
-                        tema_abierto = eleccion["memoria"]
-                    elif eleccion["tipo"] == "recurso":
-                        memoria_recurso = eleccion["memoria"]
-            except Exception as e:
-                capturar_error(e, contexto="memoria_contextual")
-                print(f"⚠️ No se pudo elegir memoria contextual: {e}")
-
-        es_inicio_sesion = len(conversation) == 1
-        # num_interacciones ya se calculó arriba, antes del bloque paralelo.
-
-        # Primera vez: primer mensaje de la sesión Y sin memorias previas de otras sesiones
-        es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
-
-        # dias_inactivo, ultimo_modulo_critico y checkin_hoy ya se resolvieron
-        # arriba, dentro del bloque paralelo (_tarea_metadatos).
-
-        # Últimos 4 mensajes para las detecciones del router de módulos
-        historial_reciente = [m.model_dump() for m in conversation[-4:]]
-
-        # Racha de mensajes de Numa terminados en "?": el servidor la cuenta
-        # (el modelo no sabe auditar su propio historial) y el prompt recibe
-        # la señal ya calculada. Se recalcula en cada turno, así el bloqueo
-        # se levanta solo apenas Numa responde sin pregunta.
-        mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
-        preguntas_seguidas = 0
-        for contenido in reversed(mensajes_numa):
-            if contenido.rstrip().rstrip('"\'').endswith("?"):
-                preguntas_seguidas += 1
-            else:
-                break
-
-        system_prompt = construir_prompt(
-            perfil=perfil,
-            memorias=memorias_vigentes,
-            patrones=patrones,
-            es_inicio_sesion=es_inicio_sesion,
-            num_interacciones=num_interacciones,
-            es_primera_vez=es_primera_vez,
-            ubicacion=body.ubicacion.model_dump() if body.ubicacion else None,
-            dias_inactivo=dias_inactivo,
-            checkin_hoy=checkin_hoy,
-            checkin_recien_hecho=bool(body.checkin_recien_hecho),
-            crisis_score=crisis_score,
-            ultimo_modulo_critico=ultimo_modulo_critico,
-            historial_reciente=historial_reciente,
-            mood_actual=body.ultimo_mood,
-            ultimo_mensaje=ultimo_mensaje,
-            preguntas_seguidas=preguntas_seguidas,
-            hoy=hoy,
-            evento_proactivo=evento_proactivo,
-            tema_abierto=tema_abierto,
-            memoria_recurso=memoria_recurso,
-            router_hints=router_hints,
-        )
+        conversation = turno["conversation"]
+        crisis_score = turno["crisis_score"]
+        ultimo_mensaje = turno["ultimo_mensaje"]
+        hoy = turno["hoy"]
+        memorias_vigentes = turno["memorias_vigentes"]
+        ids_a_desactivar = turno["ids_a_desactivar"]
+        evento_proactivo = turno["evento_proactivo"]
+        tema_abierto = turno["tema_abierto"]
+        memoria_ctx_id = turno["memoria_ctx_id"]
+        preguntas_seguidas = turno["preguntas_seguidas"]
+        ultimo_modulo_critico = turno["ultimo_modulo_critico"]
 
         result = llm.generate_response(
             conversation=[m.model_dump() for m in conversation],
-            system_prompt=system_prompt,
+            system_prompt=turno["system_prompt"],
         )
+
+        # ── Router en paralelo: se resuelve DESPUÉS del LLM principal ────
+        # El prompt de arriba se armó SIN esperar al router (router_hints
+        # ok=False, solo keywords) — ver _preparar_turno. Acá, con el LLM
+        # principal ya resuelto, se consulta el resultado FINAL del router
+        # (normalmente ya terminó — es más rápido — así que esto no bloquea
+        # nada en la práctica) y se decide si hace falta actuar — ver
+        # _resolver_router_paralelo_chat().
+        resolucion = _resolver_router_paralelo_chat(
+            fut_router_paralelo=turno.get("_fut_router_paralelo"),
+            crisis_score=crisis_score,
+            ultimo_mensaje=ultimo_mensaje,
+            user_id=user_id,
+            background_tasks=background_tasks,
+            reconstruir_prompt=turno["_reconstruir_prompt"],
+            llamar_llm=lambda system_prompt: llm.generate_response(
+                conversation=[m.model_dump() for m in conversation],
+                system_prompt=system_prompt,
+            ),
+            evento_proactivo=evento_proactivo,
+            tema_abierto=tema_abierto,
+            memoria_ctx_id=memoria_ctx_id,
+        )
+        router_diag = resolucion["diag"]
+
+        if resolucion["respuesta_corte"] is not None:
+            # Riesgo EXPLÍCITO que las keywords no vieron: log aparte porque
+            # acá se corta, el log_event de más abajo no llega a correr.
+            log_event(
+                "chat_turn", endpoint="/chat", user_id=user_id, email=email,
+                crisis_hardcoded=True, risk_level="high", llm_provider=None,
+                **router_diag,
+                **turno.get("_tiempos", {}),
+            )
+            return resolucion["respuesta_corte"]
+
+        crisis_score = resolucion["crisis_score"]
+        evento_proactivo = resolucion["evento_proactivo"]
+        tema_abierto = resolucion["tema_abierto"]
+        memoria_ctx_id = resolucion["memoria_ctx_id"]
+        if resolucion["result"] is not None:
+            # Riesgo MEDIO que las keywords no vieron: se regeneró con el
+            # prompt correcto — esta es la respuesta a usar de acá en más.
+            result = resolucion["result"]
 
         # Filtro determinístico del "che": el modelo lo repite como muletilla
         # en casi cada mensaje a pesar del M02; se elimina acá.
@@ -698,16 +1103,10 @@ def chat_endpoint(
         # determinística. Solo aplica cuando se repite respecto del turno previo.
         mensaje_actual = result.get("message") or ""
         familia_actual = _familia_apertura(mensaje_actual)
-        if familia_actual:
-            apertura_previa = None
-            for m in reversed(conversation[:-1]):
-                if m.role == "assistant":
-                    apertura_previa = _familia_apertura(m.content)
-                    break
-            if apertura_previa == familia_actual:
-                aplanado = _aplanar_apertura(mensaje_actual)
-                if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
-                    result["message"] = aplanado
+        if familia_actual and familia_actual == turno["familia_apertura_previa"]:
+            aplanado = _aplanar_apertura(mensaje_actual)
+            if aplanado and aplanado != mensaje_actual and len(aplanado) >= 10:
+                result["message"] = aplanado
 
         # Anti-repetición de cierres de presencia: si el turno anterior de Numa
         # ya cerró con "estoy acá"/"te leo"/etc. y este también, recortamos el
@@ -716,18 +1115,13 @@ def chat_endpoint(
         if (
             crisis_score < 0.35
             and not ultimo_modulo_critico
+            and turno["previo_cierre_presencia"]
             and _cierra_con_presencia(mensaje_actual)
         ):
-            previo_cierre_presencia = False
-            for m in reversed(conversation[:-1]):
-                if m.role == "assistant":
-                    previo_cierre_presencia = _cierra_con_presencia(m.content)
-                    break
-            if previo_cierre_presencia:
-                recortado = _quitar_cierre_presencia(mensaje_actual)
-                # Guardia anti-cortante: solo si queda un cuerpo con sustancia.
-                if recortado and len(recortado) >= 40 and len(recortado) >= 0.4 * len(mensaje_actual):
-                    result["message"] = recortado
+            recortado = _quitar_cierre_presencia(mensaje_actual)
+            # Guardia anti-cortante: solo si queda un cuerpo con sustancia.
+            if recortado and len(recortado) >= 40 and len(recortado) >= 0.4 * len(mensaje_actual):
+                result["message"] = recortado
 
         # Enforcement de la regla de preguntas: con racha de 2+ el prompt ya
         # prohibió preguntar; si el modelo desobedece igual, se recorta la
@@ -746,58 +1140,9 @@ def chat_endpoint(
                 result["message"] = recortado
 
         memorias_llm: List[Dict[str, Any]] = result.get("memories") or []
-
-        # Validar/clampear metadata de cada memoria antes de persistir.
-        # El dedup difuso descarta el mismo hecho reformulado (contra las
-        # memorias ya conocidas y contra la otra memoria del mismo turno).
-        es_post_ejercicio = ultimo_mensaje.strip().startswith("[Post-ejercicio")
-        contenidos_conocidos = [(m.get("content") or "") for m in memorias_vigentes]
-        memorias_validadas: List[Dict[str, Any]] = []
-        for m in memorias_llm:
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            if _es_memoria_duplicada(content, contenidos_conocidos):
-                continue
-            prioridad = _normalizar_prioridad(
-                content,
-                _validar_priority(m.get("priority")),
-                crisis_score,
-                es_post_ejercicio,
-            )
-            mem: Dict[str, Any] = {
-                "content":  content,
-                "category": _validar_category(m.get("category")),
-                "priority": prioridad,
-            }
-            # Memoria proactiva: si el LLM marcó un evento con fecha, lo validamos.
-            event_title, event_date = _validar_evento(m.get("event"), content, hoy)
-            if event_title and event_date:
-                mem["event_title"] = event_title
-                mem["event_date"] = event_date
-            # Tema abierto: solo memorias SIN fecha (el ciclo de los eventos ya
-            # lo maneja followed_up). Recurso: algo que el usuario dijo que le
-            # hizo bien. Ambos son booleanos del LLM → clampeo estricto.
-            if m.get("open") is True and not (event_title and event_date):
-                mem["status"] = "open"
-            if m.get("helped") is True:
-                mem["helped_before"] = True
-            # Respaldo server-side de los flags (como detectar_evento_con_fecha
-            # respalda los eventos): el LLM sub-produce open/helped y sin ellos
-            # el canal proactivo se queda sin material. Los detectores leen el
-            # content ya redactado en tercera persona (vocabulario de M08).
-            if "status" not in mem and not (event_title and event_date) and detectar_tema_abierto(content):
-                mem["status"] = "open"
-            if "helped_before" not in mem and detectar_recurso(content):
-                mem["helped_before"] = True
-            memorias_validadas.append(mem)
-            contenidos_conocidos.append(content)
-
-        # Respaldo: si el LLM no guardó ninguna memoria, detectar evento próximo con fecha
-        if not memorias_validadas:
-            evento = detectar_evento_con_fecha(ultimo_mensaje, hoy)
-            if evento:
-                memorias_validadas.append(evento)
+        memorias_validadas = _procesar_memorias_turno(
+            memorias_llm, memorias_vigentes, ultimo_mensaje, hoy, crisis_score,
+        )
 
         # Sin early-return: reportar el nivel real de señal detectada
         risk_level = "medium" if crisis_score >= 0.35 else "none"
@@ -807,6 +1152,8 @@ def chat_endpoint(
             llm_provider=llm_info.get("provider"),
             llm_model=llm_info.get("model"),
         )
+        tiempos = turno.get("_tiempos", {})
+        t_preparar_turno_ms = _sumar_tiempos(tiempos)
         log_event(
             "chat_turn",
             endpoint="/chat",
@@ -820,55 +1167,35 @@ def chat_endpoint(
             risk_level=risk_level,
             suggested_action=result.get("suggested_action"),
             memorias_nuevas=len(memorias_validadas),
-            # Desglose de latencia ANTES del LLM principal — ver el bloque
-            # paralelo más arriba. t_paralelo_ms es el tiempo de PARED real
-            # (router/memorias/patrones/metadatos se solapan a propósito);
-            # los 4 "t_*_ms" individuales quedan para diagnóstico, sumados
-            # exagerarían el total porque corren al mismo tiempo.
-            t_paralelo_ms=t_paralelo_ms,
-            t_router_ms=t_router_ms,
-            t_memorias_ms=t_memorias_ms,
-            t_patrones_ms=t_patrones_ms,
-            t_metadatos_ms=t_metadatos_ms,
+            # Desglose de dónde se va el tiempo ANTES de llamar al LLM
+            # principal — ver _checkpoint() en _preparar_turno. Sumado a
+            # llm_latency_ms de arriba da el total real del turno.
+            t_preparar_turno_ms=t_preparar_turno_ms,
+            # router_diag trae router_provider/router_model/router_reintento,
+            # y del router en paralelo (ver _resolver_router_paralelo_chat):
+            # t_router_paralelo_ms (tiempo real, normalmente solapado con el
+            # LLM principal, no sumado), router_score_paralelo, y
+            # router_accion (None si no escaló nada — el caso común — o
+            # "regenero" si este log ya corresponde a la respuesta regenerada;
+            # "corte" nunca llega acá, tiene su propio log_event más arriba).
+            **router_diag,
+            **tiempos,
         )
 
-        # Follow-up inteligente (req. 6): si el usuario habló de un evento ya ocurrido,
-        # marcarlo followed_up para no volver a preguntar cómo le fue. Si dijo que
-        # AÚN no pasó ("es el martes que viene"), se re-fecha y queda abierto.
-        background_tasks.add_task(marcar_evento_followup, user_id, ultimo_mensaje, hoy)
-
-        # Ciclo de temas abiertos: si el usuario contó el desenlace de un tema
-        # abierto (sin fecha), se cierra para no volver a preguntarle.
-        background_tasks.add_task(cerrar_temas_abiertos, user_id, ultimo_mensaje)
-
-        # Cooldown de mención proactiva (req. 8): lo que sea que este turno trajo
-        # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
-        # para no insistir en cada mensaje con el mismo tema.
-        # Además, lo MENCIONADO cierra su ciclo (regla de producto): un evento ya
-        # ocurrido no se re-pregunta ("followup") y un tema abierto ya traído se
-        # cierra ("cerrar_tema" — si sigue pendiente, la memoria nueva del turno
-        # lo re-captura). Eventos futuros y recursos solo arrancan cooldown.
-        if memoria_ctx_id:
-            cierre = None
-            if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
-                cierre = "followup"
-            elif tema_abierto:
-                cierre = "cerrar_tema"
-            background_tasks.add_task(marcar_proactivo_insertado, memoria_ctx_id, cierre)
-
-        if conversation:
-            background_tasks.add_task(
-                conversation_repo.save,
-                user_id,
-                conversation[-1].content,
-                result["message"],
-                memorias_validadas,
-                result.get("mood"),
-            )
-            if ids_a_desactivar:
-                background_tasks.add_task(conversation_repo.deactivate_memories, ids_a_desactivar)
-            if memorias_validadas:
-                invalidate_patterns_cache(user_id)
+        _disparar_tareas_turno(
+            background_tasks,
+            user_id=user_id,
+            conversation=conversation,
+            mensaje_final=result["message"],
+            mood=result.get("mood"),
+            memorias_validadas=memorias_validadas,
+            ids_a_desactivar=ids_a_desactivar,
+            evento_proactivo=evento_proactivo,
+            tema_abierto=tema_abierto,
+            memoria_ctx_id=memoria_ctx_id,
+            ultimo_mensaje=ultimo_mensaje,
+            hoy=hoy,
+        )
 
         return {
             "message":          result["message"],
