@@ -159,16 +159,48 @@ def max_tokens_for(base: int, model: str | None = None) -> int:
 _OPENROUTER_HEADROOM = 1000
 
 
+# Modelos de OpenRouter confirmados SIN razonamiento obligatorio, donde
+# apagarlo entero (en vez de "effort: low") es seguro y bastante más rápido.
+# Aplica a /chat (llamada sin streaming: lo que pesa es el tiempo hasta el
+# JSON completo) Y a /chat/stream — modo llamada incluido (llamada streaming:
+# lo que pesa es el silencio antes del primer chunk hablable, t_primer_delta_ms).
+# Medido 2026-08-30/31 contra el modelo real (scripts/test_reasoning_effort.py
+# y test_reasoning_effort_streaming.py, 8 corridas c/u, formato/JSON válido
+# en las 8 en ambos):
+#   /chat (sync):    mediana 2866ms → 1991ms (-30%)
+#   /chat/stream:    primer chunk mediana 1410ms → 1014ms (-28%), y el peor
+#                     caso baja de 3686ms a 1147ms — el silencio largo
+#                     ocasional en llamada, que es justo lo que más rompe la
+#                     sensación de charla en vivo, casi desaparece.
+# Calidad de la respuesta comparada a mano en los dos modos, sin degradación
+# visible.
+#
+# Es un allowlist explícito por modelo exacto, no un prefijo tipo "openai/*":
+# el docstring de extra_body_for ya advierte que GPT-5.6 Pro (que también
+# empieza con "openai/") SÍ tiene razonamiento obligatorio y da 400 con
+# enabled=false. Si CHAT_MODEL o CHAT_MODEL_LLAMADA cambian, hay que correr
+# los scripts de nuevo antes de sumar el modelo nuevo acá — nunca asumir por
+# el nombre. (Si CHAT_MODEL_LLAMADA está seteado en el deploy real a un
+# modelo distinto de CHAT_MODEL, esta optimización no lo cubre todavía — el
+# allowlist matchea por nombre exacto, no por rol/modo.)
+_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna"}
+
+
 def extra_body_for(provider: str | None, model: str | None = None) -> dict:
     """extra_body correcto según proveedor.
 
-    OpenRouter: parámetro unificado `reasoning.effort=low` — los modelos con
-    razonamiento obligatorio (Grok, Claude Fable, GPT-5.6 Pro) lo aceptan
-    (enabled=false les da 400) y los no-razonadores lo ignoran.
+    OpenRouter: parámetro unificado `reasoning.effort=low` por default — los
+    modelos con razonamiento obligatorio (Grok, Claude Fable, GPT-5.6 Pro) lo
+    aceptan (enabled=false les da 400) y los no-razonadores lo ignoran. Los
+    modelos en _MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO usan enabled=false en
+    vez de effort=low — confirmado seguro y más rápido para esos, ver arriba.
     Groq (o proveedor desconocido): la lógica por familia de siempre.
     """
     if provider == "openrouter":
-        body: dict = {"reasoning": {"effort": "low"}}
+        if model in _MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO:
+            body: dict = {"reasoning": {"enabled": False}}
+        else:
+            body = {"reasoning": {"effort": "low"}}
         if model and model.startswith("openai/"):
             # Los modelos OpenAI en OpenRouter tienen 2 backends reales detrás
             # (OpenAI directo y Azure) que NO comparten cache entre sí — cada
