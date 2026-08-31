@@ -150,16 +150,40 @@ def max_tokens_for(base: int, model: str | None = None) -> int:
 _OPENROUTER_HEADROOM = 1000
 
 
+# Modelos de OpenRouter confirmados SIN razonamiento obligatorio, donde
+# apagarlo entero (en vez de "effort: low") es seguro y bastante más rápido.
+# /chat no usa streaming (llm_client.generate_response espera el JSON
+# completo, no el primer token) — ahí lo que pesa es el tiempo de generar
+# TODO el razonamiento antes del JSON final, no la latencia de red al
+# proveedor. Medido 2026-08-30 contra el modelo real de producción
+# (scripts/test_reasoning_effort.py, 8 corridas c/u, JSON válido en las 8):
+# mediana 2866ms con effort=low → 1991ms con enabled=false (-30%), y la
+# varianza baja mucho (1798-2156ms vs 1888-4826ms, sin los outliers de
+# 4-5s). Calidad de la respuesta comparada a mano, sin degradación visible.
+#
+# Es un allowlist explícito por modelo exacto, no un prefijo tipo "openai/*":
+# el docstring de extra_body_for ya advierte que GPT-5.6 Pro (que también
+# empieza con "openai/") SÍ tiene razonamiento obligatorio y da 400 con
+# enabled=false. Si CHAT_MODEL cambia, hay que correr el script de nuevo
+# antes de sumar el modelo nuevo acá — nunca asumir por el nombre.
+_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna"}
+
+
 def extra_body_for(provider: str | None, model: str | None = None) -> dict:
     """extra_body correcto según proveedor.
 
-    OpenRouter: parámetro unificado `reasoning.effort=low` — los modelos con
-    razonamiento obligatorio (Grok, Claude Fable, GPT-5.6 Pro) lo aceptan
-    (enabled=false les da 400) y los no-razonadores lo ignoran.
+    OpenRouter: parámetro unificado `reasoning.effort=low` por default — los
+    modelos con razonamiento obligatorio (Grok, Claude Fable, GPT-5.6 Pro) lo
+    aceptan (enabled=false les da 400) y los no-razonadores lo ignoran. Los
+    modelos en _MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO usan enabled=false en
+    vez de effort=low — confirmado seguro y más rápido para esos, ver arriba.
     Groq (o proveedor desconocido): la lógica por familia de siempre.
     """
     if provider == "openrouter":
-        body: dict = {"reasoning": {"effort": "low"}}
+        if model in _MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO:
+            body: dict = {"reasoning": {"enabled": False}}
+        else:
+            body = {"reasoning": {"effort": "low"}}
         if model and model.startswith("openai/"):
             # Los modelos OpenAI en OpenRouter tienen 2 backends reales detrás
             # (OpenAI directo y Azure) que NO comparten cache entre sí — cada
