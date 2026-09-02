@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Form, Depends
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -220,6 +220,16 @@ class ChatRequest(BaseModel):
     # buffer a 0 (audio arranca antes) y le pide al LLM respuestas más
     # cortas para voz (ver _INSTRUCCION_MODO_LLAMADA en llm_client.py).
     modo_llamada: Optional[bool] = False
+
+
+class ChatVozRequest(BaseModel):
+    """Igual que ChatRequest pero SIN el último mensaje del usuario: ese es
+    el audio que viaja aparte, en el mismo request multipart (ver
+    /chat/stream/voz). Solo lo arma LlamadaOverlay.tsx."""
+    conversation: List[Message] = []
+    perfil: Optional[Dict[str, Any]] = None
+    ubicacion: Optional[UbicacionData] = None
+    ultimo_mood: Optional[str] = None
 
 
 class ImportMessage(BaseModel):
@@ -1549,6 +1559,139 @@ def chat_stream_endpoint(
     # Response explícito y hay que pasárselo a mano para que corran.
     return StreamingResponse(
         generador,
+        media_type="application/x-ndjson",
+        background=background_tasks,
+    )
+
+
+@router.post("/chat/stream/voz")
+@limiter.limit("18/minute")
+async def chat_stream_voz_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    audio: UploadFile = File(...),
+    payload: str = Form(...),
+    auth_user_id: str = Depends(get_current_user_id),
+):
+    """Como /chat/stream, pero recibe el AUDIO del usuario en vez de texto ya
+    transcripto: transcribe del lado del servidor y sigue con el MISMO
+    pipeline (_preparar_turno + _stream_chat_respuesta) en un solo viaje de
+    red, no dos.
+
+    Antes LlamadaOverlay.tsx hacía POST /speech-to-text (esperar la
+    transcripción completa) y RECIÉN AHÍ POST /chat/stream: dos requests HTTP
+    secuenciales, cada uno con su propio round-trip de red, antes de que el
+    LLM arrancara siquiera a generar. Acá el cliente sube el audio una sola
+    vez, el servidor transcribe (Groq, ~200ms típico — ver el evento
+    "stt_turn" en los logs) y sigue directo al streaming: se ahorra el
+    round-trip completo de "mandar el texto de vuelta al cliente para que el
+    cliente lo reenvíe".
+
+    Exclusivo de modo llamada (LlamadaOverlay.tsx) — el chat escrito sigue
+    con /chat/stream tal cual (nunca manda audio), y la nota de voz del chat
+    escrito (VoiceRecorder.tsx) sigue con /speech-to-text tal cual: ahí el
+    usuario REVISA el texto transcripto antes de mandarlo a ningún lado, no
+    hay streaming inmediato que fusionar.
+
+    `payload` es un JSON (ChatVozRequest) mandado como campo de texto del
+    mismo form-data que el audio — así conversation/perfil/ubicacion viajan
+    con su forma real (listas/objetos), no aplastados a strings sueltos.
+    """
+    user_id = auth_user_id
+    email = getattr(request.state, "user_email", None)
+    # Como en /chat/stream: ANTES de transcribir a propósito, para que
+    # t_primer_delta_ms incluya TODO el silencio real que el usuario
+    # experimenta — STT + preparar el turno + LLM, no solo el LLM.
+    t_inicio_request = time.perf_counter()
+
+    try:
+        body_previo = ChatVozRequest(**json.loads(payload))
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload inválido")
+
+    try:
+        audio_bytes = await audio.read()
+    except Exception:
+        raise HTTPException(status_code=400, detail="No se pudo leer el audio")
+    if len(audio_bytes) < 5000:
+        raise HTTPException(status_code=400, detail="Audio demasiado corto")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio demasiado largo")
+
+    try:
+        # A un thread, NO en el event loop — mismo motivo que en
+        # /speech-to-text (ver ese endpoint): es una llamada HTTP bloqueante a
+        # Groq, y este endpoint es `async def` por el await de arriba.
+        inicio_stt = time.perf_counter()
+        texto = await run_in_threadpool(speech_to_text, audio_bytes, audio.filename)
+        t_speech_to_text_ms = round((time.perf_counter() - inicio_stt) * 1000)
+    except Exception as e:
+        capturar_error(e, contexto="speech_to_text_voz")
+        raise HTTPException(status_code=503, detail="Servicio de transcripción no disponible")
+
+    texto = (texto or "").strip()
+    log_event(
+        "stt_turn", endpoint="/chat/stream/voz", user_id=user_id, email=email,
+        t_speech_to_text_ms=t_speech_to_text_ms, audio_bytes=len(audio_bytes),
+        texto_len=len(texto),
+    )
+
+    if not texto:
+        # Nadie dijo nada entendible (silencio, ruido, un "eh"). Mismo
+        # criterio que ya tenía el cliente cuando este chequeo vivía ahí (ver
+        # cortarTurno() en LlamadaOverlay.tsx, versión anterior) — no tiene
+        # sentido gastar un turno completo de LLM en esto. Un evento propio en
+        # vez de reusar "final" vacío: así el cliente no tiene que inspeccionar
+        # el contenido para distinguir "no dijo nada" de "dijo algo y Numa
+        # respondió con un mensaje vacío" (no debería pasar, pero que el
+        # contrato no dependa de que nunca pase).
+        def _vacio():
+            yield _evento_ndjson({"type": "vacio"})
+        return StreamingResponse(_vacio(), media_type="application/x-ndjson")
+
+    body = ChatRequest(
+        conversation=body_previo.conversation + [Message(role="user", content=texto)],
+        perfil=body_previo.perfil,
+        ubicacion=body_previo.ubicacion,
+        ultimo_mood=body_previo.ultimo_mood,
+        modo_llamada=True,
+    )
+
+    try:
+        # También a un thread: _preparar_turno hace llamadas bloqueantes
+        # (Supabase, el verificador de crisis si hay keywords) y este
+        # endpoint es async — igual que arriba con speech_to_text.
+        turno = await run_in_threadpool(_preparar_turno, body, user_id, background_tasks)
+    except Exception:
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+    if turno["crisis_confirmada"]:
+        log_event(
+            "chat_turn", endpoint="/chat/stream/voz", user_id=user_id, email=email,
+            modo_llamada=True, context_router_off=True,
+            crisis_hardcoded=True, risk_level="high", llm_provider=None,
+            t_speech_to_text_ms=t_speech_to_text_ms,
+            **turno.get("_tiempos", {}),
+        )
+        generador_base = _stream_ndjson_fijo(turno["respuesta_crisis"])
+    else:
+        generador_base = _stream_chat_respuesta(
+            turno, user_id, background_tasks, email=email,
+            modo_llamada=True, t_inicio_request=t_inicio_request,
+        )
+
+    def _con_texto_usuario():
+        # Primera línea del stream, SIEMPRE: el cliente ya no transcribe él
+        # mismo (eso pasó acá arriba), así que es la única forma que tiene de
+        # saber qué entendió el servidor — lo necesita para sumar el mensaje
+        # del usuario al historial visible del chat (onTurnoCompleto/
+        # onTurnoCrisis/onEjercicioSugerido en LlamadaOverlay.tsx ya lo
+        # esperaban como parámetro, antes se lo pasaban ellos mismos).
+        yield _evento_ndjson({"type": "texto_usuario", "text": texto})
+        yield from generador_base
+
+    return StreamingResponse(
+        _con_texto_usuario(),
         media_type="application/x-ndjson",
         background=background_tasks,
     )
