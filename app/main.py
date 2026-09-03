@@ -192,6 +192,29 @@ def serve_sw():
 
 
 # ==========================
+# VERSIÓN DE LA APP MÓVIL
+# ==========================
+# Última versión (app.json → expo.version, la que se muestra en las tiendas)
+# de cada build que subimos a las tiendas. numa-mobile la consulta al
+# arrancar y, si la propia instalada quedó atrás, muestra un aviso
+# (dismissible, no bloquea el uso) con un link a la tienda correspondiente.
+#
+# Se actualiza A MANO cada vez que se sube una versión nueva a las tiendas —
+# no hay forma confiable de consultarle esto a Apple/Google en vivo. Si te
+# olvidás de tocar esto, el peor caso es que el aviso no aparece (nunca al
+# revés: nunca le va a decir a alguien ya actualizado que está atrás).
+ULTIMA_VERSION_APP = {
+    "ios": "1.1.0",
+    "android": "1.1.0",
+}
+
+
+@app.get("/api/version")
+def version_app():
+    return ULTIMA_VERSION_APP
+
+
+# ==========================
 # PUSH NOTIFICATIONS
 # ==========================
 
