@@ -38,6 +38,17 @@ from app.crisis_detector import detectar_crisis, respuesta_contencion_generica
 from app.crisis_verifier import confirmar_riesgo_real
 from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
 from app.speech_service import speech_to_text
+from app.text_filters import (
+    _quitar_pregunta_final,
+    _quitar_che,
+    _cierra_con_presencia,
+    _quitar_cierre_presencia,
+    _familia_apertura,
+    _aplanar_apertura,
+)
+from app.streaming_buffer import BufferStreamingMensaje
+from fastapi.responses import StreamingResponse
+import json
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.feedback_repository import FeedbackRepository
@@ -68,143 +79,6 @@ _RE_MEMORIA_DE_OIDAS = re.compile(
     r"según le|segun le|alguien le dijo|le comentaron)",
     re.IGNORECASE,
 )
-
-
-def _quitar_pregunta_final(texto: str) -> str:
-    """Recorta la pregunta final del mensaje conservando lo afirmativo.
-
-    Red de seguridad para la regla de preguntas: si el LLM ignora el bloqueo
-    del prompt y vuelve a cerrar con pregunta, se corta acá. En vez de borrar
-    la oración entera, intenta conservar la parte afirmativa antes del '¿'
-    (ej: "Hace días que te sentís así, ¿pasó algo?" → "Hace días que te
-    sentís así."). Devuelve "" si el mensaje entero era pregunta (en ese caso
-    se deja el original).
-    """
-    partes = re.split(r"(?<=[.!?…])\s+", texto.strip())
-    while partes and partes[-1].rstrip("\"'” ").endswith("?"):
-        ultima = partes.pop()
-        idx = ultima.find("¿")
-        if idx > 0:
-            prefijo = ultima[:idx].rstrip(" ,;:—–-")
-            if len(prefijo) >= 12:
-                if not prefijo.endswith((".", "!", "…")):
-                    prefijo += "."
-                partes.append(prefijo)
-    return " ".join(partes).strip()
-
-
-def _quitar_che(texto: str) -> str:
-    """Saca por completo la muletilla "che" del mensaje del LLM.
-
-    El prompt (M02) ya pide usarla con cuentagotas, pero el LLM la mete por
-    inercia en casi cada mensaje (suena a guión). Este filtro la elimina de
-    forma determinística y recompone la puntuación y las mayúsculas afectadas.
-    No toca "noche", "leche", "coche", etc. (usa límites de palabra).
-    """
-    if "che" not in texto.lower():
-        return texto
-
-    original = texto
-    t = texto
-
-    # "che" al inicio de una frase (arranque del texto o tras . ! ? …):
-    # "Che, parece..." → "Parece...";  ". Che, ¿estás?" → ". ¿Estás?"
-    t = re.sub(
-        r"(^|[.!?…]\s+)che\b\s*[,:;]?\s*([¿¡]*)([a-záéíóúñ])",
-        lambda m: m.group(1) + m.group(2) + m.group(3).upper(),
-        t, flags=re.IGNORECASE,
-    )
-    # "..., che, ..." en el medio → una sola coma
-    t = re.sub(r"\s*,\s*che\b\s*,", ",", t, flags=re.IGNORECASE)
-    # "..., che." / "..., che!" al cierre → quita ", che", deja la puntuación
-    t = re.sub(r"\s*,\s*che\b", "", t, flags=re.IGNORECASE)
-    # cualquier "che" suelto que haya quedado
-    t = re.sub(r"\s*\bche\b\s*", " ", t, flags=re.IGNORECASE)
-
-    # Recomponer espacios, puntuación y comas/espacios sueltos al inicio
-    t = re.sub(r"\s+([,.;:!?…])", r"\1", t)
-    t = re.sub(r"\s{2,}", " ", t).strip()
-    t = re.sub(r"^[\s,;:]+", "", t)
-
-    # Si el recorte dejó algo degenerado, mejor el original
-    if len(t) < 2:
-        return original
-    return t
-
-
-# ── Anti-repetición de cierres de presencia ───────────────────────────────
-# El modelo cierra casi cada mensaje con una fórmula de presencia ("estoy acá",
-# "te leo", "acá ando"...). Un cierre así está bien de vez en cuando, pero turno
-# a turno suena a bot (el usuario del chat que motivó esto detectó el patrón al
-# instante). M05 lo desaconseja; esta es la red determinística: si el mensaje
-# anterior de Numa YA cerró con presencia y este también, se recorta el cierre
-# de este. NO aplica en crisis (ahí "Estoy acá" es un paso válido y buscado).
-_PRESENCIA_CIERRE_RE = re.compile(
-    r"(?<![\wñ])(?:"
-    r"ac[áa]\s+estoy|estoy\s+ac[áa]|ac[áa]\s+ando|ac[áa]\s+andamos|ac[áa]\s+estamos|"
-    r"aqu[íi]\s+estoy|ac[áa]\s+me\s+ten[ée]s|"
-    r"te\s+leo|te\s+escucho|"
-    r"no\s+me\s+voy\s+a\s+ning[úu]n\s+lado|no\s+me\s+muevo|"
-    r"cuando\s+quieras\s+seguimos|cuando\s+quieras,\s+seguimos"
-    r")(?![\wñ])",
-    re.IGNORECASE,
-)
-
-
-def _cierra_con_presencia(texto: str) -> bool:
-    """True si alguna de las últimas ~2 oraciones es un cierre CORTO de presencia
-    ('Acá estoy.', 'Te leo, sin apuro.'). El límite de longitud evita marcar una
-    oración larga con contenido propio que apenas menciona 'te leo'."""
-    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
-    for p in partes[-2:]:
-        if _PRESENCIA_CIERRE_RE.search(p) and len(p) <= 60:
-            return True
-    return False
-
-
-def _quitar_cierre_presencia(texto: str) -> str:
-    """Saca las oraciones finales que son solo cierre de presencia, dejando el
-    cuerpo con contenido. Devuelve '' si el mensaje era puro cierre."""
-    partes = re.split(r"(?<=[.!?…])\s+", (texto or "").strip())
-    while partes and _PRESENCIA_CIERRE_RE.search(partes[-1]) and len(partes[-1]) <= 70:
-        partes.pop()
-    return " ".join(partes).strip()
-
-
-# ── Anti-tic de apertura repetida ─────────────────────────────────────────
-# El modelo, sobre todo al reflejar, se engancha con una misma fórmula de
-# apertura ("Sentís que...", "Es como que...") y abre varios mensajes seguidos
-# igual. M05 ya lo prohíbe, pero cuando lo desobedece se aplana acá: se quita
-# la fórmula y el resto queda como afirmación ("Sentís que todo te pesa." →
-# "Todo te pesa."). Solo se aplana si el mensaje ANTERIOR de Numa abrió con la
-# MISMA familia — un único uso es una herramienta válida de reflejo.
-# "Es como si..." queda afuera a propósito: al sacarlo deja subjuntivo colgado.
-_APERTURAS_REPETIBLES = [
-    ("sentis_que",  re.compile(r"^\s*sent[ií]s\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
-    ("siento_que",  re.compile(r"^\s*siento\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
-    ("es_como_que", re.compile(r"^\s*es\s+como\s+que\s+(.+)$",   re.IGNORECASE | re.DOTALL)),
-    ("parece_que",  re.compile(r"^\s*parece\s+que\s+(.+)$",      re.IGNORECASE | re.DOTALL)),
-]
-
-
-def _familia_apertura(texto: str) -> Optional[str]:
-    """Clave de familia si el texto abre con una fórmula repetible, o None."""
-    for clave, rx in _APERTURAS_REPETIBLES:
-        if rx.match(texto or ""):
-            return clave
-    return None
-
-
-def _aplanar_apertura(texto: str) -> str:
-    """Quita la fórmula de apertura y capitaliza el resto.
-    'Sentís que todo te pesa.' → 'Todo te pesa.'"""
-    for _clave, rx in _APERTURAS_REPETIBLES:
-        m = rx.match(texto or "")
-        if m:
-            resto = m.group(1).lstrip()
-            if resto:
-                return resto[0].upper() + resto[1:]
-    return texto
 
 
 # Ventana de validez de un event_date: desde ayer (tolerancia) hasta ~13 meses.
@@ -1209,6 +1083,301 @@ def chat_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+
+def _evento_ndjson(obj: Dict[str, Any]) -> str:
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
+
+def _stream_ndjson_fijo(payload: Dict[str, Any]):
+    """Generador para cuando la respuesta YA está resuelta sin pasar por el
+    LLM (crisis confirmada). Mismo contrato NDJSON que el streaming real para
+    que el frontend no necesite un código de lectura distinto para ese caso."""
+    yield _evento_ndjson({"type": "crisis", "text": payload["message"]})
+    yield _evento_ndjson({
+        "type": "final",
+        "mood": payload["mood"],
+        "suggested_action": payload.get("suggested_action"),
+        "risk_level": payload.get("risk_level"),
+        "nuevas_memorias": payload.get("nuevas_memorias"),
+    })
+
+
+def _stream_chat_respuesta(
+    turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks, email: Optional[str] = None,
+    t_inicio_request: Optional[float] = None,
+):
+    """Generador principal de /chat/stream: llama al LLM en streaming, va
+    filtrando/emitiendo oraciones vía BufferStreamingMensaje y al final
+    dispara el mismo post-procesamiento de memorias/background que /chat.
+
+    Puerto de staging, acotado a chat escrito (sin modo_llamada — ChatRequest
+    en main no tiene ese campo, así que la retención del buffer queda siempre
+    en el default).
+
+    t_inicio_request: perf_counter() tomado al ENTRAR al endpoint. Sirve para
+    medir t_primer_delta_ms — ver el bloque de instrumentación más abajo.
+    """
+    conversation = turno["conversation"]
+    crisis_score = turno["crisis_score"]
+    ultimo_mensaje = turno["ultimo_mensaje"]
+    hoy = turno["hoy"]
+    memorias_vigentes = turno["memorias_vigentes"]
+    ids_a_desactivar = turno["ids_a_desactivar"]
+    evento_proactivo = turno["evento_proactivo"]
+    tema_abierto = turno["tema_abierto"]
+    memoria_ctx_id = turno["memoria_ctx_id"]
+    preguntas_seguidas = turno["preguntas_seguidas"]
+    ultimo_modulo_critico = turno["ultimo_modulo_critico"]
+
+    buf = BufferStreamingMensaje(
+        familia_apertura_previa=turno["familia_apertura_previa"],
+        previo_cierre_presencia=turno["previo_cierre_presencia"],
+        preguntas_seguidas=preguntas_seguidas,
+        crisis_score=crisis_score,
+        ultimo_modulo_critico=ultimo_modulo_critico,
+    )
+
+    # ── Instrumentación de latencia PERCIBIDA ────────────────────────
+    # llm_latency_ms mide el stream COMPLETO (se calcula recién al parsear el
+    # JSON de metadata, que el LLM manda último), así que NO es lo que el
+    # usuario siente: para cuando ese número está, el mensaje ya se empezó a
+    # revelar hace rato. Estos dos miden lo que realmente importa:
+    #
+    #   t_primer_delta_ms      → desde que entra el request hasta que sale la
+    #                            PRIMERA oración.
+    #   t_llm_primer_token_ms  → desde que arranca el generador hasta el primer
+    #                            pedazo de texto del LLM.
+    llm_chunks = 0
+    t_llm_ultimo_token_ms: Optional[float] = None
+
+    t_inicio_stream = time.perf_counter()
+    t_primer_delta_ms: Optional[float] = None
+    t_llm_primer_token_ms: Optional[float] = None
+
+    def _marcar_primer_delta() -> None:
+        nonlocal t_primer_delta_ms
+        if t_primer_delta_ms is None:
+            base = t_inicio_request if t_inicio_request is not None else t_inicio_stream
+            t_primer_delta_ms = round((time.perf_counter() - base) * 1000, 1)
+
+    # ── Vigilancia del context_router en paralelo ─────────────────────
+    # El router se lanzó al empezar el turno y sigue corriendo mientras el LLM
+    # principal genera. Se consulta SIN bloquear (done()) entre oración y
+    # oración: si nunca termina, el turno sigue normal y no cuesta nada.
+    fut_router_par = turno.get("_fut_router_paralelo")
+    router_par_score = 0.0
+    t_router_paralelo_ms: Optional[float] = None
+    corte_por_riesgo = False
+
+    def _riesgo_detectado() -> bool:
+        """True si el router ya respondió y marcó riesgo explícito.
+
+        No bloquea: si todavía no terminó devuelve False y se sigue
+        emitiendo. Ese es el trade-off aceptado de correrlo en paralelo —
+        puede llegar tarde, pero llega, y es infinitamente mejor que no
+        correrlo (que dejaba las frases con método sin cobertura).
+        """
+        nonlocal router_par_score, t_router_paralelo_ms, corte_por_riesgo
+        if fut_router_par is None or corte_por_riesgo or not fut_router_par.done():
+            return False
+        try:
+            hints, t_router_paralelo_ms = fut_router_par.result()
+        except Exception as e:
+            capturar_error(e, contexto="router_paralelo")
+            return False
+        if not hints.get("ok"):
+            return False
+        router_par_score = score_riesgo_router(hints.get("senal_riesgo", "none"))
+        corte_por_riesgo = router_par_score >= UMBRAL_CORTE_LLAMADA
+        return corte_por_riesgo
+
+    metadata: Optional[Dict[str, Any]] = None
+    try:
+        for tipo, valor in llm.generate_response_stream(
+            conversation=[m.model_dump() for m in conversation],
+            system_prompt=turno["system_prompt"],
+        ):
+            if tipo == "mensaje":
+                ahora = time.perf_counter()
+                llm_chunks += 1
+                t_llm_ultimo_token_ms = round((ahora - t_inicio_stream) * 1000, 1)
+                if t_llm_primer_token_ms is None:
+                    t_llm_primer_token_ms = t_llm_ultimo_token_ms
+                for oracion in buf.feed(valor):
+                    # Se chequea ANTES de emitir, no después: si el router ya
+                    # avisó, esta oración no se manda. Lo que ya salió no se
+                    # puede deshacer, pero de acá en más se corta.
+                    if _riesgo_detectado():
+                        break
+                    _marcar_primer_delta()
+                    yield _evento_ndjson({"type": "delta", "text": oracion})
+            else:
+                metadata = valor
+            if corte_por_riesgo:
+                break
+
+        if not corte_por_riesgo:
+            for oracion in buf.cerrar():
+                if _riesgo_detectado():
+                    break
+                _marcar_primer_delta()
+                yield _evento_ndjson({"type": "delta", "text": oracion})
+
+        # Última chance: el router puede haber terminado justo al final, con
+        # el mensaje ya emitido. Igual conviene cortar y mostrar la tarjeta —
+        # el usuario dijo algo que necesita los teléfonos a la vista.
+        if not corte_por_riesgo and fut_router_par is not None:
+            _riesgo_detectado()
+
+        if corte_por_riesgo:
+            # Mismo tipo de evento que la crisis por keywords: el cliente ya
+            # sabe manejarlo (muestra la tarjeta con los teléfonos tocables
+            # en vez del mensaje que se estaba armando).
+            yield _evento_ndjson({
+                "type": "crisis",
+                "text": respuesta_contencion_generica(),
+                "origen": "router_paralelo",
+            })
+    except Exception as e:
+        # El stream se cortó a mitad de camino: no se reintenta con otro
+        # proveedor para no mostrar un mensaje "Frankenstein". Lo que ya se
+        # emitió queda tal cual mostrado; sin evento "final" el frontend lo
+        # trata como corte de conexión.
+        capturar_error(e, contexto="chat_stream")
+        print(f"⚠️ /chat/stream: se cortó el generador: {e}")
+        return
+
+    mensaje_final = buf.mensaje_completo()
+    metadata = metadata or {"mood": "neutral", "suggested_action": None, "memories": []}
+
+    if corte_por_riesgo:
+        # Lo que se guarda como respuesta de Numa es la contención, no el
+        # mensaje a medio armar: si no, el historial quedaría con una frase
+        # cortada y el turno siguiente arrancaría desde ahí.
+        mensaje_final = respuesta_contencion_generica()
+        metadata["memories"] = []
+        metadata["suggested_action"] = None
+        crisis_score = max(crisis_score, router_par_score)
+        background_tasks.add_task(
+            feedback_repo.save_crisis_log,
+            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT_STREAM", "high",
+        )
+
+    memorias_llm: List[Dict[str, Any]] = metadata.get("memories") or []
+    memorias_validadas = _procesar_memorias_turno(
+        memorias_llm, memorias_vigentes, ultimo_mensaje, hoy, crisis_score,
+    )
+    risk_level = "high" if corte_por_riesgo else ("medium" if crisis_score >= 0.35 else "none")
+
+    llm_info = metadata.get("_llm") or {}
+    etiquetar_request(
+        llm_provider=llm_info.get("provider"),
+        llm_model=llm_info.get("model"),
+    )
+    tiempos = turno.get("_tiempos", {})
+    log_event(
+        "chat_turn",
+        endpoint="/chat/stream",
+        user_id=user_id,
+        email=email,
+        router_paralelo=bool(fut_router_par),
+        t_router_paralelo_ms=t_router_paralelo_ms,
+        router_score=router_par_score or None,
+        router_corte=corte_por_riesgo or None,
+        llm_provider=llm_info.get("provider"),
+        llm_model=llm_info.get("model"),
+        llm_fallback=llm_info.get("fallback"),
+        llm_latency_ms=llm_info.get("latency_ms"),
+        llm_cut=llm_info.get("cut"),
+        # OJO al leer estos dos contra llm_latency_ms: aquél es el stream
+        # entero, éstos son hasta el primer delta.
+        t_primer_delta_ms=t_primer_delta_ms,
+        t_llm_primer_token_ms=t_llm_primer_token_ms,
+        t_llm_ultimo_token_ms=t_llm_ultimo_token_ms,
+        llm_chunks=llm_chunks,
+        mensaje_len=len(mensaje_final),
+        prompt_chars=len(turno.get("system_prompt") or ""),
+        prompt_tokens=llm_info.get("prompt_tokens"),
+        cached_tokens=llm_info.get("cached_tokens"),
+        completion_tokens=llm_info.get("completion_tokens"),
+        t_preparar_turno_ms=_sumar_tiempos(tiempos),
+        **tiempos,
+        mood=metadata.get("mood"),
+        risk_level=risk_level,
+        suggested_action=metadata.get("suggested_action"),
+        memorias_nuevas=len(memorias_validadas),
+    )
+
+    _disparar_tareas_turno(
+        background_tasks,
+        user_id=user_id,
+        conversation=conversation,
+        mensaje_final=mensaje_final,
+        mood=metadata.get("mood"),
+        memorias_validadas=memorias_validadas,
+        ids_a_desactivar=ids_a_desactivar,
+        evento_proactivo=evento_proactivo,
+        tema_abierto=tema_abierto,
+        memoria_ctx_id=memoria_ctx_id,
+        ultimo_mensaje=ultimo_mensaje,
+        hoy=hoy,
+    )
+
+    yield _evento_ndjson({
+        "type": "final",
+        "mood": metadata.get("mood"),
+        "suggested_action": metadata.get("suggested_action"),
+        "risk_level": risk_level,
+        "nuevas_memorias": memorias_validadas,
+    })
+
+
+@router.post("/chat/stream")
+@limiter.limit("18/minute")
+def chat_stream_endpoint(
+    request: Request,
+    body: ChatRequest,
+    background_tasks: BackgroundTasks,
+    auth_user_id: str = Depends(get_current_user_id),
+):
+    """Como /chat, pero streamea la respuesta en NDJSON en vez de esperar el
+    JSON completo — lo usa el chat escrito de numa-mobile para el efecto
+    typewriter (ver ChatScreen.tsx)."""
+    user_id = auth_user_id
+    email = getattr(request.state, "user_email", None)
+    # Antes de _preparar_turno a propósito: t_primer_delta_ms tiene que
+    # incluir el trabajo previo (memorias, proactivo, prompt), no solo el
+    # LLM — es el silencio completo que el usuario ve del lado del servidor.
+    t_inicio_request = time.perf_counter()
+    try:
+        turno = _preparar_turno(body, user_id, background_tasks)
+    except Exception:
+        # Todavía no se mandó ningún byte de respuesta -> se puede devolver
+        # un error HTTP normal, como en /chat.
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+    if turno["crisis_confirmada"]:
+        log_event(
+            "chat_turn", endpoint="/chat/stream", user_id=user_id, email=email,
+            crisis_hardcoded=True, risk_level="high", llm_provider=None,
+            **turno.get("_tiempos", {}),
+        )
+        generador = _stream_ndjson_fijo(turno["respuesta_crisis"])
+    else:
+        generador = _stream_chat_respuesta(
+            turno, user_id, background_tasks, email=email,
+            t_inicio_request=t_inicio_request,
+        )
+
+    # background=background_tasks es necesario: a diferencia de devolver un
+    # dict (donde FastAPI engancha las tareas solas), acá se devuelve un
+    # Response explícito y hay que pasárselo a mano para que corran.
+    return StreamingResponse(
+        generador,
+        media_type="application/x-ndjson",
+        background=background_tasks,
+    )
 
 
 # El cliente corta en 10 mensajes de invitado; este es el respaldo server-side

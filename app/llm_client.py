@@ -258,6 +258,217 @@ class LLMClient:
             },
         }
 
+    def generate_response_stream(
+        self,
+        conversation: List[ChatMessage],
+        system_prompt: str,
+        *,
+        max_tokens_base: int = 600,
+        extra_body: Optional[dict] = None,
+    ):
+        """Generador para /chat/stream (streaming del chat escrito). Va
+        devolviendo tuplas:
+
+            ("mensaje", texto_parcial)  — pedacitos del mensaje, EN ORDEN, listos para concatenar
+            ("metadata", dict)          — una sola vez, al final: {"mood", "suggested_action", "memories"}
+
+        Diferencias a propósito respecto de generate_response:
+          - No fuerza response_format=json_object: le pedimos al modelo (vía
+            _INSTRUCCION_FORMATO_STREAMING) que mande el mensaje en texto
+            plano PRIMERO y recién después un JSON compacto con la metadata.
+            Todo lo que llega antes del primer '{' se trata como mensaje;
+            de ahí en más se acumula como el JSON de metadata.
+          - El fallback de proveedor (primario → backup) solo se intenta si
+            el error pasa ANTES de emitir el primer pedacito de texto. Si el
+            stream se corta a mitad de camino, no se reintenta con otro
+            proveedor (mostraría un mensaje "Frankenstein" de dos estilos) —
+            se corta ahí con una metadata neutra de cortesía.
+        """
+        system_prompt_streaming = system_prompt + _INSTRUCCION_FORMATO_STREAMING
+
+        ultimo_error = None
+        for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
+            ya_emitio_algo = False
+            json_crudo: List[str] = []
+            vimos_json = False
+            uso = None
+            inicio_intento = time.perf_counter()
+            try:
+                stream = cliente.chat.completions.create(
+                    model=modelo,
+                    temperature=0.7,
+                    max_tokens=max_tokens_for_provider(max_tokens_base, proveedor, modelo),
+                    stream=True,
+                    # Sin esto el stream no trae `usage` en ningún chunk. Se pide
+                    # para poder loguear cached_tokens: es el ÚNICO dato directo
+                    # sobre si el cacheo de prompt está funcionando en producción
+                    # (todo lo demás obliga a inferirlo de TTFTs, que tienen
+                    # demasiada varianza para concluir nada).
+                    stream_options={"include_usage": True},
+                    messages=[
+                        {"role": "system", "content": system_prompt_streaming},
+                        *conversation,
+                    ],
+                    extra_body=(extra_body if extra_body is not None else extra_body_for(proveedor, modelo)),
+                )
+                for chunk in stream:
+                    # El chunk que trae `usage` viene con choices vacío, así que
+                    # esto va ANTES del `continue` de abajo o se pierde.
+                    if getattr(chunk, "usage", None):
+                        uso = chunk.usage
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    ya_emitio_algo = True
+                    if not vimos_json:
+                        idx = delta.find("{")
+                        if idx == -1:
+                            yield ("mensaje", delta)
+                        else:
+                            if delta[:idx]:
+                                yield ("mensaje", delta[:idx])
+                            json_crudo.append(delta[idx:])
+                            vimos_json = True
+                    else:
+                        json_crudo.append(delta)
+
+                if i > 0:
+                    print(f"ℹ️ LLM stream: respondió el modelo de backup ({proveedor or '?'}: {modelo})")
+                metadata = _parsear_metadata_streaming("".join(json_crudo))
+                metadata["_llm"] = {
+                    "provider": proveedor, "model": modelo, "fallback": i > 0,
+                    "ok": True, "cut": False,
+                    "latency_ms": round((time.perf_counter() - inicio_intento) * 1000, 1),
+                    **_extraer_uso(uso),
+                }
+                yield ("metadata", metadata)
+                return  # este proveedor terminó bien -> no se prueban los siguientes
+
+            except Exception as e:
+                ultimo_error = e
+                latencia_intento_ms = round((time.perf_counter() - inicio_intento) * 1000, 1)
+                if ya_emitio_algo:
+                    print(f"⚠️ LLM stream: se cortó a mitad de camino ({proveedor or '?'}: {modelo}): {e}")
+                    yield ("metadata", {
+                        "mood": _FALLBACK_RESPONSE["mood"],
+                        "suggested_action": _FALLBACK_RESPONSE["suggested_action"],
+                        "memories": _FALLBACK_RESPONSE["memories"],
+                        "_llm": {
+                            "provider": proveedor, "model": modelo, "fallback": i > 0,
+                            "ok": False, "cut": True, "latency_ms": latencia_intento_ms,
+                        },
+                    })
+                    return
+                print(f"⚠️ LLM stream error con {proveedor or '?'}: {modelo}: {e}")
+                # sigue probando el próximo target del for
+
+        # Se agotaron todos los targets sin que ninguno llegara a emitir nada.
+        print(f"⚠️ LLM stream: fallaron todos los modelos. Último error: {ultimo_error}")
+        yield ("mensaje", _FALLBACK_RESPONSE["message"])
+        yield ("metadata", {
+            "mood": _FALLBACK_RESPONSE["mood"],
+            "suggested_action": _FALLBACK_RESPONSE["suggested_action"],
+            "memories": _FALLBACK_RESPONSE["memories"],
+            "_llm": {"provider": None, "model": None, "fallback": None, "ok": False, "cut": False, "latency_ms": None},
+        })
+
+
+# Instrucción de formato agregada SOLO a la llamada de streaming (no toca
+# numa_prompt.py). Reemplaza el contrato "todo un JSON" por "mensaje en texto
+# plano primero, JSON compacto de metadata después" — necesario porque
+# response_format=json_object no es compatible con emitir texto libre antes
+# del '{' (ver docs/plan_streaming_voz.md sección 3.2 en staging).
+_INSTRUCCION_FORMATO_STREAMING = """
+
+FORMATO DE RESPUESTA (modo streaming — reemplaza el formato JSON de arriba):
+Escribí PRIMERO el mensaje para la persona, en texto plano y natural, tal cual se lo dirías en voz alta. Sin comillas, sin llaves, sin JSON, sin markdown.
+Cuando termines el mensaje, dejá una línea en blanco y escribí SOLO un JSON compacto de una línea con esta forma exacta:
+{"mood": "...", "suggested_action": ..., "memories": [...]}
+Usá los mismos valores posibles de mood/suggested_action/memories ya explicados arriba. No repitas el mensaje adentro de ese JSON — ahí van solo mood, suggested_action y memories.
+"""
+
+
+def _normalizar_memories_streaming(parsed: dict) -> list:
+    """Misma normalización de memorias que generate_response (arriba) —
+    duplicada a propósito en vez de extraída: bajo la urgencia de este fix
+    (2026-09-04, /chat/stream faltaba en main) se prefirió no tocar el código
+    ya probado de generate_response. Si se vuelve a esto, unificar los dos."""
+    valid_categories = {"trabajo", "estudios", "relaciones", "salud", "identidad", "emocional", "hobbies", "vida_cotidiana", "otro"}
+    raw_memories = parsed.get("memories")
+    memories = []
+    if isinstance(raw_memories, list):
+        for m in raw_memories[:2]:
+            if not isinstance(m, dict):
+                continue
+            content = str(m.get("content") or "").strip()
+            if not content:
+                continue
+            cat = m.get("category")
+            cat = cat if cat in valid_categories else "otro"
+            try:
+                prio = max(1, min(5, int(m.get("priority") or 3)))
+            except (TypeError, ValueError):
+                prio = 3
+            item = {"content": content, "category": cat, "priority": prio}
+            if isinstance(m.get("event"), dict):
+                item["event"] = m["event"]
+            if m.get("open") is True:
+                item["open"] = True
+            if m.get("helped") is True:
+                item["helped"] = True
+            memories.append(item)
+    return memories
+
+
+def _parsear_metadata_streaming(json_crudo: str) -> dict:
+    """Parsea el JSON de metadata (mood/suggested_action/memories) que llega
+    después del mensaje en modo streaming. Reusa _reparar_json_truncado por
+    si el stream se cortó justo en medio de ese JSON de cierre (mismo
+    mecanismo que ya protege al modo no-streaming)."""
+    parsed = None
+    texto = (json_crudo or "").strip()
+    if texto:
+        try:
+            parsed = json.loads(_reparar_json_truncado(texto))
+        except json.JSONDecodeError:
+            parsed = None
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    valid_moods = {"neutral", "calm", "happy", "excited", "stressed", "overwhelmed", "sad", "anxious"}
+    mood = parsed.get("mood") if parsed.get("mood") in valid_moods else "neutral"
+    return {
+        "mood": mood,
+        "suggested_action": parsed.get("suggested_action"),
+        "memories": _normalizar_memories_streaming(parsed),
+    }
+
+
+def _extraer_uso(uso) -> dict:
+    """Saca del `usage` del stream los tokens que importan para diagnóstico
+    (nunca contenido). Tolerante a propósito: no todos los proveedores mandan
+    `usage` en el stream, y `prompt_tokens_details` viene como objeto o como
+    dict según el SDK — si algo falta devuelve None en ese campo, nunca
+    rompe el turno (es telemetría)."""
+    if not uso:
+        return {}
+
+    def _leer(obj, campo):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(campo)
+        return getattr(obj, campo, None)
+
+    detalles = _leer(uso, "prompt_tokens_details")
+    return {
+        "prompt_tokens": _leer(uso, "prompt_tokens"),
+        "completion_tokens": _leer(uso, "completion_tokens"),
+        "cached_tokens": _leer(detalles, "cached_tokens"),
+    }
+
 
 def _recuperar_failed_generation(e) -> Optional[str]:
     """Extrae `failed_generation` de un error de Groq (json_validate_failed).
