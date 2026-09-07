@@ -355,6 +355,12 @@ def get_recent_memories(
                 "content":  content,
                 "priority": r.get("priority") or 3,
                 "category": (r.get("category") or "otro").strip().lower(),
+                # id/created_at/last_proactive_at viajan para que
+                # elegir_memoria_respaldo() pueda elegir una memoria vieja sin
+                # otra consulta a la base. _bloque_memorias() los ignora.
+                "id": r.get("id"),
+                "created_at": r.get("created_at"),
+                "last_proactive_at": r.get("last_proactive_at"),
             })
 
     return memorias_vigentes, to_deactivate_ids
@@ -958,12 +964,77 @@ def detectar_recurso(content: str) -> bool:
     return bool(_RE_RECURSO_MEM.search(content))
 
 
-def get_open_topics(user_id: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def _inicio_de_hoy_utc(ahora: Optional[datetime] = None) -> datetime:
+    """Medianoche UTC del día en curso. Se usa como corte de "esto es de hoy"."""
+    ahora = ahora or datetime.now(timezone.utc)
+    return ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def es_de_dias_anteriores(created_at: Any, ahora: Optional[datetime] = None) -> bool:
+    """True si la memoria se guardó ANTES del día de hoy (ayer o más atrás).
+
+    Es la condición que pidió el usuario para las memorias que Numa trae por su
+    cuenta: tiene que ser algo que le contó otro día, nunca algo dicho hoy y
+    mucho menos en esta misma charla — si no, no se siente que se acordó, se
+    siente que repite lo que acaba de leer.
+
+    El corte es la medianoche UTC, que para Argentina (UTC-3) cae a las 21:00
+    del día anterior: es conservador a propósito, prefiere descartar algo de
+    anoche antes que arriesgar traer algo de hace un rato.
+    """
+    if not created_at:
+        return False
+    try:
+        marca = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except Exception:
+        return False
+    if marca.tzinfo is None:
+        marca = marca.replace(tzinfo=timezone.utc)
+    return marca < _inicio_de_hoy_utc(ahora)
+
+
+def elegir_memoria_respaldo(
+    memorias: List[Dict[str, Any]],
+    ahora: Optional[datetime] = None,
+    prioridad_minima: int = 4,
+) -> Optional[Dict[str, Any]]:
+    """Respaldo cuando no hay tema abierto ni recurso disponible: la memoria
+    común más importante de días anteriores. Pura (sin DB) → testeable.
+
+    Solo prioridad alta a propósito: el respaldo existe para que la charla
+    apagada tenga de dónde agarrarse, no para tirar datos sueltos ("le gusta el
+    dulce de leche") que sonarían a relleno. Si esto trae cosas triviales en
+    staging, se sube `prioridad_minima` o se apaga el respaldo entero.
+    """
+    candidatas = [
+        m for m in (memorias or [])
+        if (m.get("priority") or 3) >= prioridad_minima
+        and (m.get("content") or "").strip()
+        and es_de_dias_anteriores(m.get("created_at"), ahora)
+        and not _en_cooldown_proactivo(m.get("last_proactive_at"), ahora)
+    ]
+    if not candidatas:
+        return None
+    candidatas.sort(
+        key=lambda m: ((m.get("priority") or 3), (m.get("created_at") or "")),
+        reverse=True,
+    )
+    return candidatas[0]
+
+
+def get_open_topics(
+    user_id: str,
+    max_items: int = 5,
+    solo_dias_anteriores: bool = True,
+) -> List[Dict[str, Any]]:
     """Temas abiertos (sin fecha) del usuario, más importantes/recientes primero.
-    Excluye los que están en cooldown de mención proactiva."""
+    Excluye los que están en cooldown de mención proactiva.
+
+    `solo_dias_anteriores` (default) descarta lo guardado hoy: Numa solo retoma
+    por su cuenta cosas de otro día — ver es_de_dias_anteriores()."""
     since_ts = _iso_utc(datetime.now(timezone.utc) - timedelta(days=_VENTANA_TEMAS_ABIERTOS_DIAS))
     try:
-        res = (
+        q = (
             supabase.table("memories")
             .select("id, content, priority, category, created_at, last_proactive_at")
             .eq("user_id", user_id)
@@ -971,6 +1042,11 @@ def get_open_topics(user_id: str, max_items: int = 5) -> List[Dict[str, Any]]:
             .eq("status", "open")
             .is_("event_date", "null")
             .gte("created_at", since_ts)
+        )
+        if solo_dias_anteriores:
+            q = q.lt("created_at", _iso_utc(_inicio_de_hoy_utc()))
+        res = (
+            q
             .order("priority", desc=True)
             .order("created_at", desc=True)
             .limit(max_items * 2)
@@ -986,18 +1062,30 @@ def get_open_topics(user_id: str, max_items: int = 5) -> List[Dict[str, Any]]:
     return temas[:max_items]
 
 
-def get_resource_memories(user_id: str, max_items: int = 3) -> List[Dict[str, Any]]:
+def get_resource_memories(
+    user_id: str,
+    max_items: int = 3,
+    solo_dias_anteriores: bool = True,
+) -> List[Dict[str, Any]]:
     """Memorias-recurso (helped_before) del usuario, más recientes primero.
-    Excluye las que están en cooldown de mención proactiva."""
+    Excluye las que están en cooldown de mención proactiva.
+
+    `solo_dias_anteriores` (default) descarta lo guardado hoy — ver
+    es_de_dias_anteriores()."""
     since_ts = _iso_utc(datetime.now(timezone.utc) - timedelta(days=_VENTANA_RECURSOS_DIAS))
     try:
-        res = (
+        q = (
             supabase.table("memories")
             .select("id, content, priority, category, created_at, last_proactive_at")
             .eq("user_id", user_id)
             .eq("is_active", True)
             .eq("helped_before", True)
             .gte("created_at", since_ts)
+        )
+        if solo_dias_anteriores:
+            q = q.lt("created_at", _iso_utc(_inicio_de_hoy_utc()))
+        res = (
+            q
             .order("created_at", desc=True)
             .limit(max_items * 2)
             .execute()
