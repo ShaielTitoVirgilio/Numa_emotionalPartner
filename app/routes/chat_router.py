@@ -18,6 +18,10 @@ from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
 from app.numa_prompt import construir_prompt
 from app.streaming_buffer import BufferStreamingMensaje
+from app.conversation_signals import (
+    contar_preguntas_seguidas,
+    contar_turnos_sin_preguntar,
+)
 from app.memory_service import (
     get_recent_memories,
     get_recent_memories_cached,
@@ -27,6 +31,7 @@ from app.memory_service import (
     get_open_topics,
     get_resource_memories,
     elegir_memoria_contextual,
+    elegir_memoria_respaldo,
     cerrar_temas_abiertos,
     marcar_evento_followup,
     marcar_proactivo_insertado,
@@ -286,6 +291,31 @@ def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
     return round(sum(v for k, v in tiempos.items() if k not in _TIEMPOS_EXCLUIDOS_DEL_TOTAL), 1)
 
 
+# Mood del turno anterior → el vocabulario de estados que ya entiende
+# elegir_memoria_contextual(). Es un proxy de la clasificación del router, que
+# desde que corre en paralelo ya no está disponible cuando se arma el prompt.
+# Deliberadamente NO mapea a "duelo" ni "enojado": son los dos estados donde
+# traer una memoria fuera de lugar duele más, y un mood de una palabra no
+# alcanza para distinguirlos. Ante la duda, ninguno.
+_MOOD_A_ESTADO = {
+    "sad": "triste_vacio",
+    "overwhelmed": "abrumado",
+    "anxious": "ansioso",
+    "stressed": "ansioso",
+    "neutral": "neutral",
+    "calm": "neutral",
+    "happy": "buenas_noticias",
+    "excited": "buenas_noticias",
+}
+
+
+def _estado_desde_mood(mood: Optional[str]) -> Optional[str]:
+    """Estado emocional aproximado a partir del mood del turno anterior."""
+    if not mood:
+        return None
+    return _MOOD_A_ESTADO.get(str(mood).strip().lower())
+
+
 def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Todo el trabajo previo a llamar al LLM: límites, crisis, perfil,
     memorias, patrones, memoria proactiva, prompt. Extraído de chat_endpoint
@@ -475,6 +505,35 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             print(f"⚠️ No se pudo cargar el check-in: {e}")
         return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
 
+    # Estado emocional SIN esperar al router: desde que el context_router corre
+    # en paralelo con el LLM, `router_hints` acá es siempre ok=False, así que
+    # elegir_memoria_contextual() nunca podía elegir un tema abierto ni un
+    # recurso — M32/M33 quedaron de hecho apagados. Se recupera esa capacidad
+    # con una señal que YA está disponible y no cuesta nada: el mood del turno
+    # anterior, que el cliente manda en cada request. Es más pobre que la
+    # clasificación semántica del router, por eso se marca como local y las
+    # decisiones que dependen de matices finos (duelo, enojo) quedan afuera.
+    estado_local = _estado_desde_mood(body.ultimo_mood)
+
+    def _tarea_memorias_contextuales():
+        """Temas abiertos / recursos para elegir_memoria_contextual.
+
+        Va DENTRO del pool paralelo a propósito: son las consultas que antes no
+        se hacían nunca, y en serie le sumarían al turno lo mismo que tarda
+        get_proactive_memories (~600ms medidos). Acá cuestan 0 de pared."""
+        t0 = time.perf_counter()
+        recursos_, temas_ = [], []
+        if crisis_score < 0.35:
+            try:
+                if estado_local in ("triste_vacio", "ansioso", "abrumado"):
+                    recursos_ = get_resource_memories(user_id=user_id)
+                elif estado_local in ("neutral", "metas", "buenas_noticias"):
+                    temas_ = get_open_topics(user_id=user_id)
+            except Exception as e:
+                capturar_error(e, contexto="memorias_contextuales")
+                print(f"⚠️ No se pudieron cargar temas/recursos: {e}")
+        return recursos_, temas_, round((time.perf_counter() - t0) * 1000, 1)
+
     # El router se lanza en un ejecutor APARTE, que sobrevive a este bloque:
     # el `with` de abajo espera a sus tareas al salir, que es justo lo que no
     # queremos (ahí se iría la latencia que estamos sacando). Se lanza SIEMPRE
@@ -482,10 +541,11 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
 
     _t_paralelo_inicio = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=4) as ejecutor:
+    with ThreadPoolExecutor(max_workers=5) as ejecutor:
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
+        fut_mem_ctx = ejecutor.submit(_tarea_memorias_contextuales)
 
         # 0.0 = no se esperó acá. El router corre en paralelo y su tiempo real
         # se loguea aparte cuando se consulta (t_router_paralelo_ms en
@@ -494,6 +554,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
         patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
         dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
+        recursos_ctx, temas_ctx, tiempos["t_mem_contextuales_ms"] = fut_mem_ctx.result()
     # Tiempo de PARED del bloque paralelo — es el que realmente importa para
     # el total (la suma de los 4 de arriba exagera, se solapan a propósito).
     tiempos["t_paralelo_ms"] = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
@@ -516,12 +577,14 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         )
 
     # ── Memoria proactiva contextual ─────────────────────────────────
-    # Depende de router_hints (estado_emocional) → tiene que ir DESPUÉS del
-    # paralelo de arriba, no puede sumarse a él.
+    # El estado emocional sale del router si contestó (modo llamada), y si no
+    # del mood del turno anterior (estado_local, calculado arriba). Los temas y
+    # recursos ya vinieron del bloque paralelo — acá solo se elige.
     hoy = date.today()
     evento_proactivo: Optional[Dict[str, Any]] = None
     tema_abierto: Optional[Dict[str, Any]] = None
     memoria_recurso: Optional[Dict[str, Any]] = None
+    memoria_para_retomar: Optional[Dict[str, Any]] = None
     memoria_ctx_id: Optional[str] = None
     if crisis_score < 0.35:
         try:
@@ -529,26 +592,22 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             evento_top = eventos[0] if eventos else None
 
             router_ok = bool(router_hints.get("ok"))
-            estado_r = router_hints.get("estado_emocional") if router_ok else None
-
-            recursos = (
-                get_resource_memories(user_id=user_id)
-                if estado_r in ("triste_vacio", "ansioso", "abrumado")
-                else []
-            )
-            temas = (
-                get_open_topics(user_id=user_id)
-                if (estado_r in ("neutral", "metas", "buenas_noticias") and not evento_top)
-                else []
+            estado_r = (
+                router_hints.get("estado_emocional") if router_ok else estado_local
             )
 
             eleccion = elegir_memoria_contextual(
                 estado_emocional=estado_r,
-                router_ok=router_ok,
+                # router_ok=True también cuando la clasificación es local: el
+                # flag le dice a elegir_memoria_contextual "hay un estado en el
+                # que confiar", no "el router contestó". Sin esto seguiría
+                # cayendo a la rama conservadora (solo eventos) y todo este
+                # camino quedaría apagado como hasta ahora.
+                router_ok=router_ok or estado_r is not None,
                 riesgo_score=crisis_score,
                 evento=evento_top,
-                temas_abiertos=temas,
-                recursos=recursos,
+                temas_abiertos=([] if evento_top else temas_ctx),
+                recursos=recursos_ctx,
             )
             if eleccion:
                 memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
@@ -558,6 +617,14 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
                     tema_abierto = eleccion["memoria"]
                 elif eleccion["tipo"] == "recurso":
                     memoria_recurso = eleccion["memoria"]
+            else:
+                # Respaldo, sin consulta extra: la memoria común más importante
+                # de días anteriores, de las que ya se cargaron para el prompt.
+                # Es lo que le da algo de dónde agarrarse a una charla apagada
+                # cuando no hay evento, ni tema abierto, ni recurso.
+                memoria_para_retomar = elegir_memoria_respaldo(memorias_vigentes)
+                if memoria_para_retomar:
+                    memoria_ctx_id = memoria_para_retomar.get("id")
         except Exception as e:
             capturar_error(e, contexto="memoria_contextual")
             print(f"⚠️ No se pudo elegir memoria contextual: {e}")
@@ -572,12 +639,11 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     historial_reciente = [m.model_dump() for m in conversation[-4:]]
 
     mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
-    preguntas_seguidas = 0
-    for contenido in reversed(mensajes_numa):
-        if contenido.rstrip().rstrip('"\'').endswith("?"):
-            preguntas_seguidas += 1
-        else:
-            break
+    preguntas_seguidas = contar_preguntas_seguidas(mensajes_numa)
+    # Espejo del anterior: cuántos mensajes seguidos viene Numa SIN preguntar.
+    # Es la señal que faltaba — el sistema sabía frenar las preguntas pero no
+    # tenía forma de notar que hacía diez turnos que no preguntaba nada.
+    turnos_sin_preguntar = contar_turnos_sin_preguntar(mensajes_numa)
 
     # Apertura/cierre del ÚLTIMO mensaje de Numa: dependen solo del historial
     # (no del mensaje nuevo, que todavía no existe acá) — se calculan una vez
@@ -596,6 +662,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         evento_proactivo_: Optional[Dict[str, Any]],
         tema_abierto_: Optional[Dict[str, Any]],
         memoria_recurso_: Optional[Dict[str, Any]],
+        memoria_para_retomar_: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Reconstruye el system_prompt con crisis_score/router_hints/memoria
         proactiva actualizados, manteniendo todo lo demás (perfil, memorias,
@@ -627,16 +694,19 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             mood_actual=body.ultimo_mood,
             ultimo_mensaje=ultimo_mensaje,
             preguntas_seguidas=preguntas_seguidas,
+            turnos_sin_preguntar=turnos_sin_preguntar,
             hoy=hoy,
             evento_proactivo=evento_proactivo_,
             tema_abierto=tema_abierto_,
             memoria_recurso=memoria_recurso_,
+            memoria_para_retomar=memoria_para_retomar_,
             router_hints=router_hints_,
             modo_llamada=modo_llamada,
         )
 
     system_prompt = _reconstruir_prompt(
         crisis_score, router_hints, evento_proactivo, tema_abierto, memoria_recurso,
+        memoria_para_retomar,
     )
     _checkpoint("t_prompt_ms")
 
@@ -1757,12 +1827,7 @@ def chat_guest_endpoint(request: Request, body: ChatRequest):
         historial_reciente = [m.model_dump() for m in conversation[-4:]]
 
         mensajes_numa = [m.content for m in conversation if m.role == "assistant"]
-        preguntas_seguidas = 0
-        for contenido in reversed(mensajes_numa):
-            if contenido.rstrip().rstrip('"\'').endswith("?"):
-                preguntas_seguidas += 1
-            else:
-                break
+        preguntas_seguidas = contar_preguntas_seguidas(mensajes_numa)
 
         system_prompt = construir_prompt(
             perfil=None,

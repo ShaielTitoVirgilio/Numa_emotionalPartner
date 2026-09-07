@@ -195,6 +195,15 @@ la persona siente que no te interesa. Siempre dejá la sensación de que seguís
    MAL  → "Es entendible."
    BIEN → "Cuando todo cuesta el doble, hasta lo chiquito termina agotando."
 
+Y OJO CON EL OTRO EXTREMO, EL QUE NO SE VE:
+Pasar muchos mensajes seguidos sin UNA sola pregunta también rompe la charla.
+No suena prudente: suena a que no tenés curiosidad por lo que le pasa, a que
+estás cerrando cada tema en vez de acompañarlo. Reflejar y validar sostienen,
+pero no averiguan nada nuevo — y sin nada nuevo la conversación se apaga sola.
+Esto NO es permiso para volver al interrogatorio: es que el objetivo es el
+ritmo, no el silencio. Si venís varios turnos sin preguntar y hay algo de esta
+charla que de verdad no entendés, preguntalo.
+
 CUÁNDO SÍ preguntar: cuando genuinamente no entendés algo y entenderlo cambia cómo
 acompañás. Una buena pregunta, corta, vale oro: "¿desde cuándo?", "¿qué pasó?",
 "¿con quién?", "¿seguro?". Diez preguntas seguidas no valen nada.
@@ -1934,8 +1943,26 @@ def _detectar_juego_problematico(mensaje: str, historial: list) -> bool:
 # BLOQUES DINÁMICOS (contexto personalizado por usuario)
 # ══════════════════════════════════════════════════════════════
 
-def _bloque_control_preguntas(preguntas_seguidas: int) -> str:
-    """Señal calculada por el servidor: racha de mensajes de Numa terminados en '?'."""
+# Turnos seguidos sin una sola pregunta a partir de los cuales se le devuelve
+# el permiso al modelo. 3 es lo que pidió el usuario ("cada 3 aprox"), pero es
+# un piso, no un reloj: el bloque habilita, no obliga.
+TURNOS_SIN_PREGUNTAR_PARA_HABILITAR = 3
+
+
+def _bloque_control_preguntas(
+    preguntas_seguidas: int,
+    turnos_sin_preguntar: int = 0,
+) -> str:
+    """Señal calculada por el servidor sobre el ritmo de preguntas de Numa.
+
+    Tiene DOS polos, no uno. Durante mucho tiempo solo existía el freno (racha
+    de mensajes terminados en '?') y nada que devolviera el permiso: sumado al
+    peso de M04 —el módulo más duro del sistema, con cuatro formas de responder
+    SIN preguntar— el modelo se quedaba permanentemente del lado de no
+    preguntar y la charla se sentía como que Numa no tenía curiosidad. El polo
+    de abajo (turnos_sin_preguntar) es el contrapeso: habilita, no obliga, y
+    deja explícito que una pregunta de relleno es peor que ninguna.
+    """
     if preguntas_seguidas >= 2:
         return (
             "⛔ CONTROL DE PREGUNTAS — DATO DEL SISTEMA, NO NEGOCIABLE:\n"
@@ -1958,6 +1985,20 @@ def _bloque_control_preguntas(preguntas_seguidas: int) -> str:
             "en '?': primero devolvé algo (reflejo, validación, observación o aporte), "
             "con la misma calidez de siempre — que no suene seco ni de compromiso. "
             "Solo preguntá si es realmente necesario para poder acompañar."
+        )
+    if turnos_sin_preguntar >= TURNOS_SIN_PREGUNTAR_PARA_HABILITAR:
+        return (
+            "RITMO DE PREGUNTAS — dato del sistema:\n"
+            f"Van {turnos_sin_preguntar} mensajes tuyos seguidos sin una sola pregunta. "
+            "Eso, sostenido, hace que la persona sienta que no tenés curiosidad por lo "
+            "que le pasa.\n"
+            "Si hay algo de ESTA conversación que genuinamente no entendés, y entenderlo "
+            "cambiaría lo que podés decirle después, este es el momento de preguntarlo. "
+            "Corta, una sola, sobre algo que la persona ya trajo — no un tema nuevo "
+            "traído de la nada.\n"
+            "ESTO HABILITA, NO OBLIGA: si no hay nada genuino que entender, no preguntes. "
+            "Una pregunta de relleno ('¿y cómo te sentís con eso?') es peor que ninguna: "
+            "le devuelve el problema sin aportarle nada."
         )
     return ""
 
@@ -2170,18 +2211,71 @@ def _bloque_memoria_proactiva(evento: dict) -> str:
     )
 
 
+def _antiguedad_relativa(created_at, hoy=None) -> str:
+    """"hace 3 días", "la semana pasada"… para una memoria guardada otro día.
+
+    Existe porque el bloque de memorias no lleva ninguna fecha: sin esto el
+    modelo no puede distinguir algo que la persona contó la semana pasada de
+    algo que dijo hace un rato, y termina "recordando" lo que acaba de leer.
+    Devuelve "" si no se puede calcular (nunca inventa una antigüedad)."""
+    from datetime import date as _date, datetime as _dt, timezone as _tz
+    if not created_at:
+        return ""
+    try:
+        marca = _dt.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    if marca.tzinfo is None:
+        marca = marca.replace(tzinfo=_tz.utc)
+    hoy = hoy or _dt.now(_tz.utc).date()
+    if isinstance(hoy, _dt):
+        hoy = hoy.date()
+    dias = (hoy - marca.date()).days
+    if dias <= 0:
+        return ""
+    if dias == 1:
+        return "ayer"
+    if dias < 7:
+        return f"hace {dias} días"
+    if dias < 14:
+        return "la semana pasada"
+    if dias < 31:
+        return f"hace {dias // 7} semanas"
+    if dias < 60:
+        return "hace un mes"
+    return "hace varios meses"
+
+
+# Instrucción compartida por los tres bloques de memoria que Numa puede traer
+# por su cuenta. El cambio de fondo respecto de la versión anterior: el sistema
+# ya NO dice "este es el momento, usalo ahora". Elige QUÉ tiene disponible —eso
+# el modelo no puede hacerlo solo, no ve la base— y deja el CUÁNDO al modelo,
+# que es el único que está leyendo cómo viene la charla. Fue un pedido
+# explícito: nada de detectar "dale, gracias" con una lista de frases; que se
+# dé cuenta solo.
+_CRITERIO_TRAER_MEMORIA = (
+    "- CUÁNDO traerlo lo decidís vos, no el sistema. El buen momento es cuando la "
+    "charla se apagó: la persona viene contestando corto, asintiendo, sin traer nada "
+    "nuevo, y no quedó nada abierto para retomar. Ahí traer algo que te contó otro día "
+    "reabre la conversación y le muestra que lo tenías presente.\n"
+    "- NO lo fuerces si la charla está viva, si acaba de abrir algo pesado, o si ya lo "
+    "hablaron en esta conversación. Mejor que quede sin usar a que suene fuera de lugar.\n"
+    "- Si lo traés, que se note que es de otro día ('el otro día me contaste…'), nunca "
+    "como si lo acabara de decir."
+)
+
+
 def _bloque_tema_abierto(memoria: dict) -> str:
     """Parte dinámica del tema abierto; las instrucciones de tono están en M32."""
     contenido = (memoria.get("content") or "").strip()
     if not contenido:
         return ""
+    cuando = _antiguedad_relativa(memoria.get("created_at"))
+    desde = f" (te lo contó {cuando})" if cuando else ""
     return (
-        'TEMA ABIERTO DEL USUARIO (seguí las reglas de "TEMA ABIERTO"):\n'
-        f'- Lo que contó y quedó pendiente: "{contenido}"\n'
-        "- La charla viene tranquila y el sistema ya eligió el momento: retomalo EN ESTA "
-        "respuesta con UNA mención suave, después de responder a lo que el usuario trajo. "
-        "Solo dejalo pasar si este último mensaje abrió algo pesado o urgente.\n"
-        "- Si el usuario ya lo trajo en esta conversación, no lo repreguntes."
+        'TEMA ABIERTO DEL USUARIO — DISPONIBLE (seguí las reglas de "TEMA ABIERTO"):\n'
+        f'- Lo que contó y quedó pendiente{desde}: "{contenido}"\n'
+        + _CRITERIO_TRAER_MEMORIA
     )
 
 
@@ -2190,13 +2284,30 @@ def _bloque_memoria_recurso(memoria: dict) -> str:
     contenido = (memoria.get("content") or "").strip()
     if not contenido:
         return ""
+    cuando = _antiguedad_relativa(memoria.get("created_at"))
+    desde = f" (te lo contó {cuando})" if cuando else ""
     return (
-        'RECURSO DEL USUARIO (seguí las reglas de "RECURSO PROPIO"):\n'
-        f'- Algo que ya le hizo bien: "{contenido}"\n'
-        "- Primero validá lo que siente; después, EN ESTA misma respuesta, recordáselo como "
-        "opción gentil — es su propio recurso, no un consejo de afuera. El sistema te lo "
-        "muestra porque ahora le puede servir: no lo dejes para otro momento.\n"
-        "- Si ya lo ofreciste en esta conversación, no lo repitas."
+        'RECURSO DEL USUARIO — DISPONIBLE (seguí las reglas de "RECURSO PROPIO"):\n'
+        f'- Algo que ya le hizo bien{desde}: "{contenido}"\n'
+        "- Si lo traés: primero validá lo que siente y recién después recordáselo como "
+        "opción gentil — es su propio recurso, no un consejo de afuera.\n"
+        + _CRITERIO_TRAER_MEMORIA
+    )
+
+
+def _bloque_memoria_para_retomar(memoria: dict) -> str:
+    """Respaldo: una memoria común de días anteriores, cuando no hay tema
+    abierto ni recurso disponible. Sin módulo propio — la instrucción completa
+    entra acá porque es corta y solo aplica cuando esta memoria existe."""
+    contenido = (memoria.get("content") or "").strip()
+    if not contenido:
+        return ""
+    cuando = _antiguedad_relativa(memoria.get("created_at"))
+    desde = f" ({cuando})" if cuando else ""
+    return (
+        "ALGO QUE TE CONTÓ OTRO DÍA — DISPONIBLE:\n"
+        f'- {contenido}{desde}\n'
+        + _CRITERIO_TRAER_MEMORIA
     )
 
 
@@ -2280,10 +2391,12 @@ def construir_prompt(
     mood_actual: str | None = None,
     ultimo_mensaje: str = "",
     preguntas_seguidas: int = 0,
+    turnos_sin_preguntar: int = 0,
     hoy=None,
     evento_proactivo: dict | None = None,
     tema_abierto: dict | None = None,
     memoria_recurso: dict | None = None,
+    memoria_para_retomar: dict | None = None,
     router_hints: dict | None = None,
     modo_llamada: bool = False,
 ) -> str:
@@ -2347,6 +2460,21 @@ def construir_prompt(
         if bloque_rec:
             secciones.append(bloque_rec)
 
+    # Respaldo: solo cuando el selector contextual no encontró ni evento ni tema
+    # abierto ni recurso (chat_router ya garantiza la exclusividad). Mismos
+    # gates de crisis que los otros tres: nada compite con la seguridad.
+    if (
+        memoria_para_retomar
+        and not evento_proactivo
+        and not tema_abierto
+        and not memoria_recurso
+        and crisis_score < 0.35
+        and not ultimo_modulo_critico
+    ):
+        bloque_ret = _bloque_memoria_para_retomar(memoria_para_retomar)
+        if bloque_ret:
+            secciones.append(bloque_ret)
+
     if ubicacion and (ubicacion.get("ciudad") or ubicacion.get("pais")):
         secciones.append(_bloque_ubicacion(ubicacion))
 
@@ -2371,7 +2499,22 @@ def construir_prompt(
     # ── Control de preguntas (último, para máxima salencia) ──
     # No aplica en contexto de riesgo: las preguntas de seguridad
     # ("¿estás pensando en hacerte daño?") nunca se bloquean.
-    if preguntas_seguidas >= 1 and crisis_score < 0.35 and not ultimo_modulo_critico:
-        secciones.append(_bloque_control_preguntas(preguntas_seguidas))
+    # El polo de habilitación (turnos_sin_preguntar) queda fuera del feedback
+    # post-ejercicio: ahí el turno es una devolución sobre el ejercicio, no una
+    # exploración, y una pregunta cae mal.
+    post_ejercicio = "M26_feedback_post_ejercicio" in modulos_ids
+    # `not modo_llamada`: el polo de habilitación se estrena solo en el chat
+    # escrito. La voz se está afinando aparte y no se toca acá — sacar esa
+    # condición es lo único que hace falta para habilitarlo también en llamada.
+    hay_senal_preguntas = preguntas_seguidas >= 1 or (
+        turnos_sin_preguntar >= TURNOS_SIN_PREGUNTAR_PARA_HABILITAR
+        and not post_ejercicio
+        and not es_primera_vez
+        and not modo_llamada
+    )
+    if hay_senal_preguntas and crisis_score < 0.35 and not ultimo_modulo_critico:
+        secciones.append(
+            _bloque_control_preguntas(preguntas_seguidas, turnos_sin_preguntar)
+        )
 
     return "\n\n---\n\n".join(s for s in secciones if s)
