@@ -1944,9 +1944,20 @@ def _detectar_juego_problematico(mensaje: str, historial: list) -> bool:
 # ══════════════════════════════════════════════════════════════
 
 # Turnos seguidos sin una sola pregunta a partir de los cuales se le devuelve
-# el permiso al modelo. 3 es lo que pidió el usuario ("cada 3 aprox"), pero es
-# un piso, no un reloj: el bloque habilita, no obliga.
-TURNOS_SIN_PREGUNTAR_PARA_HABILITAR = 3
+# el permiso al modelo. Es un piso, no un reloj: el bloque habilita, no obliga.
+#
+# Arrancó en 3 y se bajó a 2 el 2026-09-08 con datos de una charla real. La
+# racha cuenta los turnos ANTERIORES de Numa, así que con umbral 3 el bloque
+# recién aparecía en su QUINTO mensaje: sobre 10 turnos reales se activó 2
+# veces, y en una de las dos sesiones ni una. Medido sobre esa misma charla:
+#   sin bloque                          0/12 turnos terminaron en pregunta
+#   con bloque + mensaje con material   4/6
+#   con bloque + mensaje pobre ("exacto") 0/6  ← correcto: no hay qué preguntar
+# O sea que el bloque funciona y el modelo se abstiene solo cuando no hay
+# material genuino, que es justo lo que se le pidió. Lo que faltaba eran
+# oportunidades, no insistencia — por eso se baja el piso y NO se endurece el
+# texto: volverlo obligatorio produciría la pregunta de relleno que M04 evita.
+TURNOS_SIN_PREGUNTAR_PARA_HABILITAR = 2
 
 
 def _bloque_control_preguntas(
