@@ -44,8 +44,16 @@ services:
       # permanente, en silencio. Ver el commit "Context router: revivirlo".
       # Cambiar el pin SIN correr eval_seguridad_router.py antes es lo que
       # este pin justamente existe para evitar.
+      # ⚠️ PRODUCCIÓN SIGUE EN NEBIUS A PROPÓSITO. Nebius ya no sirve este
+      # modelo, así que el router acá está muerto — pero MUERE RÁPIDO (404 en
+      # ~74ms) y no le cuesta latencia al turno. Con DeepInfra y el
+      # razonamiento todavía encendido (main no tiene el fix de core/llm.py)
+      # el router tarda 5-9s y /chat BLOQUEA esperándolo
+      # (fut_router_paralelo.result()): medido en vivo, los turnos pasaron de
+      # ~2.8s a ~9s. Cambiar esto a DeepInfra SOLO junto con el port del fix
+      # completo desde staging (core/llm.py + el prompt de context_router.py).
       - key: CONTEXT_ROUTER_OPENROUTER_PROVIDERS
-        value: DeepInfra
+        value: Nebius
       - key: CRISIS_VERIFIER_PROVIDER
         value: openrouter
       - key: CRISIS_VERIFIER_MODEL
