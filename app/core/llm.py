@@ -183,7 +183,16 @@ _OPENROUTER_HEADROOM = 1000
 # el nombre. (Si CHAT_MODEL_LLAMADA está seteado en el deploy real a un
 # modelo distinto de CHAT_MODEL, esta optimización no lo cubre todavía — el
 # allowlist matchea por nombre exacto, no por rol/modo.)
-_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna"}
+# qwen/qwen3-32b (context_router) se suma el 2026-09-08 por el mismo motivo,
+# con una consecuencia más dura que en el chat: el router tiene un presupuesto
+# de 4s (_TIMEOUT_SECONDS) y si se pasa NO llega tarde, devuelve ok=False y el
+# turno se rutea solo por keywords — o sea que el razonamiento no costaba
+# latencia, costaba la capa 2 entera. Medido contra DeepInfra, mismos 4 casos:
+#   effort=low        5626ms / 8972ms  → por encima del presupuesto
+#   enabled=false      997ms / 2652ms  → holgado, y las 4 clasificaciones
+#                                        siguen siendo correctas
+# Un clasificador que devuelve un JSON de 5 campos no gana nada razonando.
+_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna", "qwen/qwen3-32b"}
 
 
 def extra_body_for(provider: str | None, model: str | None = None) -> dict:

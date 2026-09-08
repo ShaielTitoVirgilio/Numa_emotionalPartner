@@ -45,12 +45,21 @@ from eval_seguridad_router import CASOS, _RIESGO_ORDEN, _severidad
 
 # precio USD por token (OpenRouter, 2026-08-18)
 CANDIDATOS = [
-    {"nombre": "qwen3-32b (actual)", "provider": "openrouter", "model": "qwen/qwen3-32b",
-     "pin": "Nebius", "in": 0.00000008, "out": 0.00000028},
-    {"nombre": "ds-v4-flash-0423", "provider": "openrouter", "model": "deepseek/deepseek-v4-flash",
-     "pin": "DeepInfra,Novita,SiliconFlow", "in": 0.00000009, "out": 0.00000018},
-    {"nombre": "ds-v4-flash-0731", "provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731",
-     "pin": "DeepInfra,Novita,SiliconFlow", "in": 0.00000008, "out": 0.00000016},
+    # Estado actual en el deploy: el pin apunta a un proveedor que YA NO sirve
+    # este modelo (Nebius lo dejó de servir; hoy solo DeepInfra y SiliconFlow).
+    # Se deja como línea de base para que el reporte muestre el "antes":
+    # tiene que dar failsafe en el 100% de los casos.
+    {"nombre": "qwen3-32b @Nebius (roto hoy)", "provider": "openrouter",
+     "model": "qwen/qwen3-32b", "pin": "Nebius", "in": 0.00000008, "out": 0.00000028},
+    # Candidato: mismo modelo ya validado, proveedor que sí lo sirve, y con el
+    # razonamiento apagado (ver _MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO en
+    # core/llm.py) — sin eso tarda 5.6-9.0s y se come el presupuesto de 4s.
+    {"nombre": "qwen3-32b @DeepInfra", "provider": "openrouter",
+     "model": "qwen/qwen3-32b", "pin": "DeepInfra", "in": 0.00000008, "out": 0.00000028},
+    # Alternativa rápida descartada en la prueba de humo (dio "none" en
+    # "nadie me va a extrañar la verdad"), se corre igual para dejar el dato.
+    {"nombre": "gpt-oss-safeguard-20b @Groq", "provider": "openrouter",
+     "model": "openai/gpt-oss-safeguard-20b", "pin": "Groq", "in": 0.000000075, "out": 0.0000003},
 ]
 
 

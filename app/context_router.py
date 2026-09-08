@@ -99,9 +99,14 @@ Guía:
   - buenas_noticias: logro, alegría, algo que salió bien.
   - metas: planes, proyectos, decisiones a futuro sin carga emocional negativa fuerte.
 - senal_riesgo: riesgo de autolesión o suicidio.
-  - explicita: ideación/método/autolesión clara y actual sobre SÍ MISMO/A ("me quiero matar", "cómo me corto"), o pregunta directa sobre cómo dañarse.
+  - explicita: ideación/método/autolesión clara y actual sobre SÍ MISMO/A ("me quiero matar", "cómo me corto"), o pregunta directa sobre cómo dañarse. TAMBIÉN es explicita un PLAN CONCRETO CON HORIZONTE TEMPORAL sobre sí mismo/a, aunque no nombre el acto ni el método ("ya tengo todo listo para hacerlo esta noche", "el viernes cuando no haya nadie en casa"): que no diga la palabra no lo hace menos inminente — un plan con fecha es la señal más urgente que existe. OJO: esto vale solo cuando lo que se planea es dañarse. Si la charla deja claro que el plan es otra cosa (una mudanza, una cena, un viaje, una entrega), es "none" — un plan con fecha en un contexto inocuo es simplemente un plan.
   - implicita: desesperanza fuerte, despedidas, "no tiene sentido seguir", "ya no puedo más", "no es posible" dicho con resignación pesada, o preguntar por la ideación suicida en abstracto sin declararla propia todavía. TAMBIÉN cuenta como implicita cuando la persona DECLARA que está con depresión / muy deprimida / en un pozo, sobre todo si aparece junto a aislamiento o soledad ("estoy deprimido y solo", "tengo depresión y me dejan solo"): una depresión declarada merece el registro de cuidado aunque no haya ideación explícita.
   - none: sin señales de riesgo. Un bajón puntual, tristeza pasajera o estar "medio triste" NO es implicita por sí solo; implicita pide o desesperanza, o depresión declarada, o riesgo real.
+  NO ES RIESGO, por más que aparezca la palabra — mirá DE QUÉ habla la frase, no qué palabra usa:
+    · HIPÉRBOLE / modismo rioplatense: "me quiero morir de vergüenza", "casi me muero de risa", "me mato estudiando", "del embole me tiro por la ventana". Hablan de vergüenza, risa, cansancio o aburrimiento — no de morirse. Son "none", incluso las que nombran un método.
+    · TERCEROS: quien está en riesgo es otra persona ("mi hermano tiene ideación suicida"). El que escribe está pidiendo cómo acompañar, no está en riesgo: "none".
+    · FICCIÓN / ESTUDIO: escribir un cuento o un guion, o entender el tema para la facultad o el trabajo. Hay distancia, no es sobre sí mismo/a: "none".
+    Regla corta: si el sujeto en riesgo NO es quien escribe, o el registro es de chiste, ficción o estudio, es "none".
   ANTE LA DUDA entre "implicita" y "none", elegí "implicita". Es preferible activar contención de más. Mirá el CONTEXTO: en una charla que ya viene pesada (medicación, malestar, ganas de abandonar tratamiento), un mensaje corto y resignado puede ser señal implícita.
 - pide_ejercicio: la persona pide (o le vendría bien y lo insinúa) una técnica de respiración, meditación, yoga o relajación para calmarse.
 - pregunta_app: pregunta cómo USAR la app o una función concreta de la interfaz (agrandar la letra, modo oscuro, mandar audios, borrar recuerdos, cerrar/eliminar cuenta). NO es esto pedir recomendaciones (series, libros) ni preguntar qué sabe hacer Numa en general.
@@ -124,6 +129,24 @@ Usuario: hola
 Numa: Hola. ¿Cómo venís?
 Usuario: estoy con depresión, mis viejos se separaron y me dejan mucho solo en casa
 Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Numa: ¿Cómo estás ahora?
+Usuario: ya tengo todo listo para hacerlo esta noche
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Numa: ¿Cómo venís con la mudanza?
+Usuario: ya tengo todo listo, lo hago mañana temprano
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Usuario: del embole que tengo en la oficina te juro que me tiro por la ventana
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Usuario: estoy escribiendo un cuento donde el personaje se suicida, ¿cómo lo hago creíble?
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
 
 Mensajes:
 Usuario: qué serie me recomendás para el finde?
