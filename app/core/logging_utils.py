@@ -12,10 +12,10 @@ cuánto tardó, qué mood/risk_level salió. Reemplaza (para estos casos) a los
 filtrar por campo en vez de tener que leer texto libre.
 
 Regla de oro, igual que en observability.py: acá NUNCA va contenido de
-mensajes. Sí va el email del usuario (a diferencia de Sentry, que solo recibe
-el UUID) — es un log operativo que solo mira el dueño de la app en Railway,
-para saber a quién atender si algo falló; no se comparte ni se manda a
-ningún tercero.
+mensajes ni nada que identifique a la persona más allá de su user_id (UUID
+opaco, el mismo que ya usa Sentry vía marcar_usuario). Si en algún momento
+hace falta loguear un campo nuevo, primero preguntarse "¿esto podría llevar
+texto que escribió el usuario?" — si la respuesta es sí o "depende", no va acá.
 """
 
 import json
