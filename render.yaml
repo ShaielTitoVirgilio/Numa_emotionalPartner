@@ -39,8 +39,13 @@ services:
         value: openrouter
       - key: CONTEXT_ROUTER_MODEL
         value: qwen/qwen3-32b
+      # Nebius dejó de servir qwen/qwen3-32b (2026-09) y el pin a un
+      # proveedor inexistente devuelve 404 → el router quedaba en fail-safe
+      # permanente, en silencio. Ver el commit "Context router: revivirlo".
+      # Cambiar el pin SIN correr eval_seguridad_router.py antes es lo que
+      # este pin justamente existe para evitar.
       - key: CONTEXT_ROUTER_OPENROUTER_PROVIDERS
-        value: Nebius
+        value: DeepInfra
       - key: CRISIS_VERIFIER_PROVIDER
         value: openrouter
       - key: CRISIS_VERIFIER_MODEL
@@ -98,8 +103,13 @@ services:
         value: openrouter
       - key: CONTEXT_ROUTER_MODEL
         value: qwen/qwen3-32b
+      # Nebius dejó de servir qwen/qwen3-32b (2026-09) y el pin a un
+      # proveedor inexistente devuelve 404 → el router quedaba en fail-safe
+      # permanente, en silencio. Ver el commit "Context router: revivirlo".
+      # Cambiar el pin SIN correr eval_seguridad_router.py antes es lo que
+      # este pin justamente existe para evitar.
       - key: CONTEXT_ROUTER_OPENROUTER_PROVIDERS
-        value: Nebius
+        value: DeepInfra
       - key: CRISIS_VERIFIER_PROVIDER
         value: openrouter
       - key: CRISIS_VERIFIER_MODEL
