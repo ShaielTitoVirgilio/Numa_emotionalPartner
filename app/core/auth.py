@@ -24,13 +24,15 @@ from typing import Dict, Tuple, Optional
 from fastapi import Header, HTTPException, Request
 
 from app.core.db import supabase
+from app.core.observability import marcar_usuario
 
 # token_hash → (expires_at_epoch, user_id, email)
 #
 # El email SOLO se usa para los logs operativos (Railway, ver
 # app/core/logging_utils.py) — es el dueño de la app mirando sus propios
-# logs para saber a quién atender si algo falló, no un dato que se comparta.
-# El contenido de los mensajes NUNCA viaja acá — eso sigue vedado.
+# logs para saber a quién atender si algo falló, no un dato que se comparta
+# ni se mande a Sentry (marcar_usuario() abajo sigue mandando nada más que el
+# UUID). El contenido de los mensajes NUNCA viaja acá — eso sigue vedado.
 _TOKEN_CACHE: Dict[str, Tuple[float, str, Optional[str]]] = {}
 _TOKEN_TTL_SECONDS = 300  # 5 minutos
 _MAX_CACHE_ENTRIES = 2000
@@ -63,6 +65,7 @@ def get_current_user_id(request: Request, authorization: Optional[str] = Header(
     key = hashlib.sha256(token.encode()).hexdigest()
     cached = _TOKEN_CACHE.get(key)
     if cached and cached[0] > now:
+        marcar_usuario(cached[1])
         request.state.user_id = cached[1]
         request.state.user_email = cached[2]
         return cached[1]
@@ -79,6 +82,10 @@ def get_current_user_id(request: Request, authorization: Optional[str] = Header(
     email = getattr(user, "email", None)
     _prune_cache(now)
     _TOKEN_CACHE[key] = (now + _TOKEN_TTL_SECONDS, user.id, email)
+    # Este dependency corre en TODOS los endpoints autenticados, así que es el
+    # único lugar donde hace falta marcar el usuario para que cualquier error
+    # posterior del request quede atribuido.
+    marcar_usuario(user.id)
     # Expuesto en request.state para que el middleware de logging (main.py) y
     # los routers puedan incluir user_id/email en la línea de log del request
     # sin tener que revalidar el token una segunda vez.

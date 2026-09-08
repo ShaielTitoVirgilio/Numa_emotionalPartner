@@ -1,5 +1,11 @@
 # Variables de entorno
+# ".env" solo matchea ese nombre exacto: una copia como ".env.backup" o
+# ".env.produccion" quedaba fuera del ignore y era commiteable CON las claves
+# adentro. El patrón cubre cualquier variante; .env.example se exceptúa
+# porque es la plantilla sin valores y sí tiene que estar en el repo.
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -38,6 +44,8 @@ Analizis-Completo.txt
 eval_multimodelo_resultados.csv
 eval_multimodelo_run*.log
 eval_postrecorte.log
+eval_prompt_llamada_resultado.csv
+bench_modelos_ttft_resultados.json
 
 # Log de envíos del mail de descarga de la app (contiene emails de usuarios)
 scripts/_enviados_descarga_app.log

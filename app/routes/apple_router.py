@@ -1,11 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
 from app.core.observability import capturar_error
 from app.core.errors import NumaError, MENSAJE_GENERICO
+from app.core.ratelimit import client_ip
 from app.apple_auth_service import verify_apple_token, find_or_create_apple_user
 
 router = APIRouter()
+limiter = Limiter(key_func=client_ip)
 
 
 class AppleAuthRequest(BaseModel):
@@ -14,7 +17,8 @@ class AppleAuthRequest(BaseModel):
 
 
 @router.post("/auth/apple")
-def apple_auth_endpoint(req: AppleAuthRequest):
+@limiter.limit("20/minute")
+def apple_auth_endpoint(request: Request, req: AppleAuthRequest):
     try:
         apple_data = verify_apple_token(req.identity_token)
         result = find_or_create_apple_user(

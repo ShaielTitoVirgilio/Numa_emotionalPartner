@@ -118,6 +118,32 @@ def init_sentry() -> bool:
     return True
 
 
+def marcar_usuario(user_id: str) -> None:
+    """Asocia el request en curso a un user_id para los eventos de Sentry.
+
+    Sin esto, todos los errores llegan anónimos y es imposible saber cuáles
+    corresponden al usuario que te escribió "me falló la app" — que es
+    justamente lo que el docstring de arriba dice que Sentry tiene que
+    permitir. Se manda SOLO el UUID: no revela nada del contenido de las
+    conversaciones (send_default_pii sigue en False, así que tampoco se
+    manda IP ni email).
+
+    No-op si Sentry no está configurado, y nunca lanza.
+    """
+    if not user_id:
+        return
+    try:
+        import sentry_sdk
+
+        client = sentry_sdk.get_client()
+        if client is None or not client.is_active():
+            return
+        sentry_sdk.set_user({"id": user_id})
+    except Exception:
+        # Observabilidad nunca debe romper el request.
+        pass
+
+
 def etiquetar_request(**tags: Any) -> None:
     """Agrega tags al scope de Sentry del request en curso (no solo a errores).
 
@@ -125,7 +151,9 @@ def etiquetar_request(**tags: Any) -> None:
     taguearlo acá hace que, si más adelante en ESE MISMO request salta una
     excepción, el evento ya llegue con estos tags pegados (request_id,
     endpoint, llm_provider, etc.) sin tener que ir a buscarlos en los logs de
-    Railway aparte.
+    Railway aparte. Si además se prende tracing de performance
+    (SENTRY_TRACES_SAMPLE_RATE > 0), estos tags también quedan en la
+    transacción, aunque no haya ningún error.
 
     Nunca pasar acá nada que pueda llevar contenido de conversación — mismo
     criterio que _CLAVES_SENSIBLES arriba. No-op si Sentry no está activo, y
