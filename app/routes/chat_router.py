@@ -507,6 +507,22 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     # clasificación semántica del router, por eso se marca como local y las
     # decisiones que dependen de matices finos (duelo, enojo) quedan afuera.
     estado_local = _estado_desde_mood(body.ultimo_mood)
+    hoy = date.today()
+
+    def _tarea_eventos_proactivos():
+        """Eventos con fecha para hoy. Future PROPIO, no dentro de la tarea de
+        temas/recursos: si compartieran hilo correrían en serie una detrás de
+        otra y no se ahorraría nada. Es solo lectura (get_proactive_memories no
+        escribe), así que moverla acá no cambia ningún efecto."""
+        t0 = time.perf_counter()
+        eventos_ = []
+        if crisis_score < 0.35:
+            try:
+                eventos_ = get_proactive_memories(user_id=user_id, hoy=hoy)
+            except Exception as e:
+                capturar_error(e, contexto="eventos_proactivos")
+                print(f"⚠️ No se pudieron cargar eventos proactivos: {e}")
+        return eventos_, round((time.perf_counter() - t0) * 1000, 1)
 
     def _tarea_memorias_contextuales():
         """Temas abiertos / recursos para elegir_memoria_contextual.
@@ -533,11 +549,12 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
 
     _t_paralelo_inicio = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=5) as ejecutor:
+    with ThreadPoolExecutor(max_workers=6) as ejecutor:
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
         fut_mem_ctx = ejecutor.submit(_tarea_memorias_contextuales)
+        fut_eventos = ejecutor.submit(_tarea_eventos_proactivos)
 
         # 0.0 = no se esperó acá. El router corre en paralelo y su tiempo
         # real se loguea aparte cuando se resuelve (t_router_paralelo_ms en
@@ -547,6 +564,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
         dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
         recursos_ctx, temas_ctx, tiempos["t_mem_contextuales_ms"] = fut_mem_ctx.result()
+        eventos_ctx, tiempos["t_eventos_ms"] = fut_eventos.result()
     # Tiempo de PARED del bloque paralelo — es el que importa para el total
     # (sumar los de arriba exageraría, se solapan a propósito).
     tiempos["t_paralelo_ms"] = round((time.perf_counter() - _t_paralelo_inicio) * 1000, 1)
@@ -566,8 +584,12 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     # abierto sin resolver, o recurso propio). El estado emocional sale del
     # mood del turno anterior (estado_local, calculado arriba): el router corre
     # en paralelo y todavía no contestó cuando se arma el prompt, así que
-    # depender de él dejaba temas y recursos apagados de hecho. Los temas y
-    # recursos ya vinieron del bloque paralelo — acá solo se elige.
+    # depender de él dejaba temas y recursos apagados de hecho.
+    #
+    # Eventos, temas y recursos YA vinieron del bloque paralelo — acá no hay
+    # ninguna consulta, solo la elección (pura). Por eso t_proactivo_ms pasa a
+    # ser ~0: el tiempo de la consulta de eventos no desapareció, se mudó a
+    # t_eventos_ms, adentro de t_paralelo_ms.
     hoy = date.today()
     evento_proactivo: Optional[Dict[str, Any]] = None
     tema_abierto: Optional[Dict[str, Any]] = None
@@ -576,8 +598,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     memoria_ctx_id: Optional[str] = None
     if crisis_score < 0.35:
         try:
-            eventos = get_proactive_memories(user_id=user_id, hoy=hoy)
-            evento_top = eventos[0] if eventos else None
+            evento_top = eventos_ctx[0] if eventos_ctx else None
 
             router_ok = bool(router_hints.get("ok"))
             estado_r = (

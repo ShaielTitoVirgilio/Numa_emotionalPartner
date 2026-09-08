@@ -150,16 +150,27 @@ check("antigüedad: hoy → vacío (no inventa)", _antiguedad_relativa(iso(0), h
 check("antigüedad: basura → vacío", _antiguedad_relativa("cualquier cosa", hoy_d) == "")
 
 # ── 6. Composición del prompt ────────────────────────────────────────────
+# OJO: de acá para abajo las fechas se construyen contra el día REAL, no
+# contra AHORA (que es fijo). construir_prompt() resuelve la antigüedad contra
+# date.today(), así que anclar a una fecha fija hacía que el test se rompiera
+# solo al cambiar el día — pasó al día siguiente de escribirlo.
+def mem_real(dias_atras, **extra):
+    """Memoria fechada relativa a HOY de verdad, para los tests de prompt."""
+    creado = (datetime.now(timezone.utc) - timedelta(days=dias_atras)).isoformat()
+    return {"id": f"r{dias_atras}", "content": "rindió Análisis II",
+            "priority": 5, "created_at": creado, **extra}
+
+
 base = dict(ultimo_mensaje="dale, gracias", num_interacciones=6)
 
-p_resp = construir_prompt(memoria_para_retomar=mem(3, content="rindió Análisis II"), **base)
+p_resp = construir_prompt(memoria_para_retomar=mem_real(3), **base)
 check("prompt: aparece el bloque de respaldo", "ALGO QUE TE CONTÓ OTRO DÍA" in p_resp)
 check("prompt: el respaldo lleva la antigüedad", "hace 3 días" in p_resp)
 check("prompt: el CUÁNDO lo decide el modelo", "lo decidís vos" in p_resp)
 check("prompt: le pide no forzarlo si la charla está viva", "NO lo fuerces" in p_resp)
 
 p_dup = construir_prompt(
-    memoria_para_retomar=mem(3),
+    memoria_para_retomar=mem_real(3),
     evento_proactivo={"content": "charla con el decano", "event_title": "charla", "bucket": "hoy"},
     **base,
 )
@@ -167,7 +178,7 @@ check(
     "prompt: el respaldo NO compite con un evento",
     "ALGO QUE TE CONTÓ OTRO DÍA" not in p_dup,
 )
-p_crisis = construir_prompt(memoria_para_retomar=mem(3), crisis_score=0.6, **base)
+p_crisis = construir_prompt(memoria_para_retomar=mem_real(3), crisis_score=0.6, **base)
 check("prompt: sin respaldo en crisis", "ALGO QUE TE CONTÓ OTRO DÍA" not in p_crisis)
 
 # ── 7. Integración: _preparar_turno de punta a punta ─────────────────────
