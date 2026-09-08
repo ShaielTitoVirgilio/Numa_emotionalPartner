@@ -166,7 +166,16 @@ _OPENROUTER_HEADROOM = 1000
 # empieza con "openai/") SÍ tiene razonamiento obligatorio y da 400 con
 # enabled=false. Si CHAT_MODEL cambia, hay que correr el script de nuevo
 # antes de sumar el modelo nuevo acá — nunca asumir por el nombre.
-_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna"}
+# qwen/qwen3-32b (context_router) se suma el 2026-09-08 por el mismo motivo,
+# con una consecuencia más dura que en el chat: el router tiene un presupuesto
+# de 4s (_TIMEOUT_SECONDS) y si se pasa NO llega tarde, devuelve ok=False y el
+# turno se rutea solo por keywords — o sea que el razonamiento no costaba
+# latencia, costaba la capa 2 entera. Medido contra DeepInfra, mismos 4 casos:
+#   effort=low        5626ms / 8972ms  → por encima del presupuesto
+#   enabled=false      997ms / 2652ms  → holgado, y las 4 clasificaciones
+#                                        siguen siendo correctas
+# Un clasificador que devuelve un JSON de 5 campos no gana nada razonando.
+_MODELOS_SIN_RAZONAMIENTO_OBLIGATORIO = {"openai/gpt-5.6-luna", "qwen/qwen3-32b"}
 
 
 def extra_body_for(provider: str | None, model: str | None = None) -> dict:

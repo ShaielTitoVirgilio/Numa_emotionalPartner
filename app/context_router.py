@@ -27,11 +27,37 @@ contención — nunca lo bajamos.
 """
 
 import json
+import time
 
 from app.core.config import config
 from app.core.llm import get_context_router_target, extra_body_for, max_tokens_for_provider
 
-_TIMEOUT_SECONDS = 4
+# Presupuesto de la clasificación. OJO: `timeout` del SDK de OpenAI es POR
+# INTENTO, no para la operación completa — el techo real es
+# timeout × (reintentos + 1) + backoff.
+#
+# Con los defaults del cliente (max_retries=2) esto NO acotaba nada: una
+# clasificación podía tomar 3 intentos y ~13s sin disparar nunca el fail-safe,
+# porque el except solo corre cuando fallan TODOS los intentos. En el chat
+# escrito eso es espera pura del usuario (el turno bloquea en fut_router.result());
+# corre en paralelo al LLM principal, así que no suma latencia al turno,
+# pero si tarda de más la señal de riesgo llega tarde o no llega.
+#
+# Por qué 1 reintento de 4s y no "2 intentos cortos que sumen 4s": medido
+# 2026-08-18 sobre 75 clasificaciones, qwen3-32b da mediana 1750ms y p90
+# 3765ms. Cualquier timeout por intento que deje lugar a un reintento dentro
+# de un techo de 4s (1.75s, 2s, 2.5s) mataría entre el 25% y el 50% de los
+# intentos SANOS. Y acá el fail-safe falla ABIERTO — se rutea solo por
+# keywords, el modo que se come los planes velados (ver config.py) — así que
+# subir la tasa de fail-safe es una regresión de seguridad, no un empate.
+# Dentro de 4s se puede tener techo o reintento, no las dos cosas.
+#
+# Entonces: se baja de 2 reintentos a 1. El techo pasa de ~13s a ~8.6s sin
+# cambiar la tasa de reintento ni la de fail-safe. Los números finales salen
+# del p90 real de producción (scripts/p90_router_logs.py); esto es la cota
+# que se puede poner sin ese dato.
+_TIMEOUT_SECONDS = 4   # por intento
+_REINTENTOS = 1        # 2 intentos como máximo
 
 # Vocabularios cerrados: tienen que coincidir con lo que espera el merge en
 # seleccionar_modulos(). Si agregás un valor acá, agregá el mapeo allá.
@@ -74,9 +100,14 @@ Guía:
   - buenas_noticias: logro, alegría, algo que salió bien.
   - metas: planes, proyectos, decisiones a futuro sin carga emocional negativa fuerte.
 - senal_riesgo: riesgo de autolesión o suicidio.
-  - explicita: ideación/método/autolesión clara y actual sobre SÍ MISMO/A ("me quiero matar", "cómo me corto"), o pregunta directa sobre cómo dañarse.
+  - explicita: ideación/método/autolesión clara y actual sobre SÍ MISMO/A ("me quiero matar", "cómo me corto"), o pregunta directa sobre cómo dañarse. TAMBIÉN es explicita un PLAN CONCRETO CON HORIZONTE TEMPORAL sobre sí mismo/a, aunque no nombre el acto ni el método ("ya tengo todo listo para hacerlo esta noche", "el viernes cuando no haya nadie en casa"): que no diga la palabra no lo hace menos inminente — un plan con fecha es la señal más urgente que existe. OJO: esto vale solo cuando lo que se planea es dañarse. Si la charla deja claro que el plan es otra cosa (una mudanza, una cena, un viaje, una entrega), es "none" — un plan con fecha en un contexto inocuo es simplemente un plan.
   - implicita: desesperanza fuerte, despedidas, "no tiene sentido seguir", "ya no puedo más", "no es posible" dicho con resignación pesada, o preguntar por la ideación suicida en abstracto sin declararla propia todavía. TAMBIÉN cuenta como implicita cuando la persona DECLARA que está con depresión / muy deprimida / en un pozo, sobre todo si aparece junto a aislamiento o soledad ("estoy deprimido y solo", "tengo depresión y me dejan solo"): una depresión declarada merece el registro de cuidado aunque no haya ideación explícita.
   - none: sin señales de riesgo. Un bajón puntual, tristeza pasajera o estar "medio triste" NO es implicita por sí solo; implicita pide o desesperanza, o depresión declarada, o riesgo real.
+  NO ES RIESGO, por más que aparezca la palabra — mirá DE QUÉ habla la frase, no qué palabra usa:
+    · HIPÉRBOLE / modismo rioplatense: "me quiero morir de vergüenza", "casi me muero de risa", "me mato estudiando", "del embole me tiro por la ventana". Hablan de vergüenza, risa, cansancio o aburrimiento — no de morirse. Son "none", incluso las que nombran un método.
+    · TERCEROS: quien está en riesgo es otra persona ("mi hermano tiene ideación suicida"). El que escribe está pidiendo cómo acompañar, no está en riesgo: "none".
+    · FICCIÓN / ESTUDIO: escribir un cuento o un guion, o entender el tema para la facultad o el trabajo. Hay distancia, no es sobre sí mismo/a: "none".
+    Regla corta: si el sujeto en riesgo NO es quien escribe, o el registro es de chiste, ficción o estudio, es "none".
   ANTE LA DUDA entre "implicita" y "none", elegí "implicita". Es preferible activar contención de más. Mirá el CONTEXTO: en una charla que ya viene pesada (medicación, malestar, ganas de abandonar tratamiento), un mensaje corto y resignado puede ser señal implícita.
 - pide_ejercicio: la persona pide (o le vendría bien y lo insinúa) una técnica de respiración, meditación, yoga o relajación para calmarse.
 - pregunta_app: pregunta cómo USAR la app o una función concreta de la interfaz (agrandar la letra, modo oscuro, mandar audios, borrar recuerdos, cerrar/eliminar cuenta). NO es esto pedir recomendaciones (series, libros) ni preguntar qué sabe hacer Numa en general.
@@ -99,6 +130,24 @@ Usuario: hola
 Numa: Hola. ¿Cómo venís?
 Usuario: estoy con depresión, mis viejos se separaron y me dejan mucho solo en casa
 Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Numa: ¿Cómo estás ahora?
+Usuario: ya tengo todo listo para hacerlo esta noche
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Numa: ¿Cómo venís con la mudanza?
+Usuario: ya tengo todo listo, lo hago mañana temprano
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Usuario: del embole que tengo en la oficina te juro que me tiro por la ventana
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+
+Mensajes:
+Usuario: estoy escribiendo un cuento donde el personaje se suicida, ¿cómo lo hago creíble?
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
 
 Mensajes:
 Usuario: qué serie me recomendás para el finde?
@@ -153,11 +202,10 @@ def resultado_vacio() -> dict:
     """El resultado neutro (ok=False): el mismo que devuelve clasificar_contexto()
     ante cualquier error, o sea "no hay capa semántica, ruteá solo por keywords".
 
-    Es público para que un caller pueda usar la misma forma del dict sin
-    duplicarla ni importar la constante privada — hoy: /chat, que arma el
-    prompt con esto mientras el router real corre en paralelo (ver
-    _preparar_turno en chat_router.py). Devuelve una copia: el caller le
-    hace .pop() encima.
+    Es público para que un caller pueda SALTEAR el router a propósito (hoy: el
+    el fail-safe: ante cualquier error se rutea solo por keywords, sin pagar
+    hablada) sin duplicar la forma del dict ni tener que importar la constante
+    privada. Devuelve una copia: el caller le hace .pop() encima.
     """
     return dict(_RESULTADO_VACIO)
 
@@ -178,12 +226,38 @@ def clasificar_contexto(conversation: list) -> dict:
     if not conversation:
         return dict(_RESULTADO_VACIO)
 
+    # Metadata operativa para logging (chat_router la suma a "chat_turn" como
+    # router_provider/router_model). Se resuelve ANTES del try para que quede
+    # disponible incluso si la llamada al LLM falla o da timeout — ahí es
+    # justo cuando más importa saber qué proveedor/modelo fue el lento.
+    proveedor = modelo = None
+    inicio = time.perf_counter()
+
+    def _con_tiempo(resultado: dict) -> dict:
+        latencia = round((time.perf_counter() - inicio) * 1000, 1)
+        resultado["_router"] = {
+            "provider": proveedor, "model": modelo,
+            "latency_ms": latencia,
+            # Una clasificación EXITOSA por encima del timeout por intento
+            # implica que hubo reintento: un intento suelto que se pasa muere
+            # con APITimeoutError. Sin esta marca, en el log no se distingue
+            # "el modelo tardó" de "se cortó, reintentó y la segunda entró",
+            # que es justo lo que hacía falta saber para elegir el timeout.
+            "reintento": latencia > _TIMEOUT_SECONDS * 1000,
+        }
+        return resultado
+
     try:
         bloque = _formatear_conversacion(conversation)
         if not bloque.strip():
-            return dict(_RESULTADO_VACIO)
+            return _con_tiempo(dict(_RESULTADO_VACIO))
 
         cliente, proveedor, modelo = get_context_router_target()
+        # Cliente DERIVADO solo para el router: with_options devuelve una copia
+        # con su propia política de reintentos, así que el chat principal y el
+        # verificador de crisis (que comparten el cliente cacheado de
+        # core/llm.py) siguen con los defaults del SDK.
+        cliente = cliente.with_options(max_retries=_REINTENTOS)
         extra = extra_body_for(proveedor, modelo)
         if proveedor == "openrouter" and config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS:
             pinned = [p.strip() for p in config.CONTEXT_ROUTER_OPENROUTER_PROVIDERS.split(",") if p.strip()]
@@ -205,11 +279,11 @@ def clasificar_contexto(conversation: list) -> dict:
             extra_body=extra,
         )
         data = json.loads(resp.choices[0].message.content or "{}")
-        return _normalizar(data)
+        return _con_tiempo(_normalizar(data))
     except Exception as e:
         # Fail-safe: el ruteo por keywords sigue funcionando solo.
         print(f"⚠️ Context router no disponible (se usa ruteo por keywords): {e}")
-        return dict(_RESULTADO_VACIO)
+        return _con_tiempo(dict(_RESULTADO_VACIO))
 
 
 # Mapeo score de crisis por señal del router. Espeja los umbrales de
