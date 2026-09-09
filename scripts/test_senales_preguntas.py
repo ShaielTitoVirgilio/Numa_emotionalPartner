@@ -121,8 +121,15 @@ check("prompt: NO habilita en feedback post-ejercicio", "RITMO DE PREGUNTAS" not
 p_primera = construir_prompt(turnos_sin_preguntar=5, es_primera_vez=True, ultimo_mensaje="hola", num_interacciones=1)
 check("prompt: NO habilita en la primera vez del usuario", "RITMO DE PREGUNTAS" not in p_primera)
 
-p_llamada = construir_prompt(turnos_sin_preguntar=5, modo_llamada=True, **base)
-check("prompt: NO habilita en modo llamada (voz se afina aparte)", "RITMO DE PREGUNTAS" not in p_llamada)
+# En staging hay un caso más acá: que el bloque NO aparezca con
+# modo_llamada=True, para no tocar la voz mientras se la afina. En main ese
+# parámetro no existe (no hay modo llamada), y de hecho portar la condición sin
+# darse cuenta tiraba NameError en cada turno — lo agarró este test. Si algún
+# día la voz llega a main, hay que recuperar ese caso.
+check(
+    "construir_prompt de main no acepta modo_llamada (no hay voz acá)",
+    "modo_llamada" not in construir_prompt.__code__.co_varnames,
+)
 
 p_freno = construir_prompt(preguntas_seguidas=2, **base)
 check("prompt: el freno duro sigue llegando", "NO NEGOCIABLE" in p_freno)

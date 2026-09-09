@@ -2358,14 +2358,15 @@ def construir_prompt(
     # post-ejercicio: ahí el turno es una devolución sobre el ejercicio, no una
     # exploración, y una pregunta cae mal.
     post_ejercicio = "M26_feedback_post_ejercicio" in modulos_ids
-    # `not modo_llamada`: el polo de habilitación se estrena solo en el chat
-    # escrito. La voz se está afinando aparte y no se toca acá — sacar esa
-    # condición es lo único que hace falta para habilitarlo también en llamada.
+    # En staging esto lleva además `and not modo_llamada`, para que el polo de
+    # habilitación no se aplique al modo voz mientras se lo afina. Acá no: main
+    # no tiene modo llamada, así que ese parámetro no existe en esta firma y
+    # referenciarlo tiraba NameError en CADA turno. Si algún día se porta la
+    # voz a main, hay que volver a sumar esa condición.
     hay_senal_preguntas = preguntas_seguidas >= 1 or (
         turnos_sin_preguntar >= TURNOS_SIN_PREGUNTAR_PARA_HABILITAR
         and not post_ejercicio
         and not es_primera_vez
-        and not modo_llamada
     )
     if hay_senal_preguntas and crisis_score < 0.35 and not ultimo_modulo_critico:
         secciones.append(
