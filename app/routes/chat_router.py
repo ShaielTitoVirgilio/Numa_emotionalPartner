@@ -836,7 +836,16 @@ def _resolver_router_paralelo_chat(
         _resolver_router_paralelo(fut_router_paralelo)
     )
     diag: Dict[str, Any] = {
+        # router_ok separa dos cosas que router_score_paralelo confunde: el
+        # score de "sin riesgo" es 0.0, y `0.0 or None` da None — el MISMO
+        # valor que cuando el router no contestó. Con solo ese campo, un
+        # router muerto se ve igual que una charla tranquila, que es
+        # exactamente por qué estuvo caído semanas sin que nadie lo notara
+        # (Nebius dejó de servir el modelo y todos los turnos caían a
+        # keywords, en silencio). Con router_ok, "false" es inequívoco.
+        "router_ok": bool(router_hints_par.get("ok")),
         "router_score_paralelo": router_score_par or None,
+
         "t_router_paralelo_ms": t_router_paralelo_ms,
         "router_provider": router_meta_par.get("provider"),
         "router_model": router_meta_par.get("model"),
