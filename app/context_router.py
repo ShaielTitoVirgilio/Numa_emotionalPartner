@@ -43,21 +43,25 @@ from app.core.llm import get_context_router_target, extra_body_for, max_tokens_f
 # corre en paralelo al LLM principal, así que no suma latencia al turno,
 # pero si tarda de más la señal de riesgo llega tarde o no llega.
 #
-# Por qué 1 reintento de 4s y no "2 intentos cortos que sumen 4s": medido
-# 2026-08-18 sobre 75 clasificaciones, qwen3-32b da mediana 1750ms y p90
-# 3765ms. Cualquier timeout por intento que deje lugar a un reintento dentro
-# de un techo de 4s (1.75s, 2s, 2.5s) mataría entre el 25% y el 50% de los
-# intentos SANOS. Y acá el fail-safe falla ABIERTO — se rutea solo por
-# keywords, el modo que se come los planes velados (ver config.py) — así que
-# subir la tasa de fail-safe es una regresión de seguridad, no un empate.
-# Dentro de 4s se puede tener techo o reintento, no las dos cosas.
+# Por qué UN SOLO INTENTO y no un reintento (decidido 2026-09-08 con datos):
+# el reintento sirve —medido contra producción, de 81 clasificaciones las 2
+# que se pasaron de 4s fueron recuperadas por él, o sea ~2.5% de turnos que si
+# no caían a keywords— pero se paga donde más se nota. El router corre en
+# paralelo al LLM principal (~2s), así que un reintento que arranca recién a
+# los 4s hace que /chat, que lo espera bloqueado, sume hasta ~4s al turno del
+# usuario. Se eligió el techo firme: 4 segundos y si no llegó, no llegó.
 #
-# Entonces: se baja de 2 reintentos a 1. El techo pasa de ~13s a ~8.6s sin
-# cambiar la tasa de reintento ni la de fail-safe. Los números finales salen
-# del p90 real de producción (scripts/p90_router_logs.py); esto es la cota
-# que se puede poner sin ese dato.
+# Lo que se acepta a cambio: ese ~2.5% de turnos pierde la capa 2 y se rutea
+# solo por keywords. Es una degradación real y conocida, no un empate — pero
+# acotada, y el camino de emergencia (keywords + crisis_verifier, con la
+# respuesta hardcodeada y los teléfonos) NO depende de esto y sigue intacto.
+#
+# Contexto de la medición anterior, que sigue valiendo: 2026-08-18 sobre 75
+# clasificaciones, qwen3-32b daba mediana 1750ms y p90 3765ms. Bajar el
+# timeout por intento para que entren dos adentro de 4s mataría entre el 25% y
+# el 50% de los intentos SANOS, así que partir el presupuesto tampoco servía.
 _TIMEOUT_SECONDS = 4   # por intento
-_REINTENTOS = 1        # 2 intentos como máximo
+_REINTENTOS = 0        # un solo intento: techo firme de 4s
 
 # Vocabularios cerrados: tienen que coincidir con lo que espera el merge en
 # seleccionar_modulos(). Si agregás un valor acá, agregá el mapeo allá.
