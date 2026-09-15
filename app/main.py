@@ -204,8 +204,8 @@ def serve_sw():
 # olvidás de tocar esto, el peor caso es que el aviso no aparece (nunca al
 # revés: nunca le va a decir a alguien ya actualizado que está atrás).
 ULTIMA_VERSION_APP = {
-    "ios": "1.1.0",
-    "android": "1.1.0",
+    "ios": "1.2.0",
+    "android": "1.2.0",
 }
 
 
