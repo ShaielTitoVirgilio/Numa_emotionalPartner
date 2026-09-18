@@ -5,7 +5,22 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const _SUPABASE_URL = 'https://idbdvpykclbxdeoirsye.supabase.co';
 const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlkYmR2cHlrY2xieGRlb2lyc3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0ODQ5ODYsImV4cCI6MjA4ODA2MDk4Nn0.GEPzBysq6hKiH5UCIi443lEeM0gX17wAtZjp9ZAJUoM';
-const _supabase = createClient(_SUPABASE_URL, _SUPABASE_ANON_KEY);
+// autoRefreshToken en false a proposito: este cliente solo se usa para el
+// login con Google, el mail de reset y el link de recovery. La sesion de la app
+// la maneja ensureFreshToken() (modules/utils.js) sobre localStorage
+// 'numa_user', hablando con nuestro backend (POST /refresh). Con el default
+// (true), despues de entrar con Google quedaban DOS refrescadores rotando la
+// misma familia de refresh tokens sin verse entre si — y los de Supabase son de
+// un solo uso: el que rota primero deja al otro con una copia ya usada, y ese
+// recibe "Already Used" -> Supabase revoca la familia -> sesion cerrada sola.
+// Mismo motivo y mismo fix que numa-mobile/src/services/supabase.ts.
+//
+// El signOut() del final del cambio de contrasena (_submitNuevaContrasena) NO
+// se toca: ahi la sesion de recovery es de este cliente y nunca se paso a
+// 'numa_user', asi que cerrarla es lo correcto.
+const _supabase = createClient(_SUPABASE_URL, _SUPABASE_ANON_KEY, {
+    auth: { autoRefreshToken: false },
+});
 // ============================================
 // ESTADO
 // ============================================

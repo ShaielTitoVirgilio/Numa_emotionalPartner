@@ -1,4 +1,4 @@
-from supabase import create_client
+from supabase import ClientOptions, create_client
 from supabase_auth.errors import AuthApiError
 from app.core.db import supabase
 from app.core.config import config
@@ -11,7 +11,31 @@ def _auth_client():
     # Fresh client per call: sign_in/sign_up mutate the client's internal session,
     # which would replace the service-key header on the shared `supabase` client
     # and cause all subsequent DB queries to use the (expirable) user JWT.
-    return create_client(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY)
+    #
+    # auto_refresh_token=False NO es opcional. Con el default (True), CUALQUIER
+    # llamada que deje una sesion en el cliente (sign_up, sign_in_with_password,
+    # verify_otp, refresh_session) pasa por _save_session(), que arranca un
+    # threading.Timer que se reprograma solo cada ~1h para siempre
+    # (supabase_auth/_sync/gotrue_client.py: _save_session ->
+    # _start_auto_refresh_token). Como este cliente se descarta apenas termina la
+    # llamada, ese hilo queda huerfano y sigue rotando el refresh_token de ESE
+    # usuario por su cuenta hasta que se reinicie el proceso. El celular y la web
+    # guardan su propia copia del token: despues de una de esas rotaciones
+    # invisibles, la copia que tienen ya esta usada y el siguiente /refresh
+    # devuelve "Invalid Refresh Token: Already Used" -> sesion cerrada sin que el
+    # usuario haya hecho nada. Confirmado en los logs de Supabase del 2026-09-17/18:
+    # dos POST /token?grant_type=refresh_token por usuario cada ~57-60 min durante
+    # 21hs seguidas, user-agent python-httpx (= el backend), sobre cuentas que no
+    # se estaban usando. Ademas cada login/refresh dejaba un hilo mas vivo.
+    #
+    # El refresco real es responsabilidad del cliente (RenovadorToken en
+    # numa-mobile, ensureFreshToken en la web) via POST /refresh. Este cliente
+    # tiene que hacer UNA llamada y morir.
+    return create_client(
+        config.SUPABASE_URL,
+        config.SUPABASE_SERVICE_KEY,
+        options=ClientOptions(auto_refresh_token=False),
+    )
 
 
 def register_user(email: str, password: str, nombre: str):
