@@ -31,6 +31,7 @@ from supabase import ClientOptions, create_client  # noqa: E402
 from app.auth_service import _auth_client  # noqa: E402
 from app.core.config import config  # noqa: E402
 from app.core.db import supabase as cliente_compartido  # noqa: E402
+from app.supabase_client import supabase as cliente_legacy  # noqa: E402
 
 fallos = []
 
@@ -71,6 +72,7 @@ def verificar(nombre, client):
 
 print("Clientes reales de la app:")
 verificar("app/core/db.py (cliente compartido)", cliente_compartido)
+verificar("app/supabase_client.py (legacy, push)", cliente_legacy)
 verificar("app/auth_service.py (_auth_client)", _auth_client())
 
 # Control negativo: sin la opcion, el timer SI arranca. Si esto no pasara, el
