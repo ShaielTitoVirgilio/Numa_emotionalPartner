@@ -175,10 +175,10 @@ def reset_password_with_otp(email: str, token: str, password: str):
         # incidente nuestro (mismo criterio que refresh_session). El mensaje de
         # Supabase viene en ingles ("Token has expired or is invalid") y este
         # texto lo ve el usuario, asi que se traduce aca.
-        raise NumaError("El codigo es invalido o ya vencio. Pedi uno nuevo.")
+        raise NumaError("El código es inválido o ya venció. Pedí uno nuevo.")
 
     if not response.user or not response.session:
-        raise NumaError("Codigo invalido o expirado")
+        raise NumaError("Código inválido o expirado")
 
     try:
         client.auth.update_user({"password": password})
@@ -186,7 +186,7 @@ def reset_password_with_otp(email: str, token: str, password: str):
         # La app ya valida largo y coincidencia antes de llegar aca, asi que
         # esto es sobre todo el rechazo de Supabase por contrasena filtrada o
         # demasiado comun. Su mensaje viene en ingles: se responde en castellano.
-        raise NumaError("No se pudo usar esa contrasena. Proba con otra.")
+        raise NumaError("No se pudo usar esa contraseña. Probá con otra.")
 
     session = response.session
     return {

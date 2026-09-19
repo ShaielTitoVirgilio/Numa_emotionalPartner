@@ -215,34 +215,41 @@ async function _submitLogin() {
         }
 
         const data = await res.json();
-        currentUser = data;
-        localStorage.setItem('numa_user', JSON.stringify(data));
-
-        hideAuthScreen();
-
-        // Chequear si ya completó el onboarding
-        try {
-            const perfilRes = await fetch(`/profile/${data.user_id}`, {
-                headers: { 'Authorization': `Bearer ${data.access_token}` }
-            });
-            if (perfilRes.ok) {
-                const perfil = await perfilRes.json();
-                if (!perfil.onboarding_completo) {
-                    const { showOnboarding } = await import('./onboarding.js');
-                    showOnboarding(data.user_id);
-                    return;
-                }
-            }
-        } catch (e) {
-            console.warn('No se pudo verificar onboarding:', e);
-        }
-
-        if (window.inicializarChat) await window.inicializarChat();
-        if (window.agregarMensaje) window.agregarMensaje(`Bienvenido ${data.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, 'oso');
-        mostrarAvisoTesterCada();
+        await _entrarDespuesDeAuth(data);
     } catch (e) {
         _mostrarError(errorEl, 'Error de conexión');
     }
+}
+
+/** Guarda la sesión y entra a la app (o al onboarding si falta). Lo usan el
+ *  login normal y el cambio de contraseña con código, que también devuelve
+ *  sesión: en los dos casos el usuario ya probó quién es. */
+async function _entrarDespuesDeAuth(data) {
+    currentUser = data;
+    localStorage.setItem('numa_user', JSON.stringify(data));
+
+    hideAuthScreen();
+
+    // Chequear si ya completó el onboarding
+    try {
+        const perfilRes = await fetch(`/profile/${data.user_id}`, {
+            headers: { 'Authorization': `Bearer ${data.access_token}` }
+        });
+        if (perfilRes.ok) {
+            const perfil = await perfilRes.json();
+            if (!perfil.onboarding_completo) {
+                const { showOnboarding } = await import('./onboarding.js');
+                showOnboarding(data.user_id);
+                return;
+            }
+        }
+    } catch (e) {
+        console.warn('No se pudo verificar onboarding:', e);
+    }
+
+    if (window.inicializarChat) await window.inicializarChat();
+    if (window.agregarMensaje) window.agregarMensaje(`Bienvenido ${data.name || 'de vuelta'} 🐼 Me alegra que estés aquí.`, 'oso');
+    mostrarAvisoTesterCada();
 }
 
 // ============================================
@@ -560,24 +567,25 @@ async function _submitForgotPassword() {
     btn.disabled = true;
 
     try {
-        // Usar Supabase directamente — manda email de "Reset Password" estándar
-        await _supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: window.location.origin
-        });
+        // Sin redirectTo: el mail trae un CÓDIGO, no un link. El link de Supabase
+        // es de un solo uso y los escáneres de los clientes de correo (Outlook,
+        // Gmail) lo abren para revisarlo ANTES que el usuario, así que llegaba
+        // siempre consumido — confirmado con cuentas reales el 2026-09-18.
+        await _supabase.auth.resetPasswordForEmail(email);
     } catch (e) {
         // Silencioso — no revelar si el email existe
     }
 
-    // Siempre mostrar confirmación (prevent enumeration)
+    // Siempre mostrar el formulario (prevent enumeration)
     _resetEmail = email;
-    _mostrarConfirmacionEnvio(email);
+    _mostrarFormularioCodigo(email);
 }
 
 // ============================================
-// FORGOT PASSWORD — CONFIRMACIÓN (link enviado)
+// FORGOT PASSWORD — CÓDIGO + CONTRASEÑA NUEVA
 // ============================================
 
-function _mostrarConfirmacionEnvio(email) {
+function _mostrarFormularioCodigo(email) {
     const container = document.querySelector('#auth-screen .auth-container');
     const existing = container.querySelector('#form-reset');
     if (existing) existing.remove();
@@ -588,19 +596,97 @@ function _mostrarConfirmacionEnvio(email) {
     div.innerHTML = `
         <h2 style="margin:0 0 6px;color:#2f4f45;font-size:1.3rem">Revisá tu email</h2>
         <p style="margin:0 0 4px;color:#8fb5a3;font-size:0.9rem">
-            Te enviamos un link a <strong style="color:#4a6a5e">${email}</strong>.<br>
-            Hacé clic en el link para restablecer tu contraseña.
+            Te enviamos un código a <strong style="color:#4a6a5e">${email}</strong>.
+            Escribilo acá y elegí tu contraseña nueva.
         </p>
+        <input
+            type="text"
+            id="reset-codigo"
+            inputmode="numeric"
+            maxlength="8"
+            placeholder="· · · · · ·"
+            class="auth-input"
+            style="text-align:center; font-size:1.6rem; letter-spacing:0.4rem"
+        />
+        <input
+            type="password"
+            id="reset-nueva"
+            placeholder="Nueva contraseña"
+            class="auth-input"
+            autocomplete="new-password"
+        />
+        <input
+            type="password"
+            id="reset-confirmar"
+            placeholder="Confirmar contraseña"
+            class="auth-input"
+            autocomplete="new-password"
+        />
+        <button class="auth-btn" onclick="submitNuevaContrasenaConCodigo()">Cambiar contraseña</button>
+        <p id="reset-codigo-error" class="auth-error hidden"></p>
         <p style="margin:0;text-align:center;font-size:0.8rem;color:#aaa">Si no llegó, revisá la carpeta de spam.</p>
         <button id="reset-resend-btn" onclick="reenviarCodigoReset()" class="auth-link-btn" disabled>
-            Reenviar link (<span id="reset-resend-timer">30</span>s)
+            Reenviar código (<span id="reset-resend-timer">30</span>s)
         </button>
         <button onclick="volverAlLogin()" class="auth-link-btn" style="color:#bbb;font-size:0.82rem;margin-top:-6px">← Volver al inicio de sesión</button>
-        <p id="reset-confirm-error" class="auth-error hidden"></p>
     `;
     container.appendChild(div);
 
     _iniciarCooldownReenvio();
+
+    setTimeout(() => {
+        const input = document.getElementById('reset-codigo');
+        if (input) input.focus();
+    }, 100);
+}
+
+/** Valida el código y cambia la contraseña en un solo paso (POST /password-reset).
+ *  El backend devuelve la sesión, así que el usuario entra directo: ya demostró
+ *  quién es con el código del mail y acaba de elegir la contraseña nueva. */
+async function _submitNuevaContrasenaConCodigo() {
+    const errorEl = document.getElementById('reset-codigo-error');
+    const codigo = (document.getElementById('reset-codigo')?.value || '').trim();
+    const nueva = document.getElementById('reset-nueva')?.value || '';
+    const confirmar = document.getElementById('reset-confirmar')?.value || '';
+
+    // 6-8 dígitos: el largo del OTP es configurable en Supabase (hoy 8).
+    if (!/^\d{6,8}$/.test(codigo)) {
+        _mostrarError(errorEl, 'Ingresá el código que te llegó por email.');
+        return;
+    }
+    if (nueva.length < 8) {
+        _mostrarError(errorEl, 'La contraseña debe tener al menos 8 caracteres.');
+        return;
+    }
+    if (nueva !== confirmar) {
+        _mostrarError(errorEl, 'Las contraseñas no coinciden.');
+        return;
+    }
+
+    const btn = document.querySelector('#form-reset .auth-btn');
+    btn.textContent = 'Cambiando...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/password-reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: _resetEmail, token: codigo, password: nueva })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            _mostrarError(errorEl, data.detail || 'No se pudo cambiar la contraseña.');
+            btn.textContent = 'Cambiar contraseña';
+            btn.disabled = false;
+            return;
+        }
+        if (_resendTimerId) { clearInterval(_resendTimerId); _resendTimerId = null; }
+        await _entrarDespuesDeAuth(data);
+    } catch (e) {
+        _mostrarError(errorEl, 'Error de conexión. Intentá de nuevo.');
+        btn.textContent = 'Cambiar contraseña';
+        btn.disabled = false;
+    }
 }
 
 function _iniciarCooldownReenvio() {
@@ -620,7 +706,7 @@ function _iniciarCooldownReenvio() {
             clearInterval(_resendTimerId);
             _resendTimerId = null;
             btn.disabled = false;
-            btn.innerHTML = 'Reenviar link';
+            btn.innerHTML = 'Reenviar código';
         } else {
             timerSpan.textContent = remaining;
         }
@@ -629,14 +715,14 @@ function _iniciarCooldownReenvio() {
 
 async function _reenviarCodigoReset() {
     const btn = document.getElementById('reset-resend-btn');
-    const errorEl = document.getElementById('reset-confirm-error');
+    const errorEl = document.getElementById('reset-codigo-error');
     if (!_resetEmail || !btn || btn.disabled) return;
 
     try {
-        await _supabase.auth.resetPasswordForEmail(_resetEmail, {
-            redirectTo: window.location.origin
-        });
-        errorEl.textContent = 'Link reenviado, revisá tu casilla';
+        await _supabase.auth.resetPasswordForEmail(_resetEmail);
+        const campo = document.getElementById('reset-codigo');
+        if (campo) campo.value = '';
+        errorEl.textContent = 'Código reenviado, revisá tu casilla';
         errorEl.style.color = '#5a9e7a';
         errorEl.classList.remove('hidden');
         _iniciarCooldownReenvio();
@@ -805,4 +891,5 @@ window.mostrarOlvideContrasena = _mostrarForgotPassword;
 window.submitForgotPassword = _submitForgotPassword;
 window.reenviarCodigoReset = _reenviarCodigoReset;
 window.submitNuevaContrasena = _submitNuevaContrasena;
+window.submitNuevaContrasenaConCodigo = _submitNuevaContrasenaConCodigo;
 window.volverAlLogin = _volverAlLogin;

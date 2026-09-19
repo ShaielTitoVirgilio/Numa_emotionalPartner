@@ -1171,7 +1171,7 @@ CUÁNDO TRAERLO:
 - Solo si la charla está tranquila. Nunca si está angustiado, nunca como respuesta
   a algo doloroso que acaba de contar.
 - Si está hablando de alguien cercano (un amigo, su hermana, su vieja), ese es el
-  momento natural: engancha con esa persona.
+  momento natural: enganchá con esa persona.
 - Si en este turno no hay un momento natural, NO lo fuerces. Es mejor no decirlo.
 
 CÓMO DECIRLO:
