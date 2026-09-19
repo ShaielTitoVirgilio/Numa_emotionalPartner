@@ -16,7 +16,7 @@ from app.core.observability import capturar_error, etiquetar_request
 from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
-from app.numa_prompt import construir_prompt
+from app.numa_prompt import construir_prompt, debe_sugerir_contacto
 from app.streaming_buffer import BufferStreamingMensaje
 from app.conversation_signals import (
     contar_preguntas_seguidas,
@@ -220,6 +220,11 @@ class ChatRequest(BaseModel):
     ubicacion: Optional[UbicacionData] = None
     ultimo_mood: Optional[str] = None
     checkin_recien_hecho: Optional[bool] = False
+    # true SOLO cuando el usuario todavía no eligió a nadie de confianza Y la app
+    # nunca se lo sugirió. El número en sí NUNCA viaja: vive solo en el celular
+    # (AsyncStorage), acá llega un sí/no. El "una sola vez" lo lleva la app, que
+    # deja de mandarlo cuando el backend le avisa que Numa ya lo sugirió.
+    sugerir_contacto: Optional[bool] = False
     # Solo lo manda LlamadaOverlay.tsx (modo llamada de voz), nunca el chat
     # escrito — aunque ambos pegan a /chat/stream. Baja la retención del
     # buffer a 0 (audio arranca antes) y le pide al LLM respuestas más
@@ -721,6 +726,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             memoria_para_retomar=memoria_para_retomar_,
             router_hints=router_hints_,
             modo_llamada=modo_llamada,
+            sin_contacto=bool(body.sugerir_contacto),
         )
 
     system_prompt = _reconstruir_prompt(
@@ -733,6 +739,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "crisis_confirmada": False,
         "conversation": conversation,
         "system_prompt": system_prompt,
+        "sugerir_contacto": bool(body.sugerir_contacto),
         "crisis_score": crisis_score,
         "ultimo_mensaje": ultimo_mensaje,
         "hoy": hoy,
@@ -1282,6 +1289,12 @@ def chat_endpoint(
             "suggested_action": result.get("suggested_action"),
             "risk_level":       risk_level,
             "nuevas_memorias":  memorias_validadas,
+            # Se evalúa con el score FINAL, no con el que armó el prompt: si el
+            # router paralelo escaló el riesgo, el prompt se rehízo sin M34 y la
+            # app no tiene que gastar su única sugerencia.
+            "sugirio_contacto": debe_sugerir_contacto(
+                turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
+            ),
         }
 
     except HTTPException:
@@ -1305,7 +1318,8 @@ def chat_endpoint(
 #   {"type": "delta",  "text": "..."}   — cero o más, en orden: oraciones ya filtradas
 #   {"type": "crisis", "text": "..."}   — en vez de los delta, cuando la respuesta
 #                                         es la de contención hardcodeada
-#   {"type": "final", "mood": ..., "suggested_action": ..., "risk_level": ..., "nuevas_memorias": [...]}
+#   {"type": "final", "mood": ..., "suggested_action": ..., "risk_level": ...,
+#    "nuevas_memorias": [...], "sugirio_contacto": bool}
 #
 # Por qué "crisis" es un tipo aparte y no un delta más: el cliente de voz
 # (modo llamada) habla cada delta apenas lo recibe. Si la contención llegara
@@ -1612,6 +1626,9 @@ def _stream_chat_respuesta(
         "suggested_action": metadata.get("suggested_action"),
         "risk_level": risk_level,
         "nuevas_memorias": memorias_validadas,
+        "sugirio_contacto": debe_sugerir_contacto(
+            turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
+        ),
     })
 
 
