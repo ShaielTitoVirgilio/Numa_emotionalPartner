@@ -148,6 +148,55 @@ def verify_email_otp(email: str, token: str):
     }
 
 
+def reset_password_with_otp(email: str, token: str, password: str):
+    """Cambia la contrasena usando el codigo de 6-8 digitos del mail de recovery.
+
+    Por que con codigo y no con el link del mail: el link de Supabase es de UN
+    SOLO USO, y los escaneres de links de los clientes de correo (Outlook
+    SafeLinks es el caso confirmado) lo abren para revisarlo ANTES que el
+    usuario. Cuando el usuario finalmente entra, el token ya fue consumido y ve
+    "el link expiro o ya fue usado". Un codigo no se puede consumir por
+    adelantado: hay que tipearlo.
+
+    Mismo patron que verify_email_otp (registro), con type="recovery": el OTP
+    deja una sesion en el cliente efimero y con esa sesion se cambia la
+    contrasena. Se devuelve la sesion para que la app deje al usuario adentro
+    sin pedirle que inicie sesion de nuevo.
+    """
+    client = _auth_client()
+    try:
+        response = client.auth.verify_otp({
+            "email": email,
+            "token": token,
+            "type": "recovery",
+        })
+    except AuthApiError as e:
+        # Codigo mal tipeado, vencido o ya usado: flujo normal de auth, no un
+        # incidente nuestro (mismo criterio que refresh_session). El mensaje de
+        # Supabase viene en ingles ("Token has expired or is invalid") y este
+        # texto lo ve el usuario, asi que se traduce aca.
+        raise NumaError("El codigo es invalido o ya vencio. Pedi uno nuevo.")
+
+    if not response.user or not response.session:
+        raise NumaError("Codigo invalido o expirado")
+
+    try:
+        client.auth.update_user({"password": password})
+    except AuthApiError as e:
+        # La app ya valida largo y coincidencia antes de llegar aca, asi que
+        # esto es sobre todo el rechazo de Supabase por contrasena filtrada o
+        # demasiado comun. Su mensaje viene en ingles: se responde en castellano.
+        raise NumaError("No se pudo usar esa contrasena. Proba con otra.")
+
+    session = response.session
+    return {
+        "user_id": response.user.id,
+        "email": response.user.email,
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+    }
+
+
 def get_user_profile(user_id: str):
     response = supabase.table("users_profiles") \
         .select("*") \

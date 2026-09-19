@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, field_validator
 from slowapi import Limiter
-from app.auth_service import register_user, login_user, get_user_profile, refresh_session, verify_email_otp
+from app.auth_service import register_user, login_user, get_user_profile, refresh_session, verify_email_otp, reset_password_with_otp
 from app.core.auth import get_current_user_id
 from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.observability import capturar_error
@@ -33,6 +33,11 @@ class RefreshRequest(BaseModel):
 class VerifyEmailRequest(BaseModel):
     email: str
     token: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    token: str
+    password: str
 
 @router.post("/register")
 @limiter.limit("5/minute")
@@ -69,6 +74,24 @@ def refresh_endpoint(request: Request, body: RefreshRequest):
     except Exception as e:
         capturar_error(e, contexto="refresh")
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+@router.post("/password-reset")
+@limiter.limit("5/minute")
+def reset_password_endpoint(request: Request, body: ResetPasswordRequest):
+    """Cambia la contrasena con el codigo del mail de recovery.
+
+    Mismo rate limit que /verify-email: es el otro endpoint donde un codigo
+    corto es lo unico que protege la cuenta.
+    """
+    try:
+        result = reset_password_with_otp(body.email, body.token, body.password)
+        return result
+    except NumaError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        capturar_error(e, contexto="password_reset")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
 
 @router.get("/profile/{user_id}")
 def profile_endpoint(user_id: str, auth_user_id: str = Depends(get_current_user_id)):
