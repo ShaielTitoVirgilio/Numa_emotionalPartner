@@ -1160,6 +1160,40 @@ BIEN → "Pedirle 500 a un amigo para apostar es meter a otra persona en el mism
         medio. Frenemos un segundo antes de eso."
 """,
 
+"M34_sugerir_contacto": """
+SUGERIR SUMAR A ALGUIEN DE CONFIANZA — UNA SOLA VEZ, Y SOLO SI CAE BIEN:
+
+El usuario todavía no eligió a nadie de confianza en la app. Podés sugerírselo UNA
+vez, para que más adelante puedas ofrecerle escribirle o llamarle si alguna vez la
+está pasando mal.
+
+CUÁNDO TRAERLO:
+- Solo si la charla está tranquila. Nunca si está angustiado, nunca como respuesta
+  a algo doloroso que acaba de contar.
+- Si está hablando de alguien cercano (un amigo, su hermana, su vieja), ese es el
+  momento natural: engancha con esa persona.
+- Si en este turno no hay un momento natural, NO lo fuerces. Es mejor no decirlo.
+
+CÓMO DECIRLO:
+- Corto, al final de tu respuesta, como un comentario al pasar. Nunca es el tema
+  principal del mensaje.
+- NUNCA le digas "contacto de emergencia": suena a alarma. Es "alguien de confianza".
+- No expliques el mecanismo entero ni des instrucciones paso a paso.
+  BIEN → "Che, si querés podés sumar a alguien de confianza desde tu perfil. Así, si
+         alguna vez la estás pasando mal, te lo puedo recordar."
+  BIEN → "Se nota que tu hermana te hace bien. Si querés la podés sumar en tu perfil
+         como alguien de confianza."
+  MAL  → "Te recomiendo configurar tu contacto de emergencia en la sección Perfil."
+
+SI NO ENGANCHA (cambia de tema, dice que no, lo deja pasar):
+- Soltalo. No lo vuelvas a mencionar. No insistas ni repreguntes.
+
+SI TE PREGUNTA CÓMO SE HACE:
+- Guialo simple: en su perfil, en la tarjeta del contacto, eligiendo a alguien de su
+  agenda.
+- Aclarale que vos nunca le escribís ni la llamás sin que él lo decida.
+""",
+
 "M29_memoria_proactiva": """
 MEMORIA PROACTIVA — UN EVENTO DEL USUARIO ESTÁ CERCA (O ACABA DE PASAR):
 
@@ -1368,6 +1402,7 @@ _ORDEN_CANONICO = [
     "M29_memoria_proactiva",
     "M32_tema_abierto",
     "M33_memoria_recurso",
+    "M34_sugerir_contacto",
     "M26_feedback_post_ejercicio",
     "M18_duelo_y_perdida",
     "M11_estado_triste_vacio",
@@ -1387,6 +1422,22 @@ _ORDEN_CANONICO = [
 _ORDEN_IDX = {mid: i for i, mid in enumerate(_ORDEN_CANONICO)}
 
 
+def debe_sugerir_contacto(
+    sin_contacto: bool, crisis_score: float, ultimo_modulo_critico: bool
+) -> bool:
+    """¿Corresponde sugerirle sumar a alguien de confianza en este turno?
+
+    Deliberadamente NO se ata a un score alto de crisis, al reves: si el usuario
+    esta en un momento dificil es el PEOR momento para pedirle que abra la agenda
+    y configure algo. Se sugiere en una charla tranquila, con los mismos gates que
+    M29 (memoria proactiva): nada compite con la seguridad.
+
+    El "una sola vez" no vive aca sino en la app, que deja de mandar el pedido
+    despues de la primera vez que Numa lo sugirio de verdad.
+    """
+    return sin_contacto and crisis_score < 0.35 and not ultimo_modulo_critico
+
+
 def seleccionar_modulos(
     ultimo_mensaje: str,
     historial_reciente: list,
@@ -1403,6 +1454,7 @@ def seleccionar_modulos(
     hay_evento_proactivo: bool = False,
     hay_tema_abierto: bool = False,
     hay_recurso: bool = False,
+    sin_contacto: bool = False,
     router_hints: dict | None = None,
 ) -> list[str]:
     """Devuelve la lista ordenada de IDs de módulos a inyectar. Siempre múltiples.
@@ -1455,6 +1507,9 @@ def seleccionar_modulos(
     # que llegue A LO SUMO una de las tres señales por turno.
     if hay_evento_proactivo and crisis_score < 0.35 and not ultimo_modulo_critico:
         modulos.append("M29_memoria_proactiva")
+
+    if debe_sugerir_contacto(sin_contacto, crisis_score, ultimo_modulo_critico):
+        modulos.append("M34_sugerir_contacto")
     if hay_tema_abierto and crisis_score < 0.35 and not ultimo_modulo_critico:
         modulos.append("M32_tema_abierto")
     if hay_recurso and crisis_score < 0.35 and not ultimo_modulo_critico:
@@ -2267,6 +2322,7 @@ def construir_prompt(
     memoria_recurso: dict | None = None,
     memoria_para_retomar: dict | None = None,
     router_hints: dict | None = None,
+    sin_contacto: bool = False,
 ) -> str:
     tiene_memorias = bool(memorias)
     pide_ejercicio = _detectar_pedido_ejercicio(ultimo_mensaje)
@@ -2288,6 +2344,7 @@ def construir_prompt(
         hay_tema_abierto=bool(tema_abierto),
         hay_recurso=bool(memoria_recurso),
         router_hints=router_hints,
+        sin_contacto=sin_contacto,
     )
 
     secciones = [MODULOS[mid] for mid in modulos_ids if mid in MODULOS]

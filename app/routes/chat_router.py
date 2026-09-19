@@ -13,7 +13,7 @@ from app.core.observability import capturar_error, etiquetar_request
 from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.llm_client import LLMClient
-from app.numa_prompt import construir_prompt
+from app.numa_prompt import construir_prompt, debe_sugerir_contacto
 from app.conversation_signals import (
     contar_preguntas_seguidas,
     contar_turnos_sin_preguntar,
@@ -212,6 +212,11 @@ class ChatRequest(BaseModel):
     ubicacion: Optional[UbicacionData] = None
     ultimo_mood: Optional[str] = None
     checkin_recien_hecho: Optional[bool] = False
+    # true SOLO cuando el usuario todavía no eligió a nadie de confianza Y la app
+    # nunca se lo sugirió. El número en sí NUNCA viaja: vive solo en el celular
+    # (AsyncStorage), acá llega un sí/no. El "una sola vez" lo lleva la app, que
+    # deja de mandarlo cuando el backend le avisa que Numa ya lo sugirió.
+    sugerir_contacto: Optional[bool] = False
 
 
 class ImportMessage(BaseModel):
@@ -703,6 +708,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             memoria_recurso=memoria_recurso_,
             memoria_para_retomar=memoria_para_retomar_,
             router_hints=router_hints_,
+            sin_contacto=bool(body.sugerir_contacto),
         )
 
     system_prompt = _reconstruir_prompt(
@@ -715,6 +721,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "crisis_confirmada": False,
         "conversation": conversation,
         "system_prompt": system_prompt,
+        "sugerir_contacto": bool(body.sugerir_contacto),
         "crisis_score": crisis_score,
         "ultimo_mensaje": ultimo_mensaje,
         "hoy": hoy,
@@ -1174,6 +1181,12 @@ def chat_endpoint(
             "suggested_action": result.get("suggested_action"),
             "risk_level":       risk_level,
             "nuevas_memorias":  memorias_validadas,
+            # Se evalúa con el score FINAL, no con el que armó el prompt: si el
+            # router paralelo escaló el riesgo, el prompt se rehízo sin M34 y la
+            # app no tiene que gastar su única sugerencia.
+            "sugirio_contacto": debe_sugerir_contacto(
+                turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
+            ),
         }
 
     except HTTPException:
@@ -1427,6 +1440,9 @@ def _stream_chat_respuesta(
         "suggested_action": metadata.get("suggested_action"),
         "risk_level": risk_level,
         "nuevas_memorias": memorias_validadas,
+        "sugirio_contacto": debe_sugerir_contacto(
+            turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
+        ),
     })
 
 
