@@ -1,7 +1,7 @@
 import hmac
 from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Any, Optional
 from app.core.auth import get_current_user_id
 from app.repositories.feedback_repository import FeedbackRepository
 from app.memory_service import invalidate_patterns_cache
@@ -12,6 +12,10 @@ router = APIRouter()
 feedback_repo = FeedbackRepository()
 
 MAX_TEXTO_CHARS = 5000
+# Tope de la encuesta: las preguntas cambian, pero nadie legítimo manda más
+# que esto (hoy son 5 preguntas). Evita que un cliente modificado llene la tabla.
+MAX_RESPUESTAS_CLAVES = 20
+MAX_RESPUESTAS_OPCIONES = 10
 
 
 def _validar_admin_key(provided: Optional[str]) -> None:
@@ -28,6 +32,9 @@ class FeedbackRequest(BaseModel):
     texto: Optional[str] = None
     rating: Optional[int] = Field(None, ge=1, le=5)
     rating_recomendaria: Optional[int] = Field(None, ge=1, le=5)  # ¿recomendarías/usarías Numa?
+    # Encuesta por preguntas: {"version": 1, "<id_pregunta>": respuesta, ...}.
+    # Genérica a propósito (las preguntas cambian); ver _limpiar_respuestas.
+    respuestas: Optional[dict[str, Any]] = None
 
 
 class ExerciseRatingRequest(BaseModel):
@@ -43,14 +50,56 @@ def _truncar(valor: Optional[str], max_chars: int = MAX_TEXTO_CHARS) -> Optional
     return valor[:max_chars]
 
 
+def _limpiar_respuestas(respuestas: Optional[dict[str, Any]]) -> Optional[dict]:
+    """Deja pasar solo lo que una encuesta legítima manda: claves cortas con
+    valor numérico, texto o lista corta de textos. El resto se descarta."""
+    if not respuestas:
+        return None
+    limpias: dict[str, Any] = {}
+    for clave, valor in list(respuestas.items())[:MAX_RESPUESTAS_CLAVES]:
+        if not isinstance(clave, str) or not clave or len(clave) > 40:
+            continue
+        if isinstance(valor, bool):
+            continue
+        if isinstance(valor, (int, float)):
+            limpias[clave] = valor
+        elif isinstance(valor, str):
+            texto = valor.strip()
+            if texto:
+                limpias[clave] = texto[:MAX_TEXTO_CHARS]
+        elif isinstance(valor, list):
+            opciones = [
+                v.strip()[:80] for v in valor[:MAX_RESPUESTAS_OPCIONES]
+                if isinstance(v, str) and v.strip()
+            ]
+            if opciones:
+                limpias[clave] = opciones
+    # Solo la versión no es una respuesta: sin nada más, no hay encuesta.
+    if not any(c != "version" for c in limpias):
+        return None
+    return limpias
+
+
 @router.post("/feedback")
 def feedback_endpoint(req: FeedbackRequest, user_id: str = Depends(get_current_user_id)):
     try:
+        respuestas = _limpiar_respuestas(req.respuestas)
+        rating = req.rating
+        texto = req.texto
+        if respuestas:
+            # Se copian a las columnas de siempre para que /admin/feedback y las
+            # consultas viejas sigan viendo la valoración y el comentario.
+            val = respuestas.get("valoracion")
+            if rating is None and isinstance(val, int) and 1 <= val <= 5:
+                rating = val
+            if not texto and isinstance(respuestas.get("mejora"), str):
+                texto = respuestas["mejora"]
         feedback_repo.save_feedback({
             "user_id":             user_id,
-            "texto":               _truncar(req.texto),
-            "rating":              req.rating,
+            "texto":               _truncar(texto),
+            "rating":              rating,
             "rating_recomendaria": req.rating_recomendaria,
+            "respuestas":          respuestas,
         })
         return {"ok": True}
     except Exception as e:
