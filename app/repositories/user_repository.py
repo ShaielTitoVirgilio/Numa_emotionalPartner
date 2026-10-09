@@ -48,6 +48,7 @@ class UserRepository:
         supabase.table("daily_checkins").delete().eq("user_id", user_id).execute()
         supabase.table("onboarding_answers").delete().eq("user_id", user_id).execute()
         supabase.table("user_notifications").delete().eq("user_id", user_id).execute()
+        supabase.table("device_push_tokens").delete().eq("user_id", user_id).execute()
         supabase.table("crisis_logs").delete().eq("user_id", user_id).execute()
         supabase.table("crisis_pendientes").delete().eq("user_id", user_id).execute()
 
