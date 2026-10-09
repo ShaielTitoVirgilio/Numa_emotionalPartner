@@ -245,6 +245,30 @@ def subscribe(data: SuscripcionPush, user_id: str = Depends(get_current_user_id)
         capturar_error(e, contexto="subscribe")
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
+@app.post("/push/device-token")
+def registrar_token_dispositivo(data: TokenDispositivo, user_id: str = Depends(get_current_user_id)):
+    """Registra el token de push nativo (Expo) de un dispositivo de numa-mobile."""
+    if not expo_push.token_valido(data.token):
+        raise HTTPException(status_code=422, detail="Token de notificaciones inválido")
+    try:
+        expo_push.registrar_token(user_id, data.token, data.platform)
+        return {"ok": True}
+    except Exception as e:
+        capturar_error(e, contexto="registrar_token_dispositivo")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+
+@app.delete("/push/device-token")
+def borrar_token_dispositivo(data: TokenDispositivo, user_id: str = Depends(get_current_user_id)):
+    """Desactiva el push nativo en ese dispositivo (apagar el switch o cerrar sesión)."""
+    try:
+        expo_push.borrar_token(user_id, data.token)
+        return {"ok": True}
+    except Exception as e:
+        capturar_error(e, contexto="borrar_token_dispositivo")
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+
 @app.post("/api/send-daily-push")
 def send_daily_push(x_admin_key: str = Header(None)):
     admin_key_env = config.ADMIN_KEY
