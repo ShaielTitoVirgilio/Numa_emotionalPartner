@@ -14,6 +14,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+import base64
+from py_vapid import Vapid
 from pywebpush import webpush, WebPushException
 from pydantic import BaseModel
 
@@ -230,6 +232,17 @@ def subscribe(data: SuscripcionPush, user_id: str = Depends(get_current_user_id)
         capturar_error(e, contexto="subscribe")
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
+def _cargar_vapid(valor: str):
+    """Acepta la clave VAPID cruda (base64url) o un PEM, tal cual o en base64.
+    pywebpush solo entiende la cruda/DER; un PEM en base64 le falla con
+    'Could not deserialize key data'."""
+    v = valor.strip().strip('"').strip("'")
+    if v.startswith("LS0t"):  # base64 de "-----BEGIN ..."
+        v = base64.b64decode(v + "=" * (-len(v) % 4)).decode()
+    if "BEGIN" in v:
+        return Vapid.from_pem(v.replace("\\n", "\n").encode())
+    return v
+
 @app.post("/api/send-daily-push")
 def send_daily_push(x_admin_key: str = Header(None)):
     admin_key_env = config.ADMIN_KEY
@@ -244,6 +257,8 @@ def send_daily_push(x_admin_key: str = Header(None)):
         contextual_count = 0
         vapid_private = os.getenv("VAPID_PRIVATE_KEY")
 
+        if vapid_private:
+            vapid_private = _cargar_vapid(vapid_private)
         if not vapid_private:
             raise HTTPException(status_code=500, detail="Falta VAPID_PRIVATE_KEY en las variables de entorno")
 
