@@ -5,7 +5,7 @@ import os
 import json
 import time
 import uuid
-from typing import Any
+from typing import Any, Optional
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -23,6 +23,7 @@ from app.core.observability import init_sentry, capturar_error, etiquetar_reques
 from app.core.logging_utils import log_event
 from app.core.ratelimit import client_ip
 from app.memory_service import construir_push_contextual, marcar_push_enviado
+from app import expo_push
 from app.routes.auth_router import router as auth_router
 from app.routes.chat_router import router as chat_router
 from app.routes.onboarding_router import router as onboarding_router
@@ -111,7 +112,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _PREFIJOS_API = (
         "/chat", "/auth", "/onboarding", "/feedback", "/checkin",
         "/dashboard", "/account", "/apple", "/memories", "/subscribe",
-        "/api/", "/speech-to-text", "/tts",
+        "/api/", "/speech-to-text", "/tts", "/push",
     )
 
     async def dispatch(self, request: Request, call_next):
@@ -172,6 +173,11 @@ async def _reportar_5xx(request: Request, exc: HTTPException):
 
 class SuscripcionPush(BaseModel):
     subscription_data: Any
+
+
+class TokenDispositivo(BaseModel):
+    token: str
+    platform: Optional[str] = None
 
 
 # ==========================
@@ -248,11 +254,15 @@ def send_daily_push(x_admin_key: str = Header(None)):
     try:
         res = supabase.table("user_notifications").select("*").execute()
         subscriptions = res.data or []
+        web_por_usuario = {sub["user_id"]: sub for sub in subscriptions if sub.get("user_id")}
+        tokens_por_usuario = expo_push.tokens_por_usuario()
 
         success_count = 0
         contextual_count = 0
         vapid_private = os.getenv("VAPID_PRIVATE_KEY")
 
+        if vapid_private:
+            vapid_private = _cargar_vapid(vapid_private)
         if not vapid_private:
             raise HTTPException(status_code=500, detail="Falta VAPID_PRIVATE_KEY en las variables de entorno")
 
@@ -261,40 +271,51 @@ def send_daily_push(x_admin_key: str = Header(None)):
             "body": "Hola, ¿querés contarme cómo te está yendo estos días?",
         }
 
-        for sub in subscriptions:
-            user_id = sub.get("user_id")
-
+        # Un mismo usuario puede tener PWA y/o apps nativas: el mensaje (y el
+        # anti-spam) se arma una sola vez por usuario y se entrega a todos sus
+        # dispositivos.
+        for user_id in list(web_por_usuario) + [u for u in tokens_por_usuario if u not in web_por_usuario]:
             # Push contextual: si el usuario tiene un evento relevante (hoy/mañana/ayer),
             # el mensaje habla de ESE evento; si no, cae al genérico. (req. 7)
             push = None
-            if user_id:
-                try:
-                    push = construir_push_contextual(user_id)
-                except Exception as ex:
-                    capturar_error(ex, contexto="construir_push_contextual")
-                    print(f"⚠️ construir_push_contextual falló para {user_id}: {ex}")
+            try:
+                push = construir_push_contextual(user_id)
+            except Exception as ex:
+                capturar_error(ex, contexto="construir_push_contextual")
+                print(f"⚠️ construir_push_contextual falló para {user_id}: {ex}")
 
             payload = {"title": push["title"], "body": push["body"]} if push else GENERICO
+            enviado = False
 
-            try:
-                webpush(
-                    subscription_info=sub["subscription_data"],
-                    data=json.dumps(payload),
-                    vapid_private_key=vapid_private,
-                    vapid_claims={"sub": "mailto:shaieltv@gmail.com"}
-                )
+            sub = web_por_usuario.get(user_id)
+            if sub:
+                try:
+                    webpush(
+                        subscription_info=sub["subscription_data"],
+                        data=json.dumps(payload),
+                        vapid_private_key=vapid_private,
+                        vapid_claims={"sub": "mailto:shaieltv@gmail.com"}
+                    )
+                    enviado = True
+                except WebPushException as ex:
+                    capturar_error(ex, contexto="webpush_envio")
+                    print(f"Error enviando push a una suscripción: {ex}")
+
+            tokens = tokens_por_usuario.get(user_id, [])
+            if tokens:
+                aceptados = expo_push.enviar([{"to": t, **payload} for t in tokens])
+                enviado = enviado or any(aceptados.values())
+
+            if enviado:
                 success_count += 1
                 # Marcar el push como enviado SOLO tras el envío exitoso (anti-spam, req. 8)
                 if push:
                     contextual_count += 1
                     marcar_push_enviado(push["memory_id"], push["push_type"])
-            except WebPushException as ex:
-                capturar_error(ex, contexto="webpush_envio")
-                print(f"Error enviando push a una suscripción: {ex}")
 
         return {
             "message": (
-                f"Se enviaron {success_count} notificaciones de {len(subscriptions)} "
+                f"Se enviaron {success_count} notificaciones de {len(set(web_por_usuario) | set(tokens_por_usuario))} usuarios "
                 f"({contextual_count} contextuales)."
             )
         }
