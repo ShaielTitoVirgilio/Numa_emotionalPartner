@@ -69,16 +69,17 @@ class ConversationRepository:
                 "source":    "chat",
                 "is_active": True,
                 "priority":  m.get("priority") or 3,
+                # Siempre presentes (mismo default que la columna en Supabase):
+                # si se omiten y otra memoria del mismo insert por lote SÍ las
+                # trae, PostgREST manda NULL explícito para esta fila en vez
+                # de aplicar el DEFAULT, y viola el NOT NULL de la columna.
+                "status":         m["status"] if m.get("status") in ("open", "closed") else "none",
+                "helped_before":  bool(m.get("helped_before")),
             }
             # Memoria proactiva: si trae un evento con fecha, persistimos sus campos.
             if m.get("event_date") and m.get("event_title"):
                 row["event_date"] = m["event_date"]
                 row["event_title"] = m["event_title"]
-            # Tema abierto (pendiente de desenlace) / recurso (le hizo bien).
-            if m.get("status") in ("open", "closed"):
-                row["status"] = m["status"]
-            if m.get("helped_before"):
-                row["helped_before"] = True
             rows.append(row)
         if rows:
             supabase.table("memories").insert(rows).execute()
