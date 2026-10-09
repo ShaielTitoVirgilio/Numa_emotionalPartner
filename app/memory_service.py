@@ -803,6 +803,65 @@ def marcar_proactivo_insertado(memory_id: str, cierre: Optional[str] = None) -> 
         print(f"⚠️ no se pudo marcar last_proactive_at: {e}")
 
 
+# ── Avisos para el teléfono (notificaciones locales de numa-mobile) ──────────
+_AVISOS_DIAS_ADELANTE = 30   # cuánto a futuro agenda el teléfono
+_AVISOS_MAX_EVENTOS = 20     # iOS admite ~64 locales pendientes; 2 por evento + el check-in
+
+
+def avisos_de_eventos(user_id: str, hoy: Optional[date] = None) -> List[Dict[str, Any]]:
+    """
+    Avisos que numa-mobile agenda como notificaciones LOCALES (sin push remoto):
+    por cada evento con fecha, uno el día del evento ("Hoy tenés X…") y uno al
+    día siguiente ("¿Cómo te fue con X?"), este último solo si el usuario no
+    habló ya del evento (followed_up). Cada item:
+    {id, tipo: "hoy"|"seguimiento", fecha: YYYY-MM-DD en que debe sonar, titulo, cuerpo}.
+
+    El teléfono decide la hora y descarta lo que ya pasó en SU zona horaria,
+    por eso la ventana arranca 2 días atrás (el servidor está en UTC). Textos
+    iguales a los del push contextual (_texto_push_evento). Los eventos
+    borrados/desactivados no aparecen, así que cada sincronización corrige
+    lo que el teléfono tenía agendado.
+    """
+    if hoy is None:
+        hoy = date.today()
+    desde = (hoy - timedelta(days=2)).isoformat()
+    hasta = (hoy + timedelta(days=_AVISOS_DIAS_ADELANTE)).isoformat()
+    try:
+        res = (
+            supabase.table("memories")
+            .select("id, content, event_title, event_date, followed_up")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .not_.is_("event_date", "null")
+            .gte("event_date", desde)
+            .lte("event_date", hasta)
+            .order("event_date")
+            .limit(_AVISOS_MAX_EVENTOS)
+            .execute()
+        )
+    except Exception as e:
+        print(f"⚠️ avisos_de_eventos error: {e}")
+        raise
+
+    avisos: List[Dict[str, Any]] = []
+    for r in res.data or []:
+        ev_date = parse_fecha_llm(r.get("event_date"))
+        titulo = (r.get("event_title") or r.get("content") or "").strip().rstrip(".")
+        if not ev_date or not titulo:
+            continue
+        avisos.append({
+            "id": r["id"], "tipo": "hoy", "fecha": ev_date.isoformat(), "titulo": "Numa 🐼",
+            "cuerpo": f"Hoy tenés {titulo}. Mucha suerte 🍀",
+        })
+        if not r.get("followed_up"):
+            avisos.append({
+                "id": r["id"], "tipo": "seguimiento",
+                "fecha": (ev_date + timedelta(days=1)).isoformat(), "titulo": "Numa 🐼",
+                "cuerpo": f"¿Cómo te fue con {titulo}?",
+            })
+    return avisos
+
+
 # ── Push contextual ───────────────────────────────────────────────────────────
 _PUSH_COOLDOWN_HORAS = 20  # un push por evento por ventana, anti-spam (req. 8)
 
