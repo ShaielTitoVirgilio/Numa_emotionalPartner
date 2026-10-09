@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from app.core.errors import NumaError, MENSAJE_GENERICO
 from app.core.auth import get_current_user_id
 from app.core.db import supabase
-from app.memory_service import invalidate_patterns_cache
+from app.memory_service import invalidate_patterns_cache, avisos_de_eventos
 
 router = APIRouter(prefix="/memories", tags=["memories"])
 
@@ -29,6 +29,15 @@ def listar_memorias(user_id: str = Depends(get_current_user_id)):
         )
         return {"memories": res.data or []}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+
+@router.get("/avisos")
+def avisos(user_id: str = Depends(get_current_user_id)):
+    """Avisos de eventos con fecha que la app agenda como notificaciones locales."""
+    try:
+        return {"avisos": avisos_de_eventos(user_id)}
+    except Exception:
         raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
 
 
