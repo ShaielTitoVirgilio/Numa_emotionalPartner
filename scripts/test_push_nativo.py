@@ -79,7 +79,7 @@ def correr(push_ctx, web, tokens, expo_resp=None, tokens_falla=False):
          mock.patch.object(m, "webpush") as wp, \
          mock.patch.object(m, "construir_push_contextual", return_value=push_ctx), \
          mock.patch.object(m, "marcar_push_enviado") as marcar, \
-         mock.patch.object(m, "_cargar_vapid", return_value="v"), \
+         mock.patch.object(m, "_cargar_vapid", return_value="v", create=True), \
          mock.patch.object(expo_push.httpx, "post") as post, \
          mock.patch.object(expo_push, "supabase") as sb2:
         sb.table.return_value.select.return_value.execute.return_value.data = web
@@ -121,7 +121,7 @@ check("send: si Expo no aceptó, NO marca anti-spam", marcar.call_count == 0 and
 with mock.patch.object(expo_push.httpx, "post", side_effect=RuntimeError("expo caído")):
     with mock.patch.object(m, "supabase") as sb, mock.patch.object(expo_push, "supabase") as sb2, \
          mock.patch.object(m, "construir_push_contextual", return_value=CTX), \
-         mock.patch.object(m, "marcar_push_enviado") as marcar, mock.patch.object(m, "_cargar_vapid", return_value="v"):
+         mock.patch.object(m, "marcar_push_enviado") as marcar, mock.patch.object(m, "_cargar_vapid", return_value="v", create=True):
         sb.table.return_value.select.return_value.execute.return_value.data = []
         sb2.table.return_value.select.return_value.execute.return_value.data = [{"user_id": "u2", "token": TOK2}]
         r = cliente.post("/api/send-daily-push", headers=H)
