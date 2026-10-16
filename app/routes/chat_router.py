@@ -35,6 +35,7 @@ from app.memory_service import (
     cerrar_temas_abiertos,
     marcar_evento_followup,
     marcar_proactivo_insertado,
+    respuesta_menciona_memoria,
     detectar_evento_con_fecha,
     detectar_tema_abierto,
     detectar_recurso,
@@ -663,6 +664,9 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     memoria_recurso: Optional[Dict[str, Any]] = None
     memoria_para_retomar: Optional[Dict[str, Any]] = None
     memoria_ctx_id: Optional[str] = None
+    # La memoria ofrecida entera (no solo el id): al final del turno se mira si
+    # la respuesta la nombró antes de darla por usada (_disparar_tareas_turno).
+    memoria_ctx: Optional[Dict[str, Any]] = None
     if crisis_score < 0.35:
         try:
             evento_top = eventos_ctx[0] if eventos_ctx else None
@@ -686,7 +690,8 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
                 recursos=recursos_ctx,
             )
             if eleccion:
-                memoria_ctx_id = (eleccion.get("memoria") or {}).get("id")
+                memoria_ctx = eleccion.get("memoria")
+                memoria_ctx_id = (memoria_ctx or {}).get("id")
                 if eleccion["tipo"] == "evento":
                     evento_proactivo = eleccion["memoria"]
                 elif eleccion["tipo"] == "tema_abierto":
@@ -705,6 +710,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
                     memorias_vigentes, prioridad_minima=3 if apertura_saludo else 4
                 )
                 if memoria_para_retomar:
+                    memoria_ctx = memoria_para_retomar
                     memoria_ctx_id = memoria_para_retomar.get("id")
         except Exception as e:
             capturar_error(e, contexto="memoria_contextual")
@@ -817,6 +823,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         # el riesgo — ver _reconstruir_prompt() más arriba.
         "_reconstruir_prompt": _reconstruir_prompt,
         "memoria_ctx_id": memoria_ctx_id,
+        "memoria_ctx": memoria_ctx,
         "preguntas_seguidas": preguntas_seguidas,
         "ultimo_modulo_critico": ultimo_modulo_critico,
         "familia_apertura_previa": familia_apertura_previa,
@@ -1046,6 +1053,7 @@ def _disparar_tareas_turno(
     memoria_ctx_id: Optional[str],
     ultimo_mensaje: str,
     hoy: date,
+    memoria_ctx: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Tareas de background que se disparan una vez que hay respuesta final:
     guardar conversación/memorias, follow-up de eventos, cierre de temas
@@ -1064,7 +1072,15 @@ def _disparar_tareas_turno(
     # al prompt (evento, tema abierto o recurso) registra cuándo se insertó,
     # para no insistir en cada mensaje con el mismo tema. Además, lo
     # MENCIONADO cierra su ciclo (regla de producto).
-    if memoria_ctx_id:
+    #
+    # Solo si la respuesta la NOMBRÓ: ofrecerla no es usarla (el bloque deja
+    # que Numa elija el momento). Antes se cerraba el tema / se daba por
+    # seguido el evento apenas entraba al prompt, y lo que Numa no llegó a
+    # decir se perdía. Lo no mencionado no se toca: sigue disponible para el
+    # próximo turno. Sin memoria_ctx (llamador viejo) → comportamiento previo.
+    if memoria_ctx_id and (
+        memoria_ctx is None or respuesta_menciona_memoria(mensaje_final, memoria_ctx)
+    ):
         cierre = None
         if evento_proactivo and evento_proactivo.get("bucket") in ("ayer", "reciente"):
             cierre = "followup"
@@ -1339,6 +1355,7 @@ def chat_endpoint(
             memoria_ctx_id=memoria_ctx_id,
             ultimo_mensaje=ultimo_mensaje,
             hoy=hoy,
+            memoria_ctx=turno.get("memoria_ctx"),
         )
 
         return {
@@ -1676,6 +1693,7 @@ def _stream_chat_respuesta(
         memoria_ctx_id=memoria_ctx_id,
         ultimo_mensaje=ultimo_mensaje,
         hoy=hoy,
+        memoria_ctx=turno.get("memoria_ctx"),
     )
 
     yield _evento_ndjson({
