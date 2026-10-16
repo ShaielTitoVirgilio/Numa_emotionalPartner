@@ -1116,7 +1116,7 @@ def chat_endpoint(
         ultimo_modulo_critico = turno["ultimo_modulo_critico"]
 
         result = llm.generate_response(
-            conversation=[m.model_dump() for m in turno["conversation_llm"]],
+            conversation=[m.model_dump() for m in turno.get("conversation_llm", conversation)],
             system_prompt=turno["system_prompt"],
         )
 
@@ -1400,7 +1400,7 @@ def _stream_chat_respuesta(
     metadata: Optional[Dict[str, Any]] = None
     try:
         for tipo, valor in llm.generate_response_stream(
-            conversation=[m.model_dump() for m in turno["conversation_llm"]],
+            conversation=[m.model_dump() for m in turno.get("conversation_llm", conversation)],
             system_prompt=turno["system_prompt"],
         ):
             if tipo == "mensaje":
