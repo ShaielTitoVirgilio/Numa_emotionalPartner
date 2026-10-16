@@ -950,8 +950,8 @@ MAL  → "Hola, ¿en qué te puedo ayudar hoy?" (ya lo conocés: no arranques co
 MAL  → "Hola. Tengo registrado que tenías una entrevista." (robótico)
 - Si no hay ningún bloque disponible: saludá con calidez y preguntá cómo viene. NO
   inventes ni elijas por tu cuenta un tema de las memorias de fondo.
-- Si el check-in de hoy dice que está mal: primero preguntá cómo está, y la memoria queda
-  para más adelante.
+- Si el check-in de hoy dice que está mal, el sistema no te ofrece ninguna memoria: saludá
+  con calidez y preguntá cómo está.
 
 SI hay un evento concreto que estaba por pasar (examen, entrevista, partido, cita, etc.):
 → Preguntá cómo le fue. Ese es tu primer mensaje.
@@ -2247,8 +2247,10 @@ def _bloque_memorias(memorias: list) -> str:
         "QUÉ SÍ PODÉS TRAER VOS, SIN QUE EL USUARIO LO MENCIONE:\n"
         "Únicamente lo que el sistema te marque en un bloque dedicado de este prompt: "
         '"EVENTO EN EL RADAR" (algo con fecha que está cerca o acaba de pasar), '
-        '"TEMA ABIERTO DEL USUARIO" (algo que quedó sin resolver) o '
-        '"RECURSO DEL USUARIO" (algo que ya le hizo bien). Si uno de esos bloques está '
+        '"TEMA ABIERTO DEL USUARIO" (algo que quedó sin resolver), '
+        '"RECURSO DEL USUARIO" (algo que ya le hizo bien) o '
+        '"ALGO QUE TE CONTÓ OTRO DÍA" (aunque sea un dato de contexto de vida: ese '
+        'bloque es el permiso). Si uno de esos bloques está '
         "presente, tenés permiso para traerlo siguiendo sus reglas. Si no hay ninguno, "
         "no saques temas viejos por tu cuenta.\n"
         "Advertencias (valen siempre):\n"
@@ -2392,7 +2394,8 @@ _CRITERIO_TRAER_MEMORIA_SALUDO = (
     "saludo, con una frase natural. Es lo que hace que la charla no arranque en frío.\n"
     "- Que se note que es de otro día ('el otro día me contaste…'), nunca como si lo "
     "acabara de decir.\n"
-    "- Si el check-in de hoy dice que está mal, primero preguntá cómo está y dejalo para después."
+    "- Si es un dato de su vida (qué estudia, dónde trabaja, con quién vive), traelo como "
+    "interés por cómo viene eso ('¿cómo viene la facu?'), no recitando el dato."
 )
 
 
