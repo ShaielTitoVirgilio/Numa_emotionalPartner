@@ -6,8 +6,22 @@ from typing import List, Optional, Tuple, Dict, Any
 from app.core.db import supabase
 
 # Parámetros por defecto (podés ajustarlos)
-MEMORY_WINDOW_DAYS_DEFAULT = 30
+MEMORY_WINDOW_DAYS_DEFAULT = 90
 MAX_MEMORIES_DEFAULT = 20
+
+# Las memorias de más de este tiempo siguen leyéndose (ventana de 90 días),
+# pero pierden un punto de prioridad al ordenar: lo de la semana pasada pesa
+# más que algo igual de importante de hace dos meses.
+_RECENCIA_PLENA_DIAS = 30
+
+
+def _prioridad_efectiva(row: Dict[str, Any], ahora: Optional[datetime] = None) -> int:
+    """Prioridad para ORDENAR (no se guarda): la de la memoria, menos 1 si
+    tiene más de _RECENCIA_PLENA_DIAS. Ante un timestamp ilegible, sin descuento."""
+    prioridad = row.get("priority") or 3
+    if _dentro_de_ventana_dias(row.get("created_at"), _RECENCIA_PLENA_DIAS, ahora):
+        return prioridad
+    return prioridad - 1
 
 # Caché en memoria de patrones por usuario.
 # Clave: user_id → (expires_at_epoch, lista_de_patrones)
@@ -245,47 +259,6 @@ def _dentro_de_ventana_dias(created_at: Any, dias: int, ahora: Optional[datetime
     return (ahora - marca) <= timedelta(days=dias)
 
 
-def _protegida_de_desactivacion(row: Dict[str, Any], hoy: Optional[date] = None) -> bool:
-    """True si la memoria NO debe desactivarse por la poda de 3-por-categoría,
-    porque sigue siendo elegible para mención proactiva (el canal que le permite
-    a Numa traerla sin que el usuario la mencione):
-
-      - EVENTO PENDIENTE: fecha futura, o pasada hace <=4 días sin follow-up
-        (la ventana en que get_proactive_memories todavía pregunta "¿cómo te fue?").
-        Un evento ya seguido (followed_up) o viejo vuelve a ser podable.
-      - TEMA ABIERTO: status='open' sin fecha, dentro de la ventana de 45 días
-        que usa get_open_topics. Cerrado el tema, vuelve a ser podable.
-      - RECURSO: helped_before=true, dentro de la ventana de 90 días de
-        get_resource_memories.
-
-    Sin este guard, la poda desactivaba (is_active=false) eventos futuros y
-    temas sin resolver apenas se juntaban 3 memorias más nuevas de la misma
-    categoría — y el canal proactivo se quedaba sin material antes de usarlo."""
-    if hoy is None:
-        hoy = datetime.now(timezone.utc).date()
-
-    ev_date = parse_fecha_llm(row.get("event_date")) if row.get("event_date") else None
-    if ev_date is not None:
-        if ev_date >= hoy:
-            return True  # evento que todavía no ocurrió
-        if not row.get("followed_up") and (hoy - ev_date).days <= 4:
-            return True  # ya pasó pero falta el "¿cómo te fue?"
-
-    if (
-        row.get("status") == "open"
-        and not row.get("event_date")
-        and _dentro_de_ventana_dias(row.get("created_at"), _VENTANA_TEMAS_ABIERTOS_DIAS)
-    ):
-        return True
-
-    if row.get("helped_before") and _dentro_de_ventana_dias(
-        row.get("created_at"), _VENTANA_RECURSOS_DIAS
-    ):
-        return True
-
-    return False
-
-
 def get_recent_memories(
     user_id: str,
     days: int = MEMORY_WINDOW_DAYS_DEFAULT,
@@ -294,13 +267,20 @@ def get_recent_memories(
     """
     Devuelve:
       - memorias_vigentes: lista de dicts {content, priority, category} para el prompt
-      - to_deactivate_ids: IDs de memorias sobrantes a desactivar (se pasa como background task)
+      - to_deactivate_ids: siempre vacía (ver más abajo); se mantiene por compatibilidad
     Lógica:
       1) Sólo memorias activas, dentro de la ventana de 'days'
-      2) Por cada categoría deduplicable, conservar hasta MAX_POR_CATEGORIA memorias
-         (orden: mayor prioridad primero; empate → más reciente)
+      2) Por cada categoría deduplicable, hasta MAX_POR_CATEGORIA memorias en el
+         prompt (orden: prioridad efectiva — ver _prioridad_efectiva —; empate →
+         más reciente)
       3) Categorías no deduplicables (otro) se incluyen todas
       4) Limitar a 'max_items' para el prompt
+
+    El tope por categoría SOLO decide qué entra al prompt de este turno; ya no
+    desactiva nada. Antes las sobrantes pasaban a is_active=false para siempre
+    (135 de 371 en producción, 2026-10-15) y con una ventana más larga esa poda
+    se hubiera llevado de golpe todo lo de 30-90 días. Lo viejo deja de salir
+    por la ventana y por el orden, no por un borrado.
     """
     since_ts = _iso_utc(datetime.now(timezone.utc) - timedelta(days=days))
 
@@ -314,9 +294,10 @@ def get_recent_memories(
     )
     rows: List[Dict[str, Any]] = res.data or []
 
-    # Ordenar: mayor prioridad primero; empate → más reciente primero
+    # Ordenar: mayor prioridad efectiva primero; empate → más reciente primero
+    ahora = datetime.now(timezone.utc)
     rows.sort(
-        key=lambda r: (r.get("priority") or 3, r.get("created_at") or ""),
+        key=lambda r: (_prioridad_efectiva(r, ahora), r.get("created_at") or ""),
         reverse=True,
     )
 
@@ -328,18 +309,12 @@ def get_recent_memories(
     unique_rows: List[Dict[str, Any]] = []
     to_deactivate_ids: List[str] = []
 
-    hoy = datetime.now(timezone.utc).date()
     for row in rows:
         cat = (row.get("category") or "").strip().lower()
         if cat in CATEGORIAS_DEDUPLICABLES:
             if category_counts[cat] >= MAX_POR_CATEGORIA:
-                # Ya hay MAX_POR_CATEGORIA memorias mejores de esta categoría.
-                # Queda fuera del prompt de este turno, pero SOLO se desactiva
-                # si no es material proactivo pendiente (evento futuro, tema
-                # abierto, recurso): eso debe seguir vivo para que Numa pueda
-                # traerlo por sí sola más adelante.
-                if row.get("id") and not _protegida_de_desactivacion(row, hoy):
-                    to_deactivate_ids.append(row["id"])
+                # Ya hay MAX_POR_CATEGORIA memorias mejores de esta categoría:
+                # queda fuera del prompt de ESTE turno, sin desactivarse.
                 continue
             category_counts[cat] += 1
 
@@ -647,8 +622,20 @@ def _clasificar_evento(days_until: int, followed_up: bool) -> Optional[Tuple[str
 _COOLDOWN_PROACTIVO_HORAS = 20
 
 
-def _en_cooldown_proactivo(last_proactive_at: Any, ahora: Optional[datetime] = None) -> bool:
-    """True si la memoria se insertó en el prompt hace menos de _COOLDOWN_PROACTIVO_HORAS."""
+# Una memoria común traída como respaldo ("algo que te contó otro día") ya
+# cumplió su función una vez que Numa la nombró: volver a sacarla al día
+# siguiente se siente a disco rayado. Eventos y temas no lo necesitan porque
+# al mencionarse se cierran (followed_up / status='closed').
+_COOLDOWN_RESPALDO_HORAS = 24 * 7
+
+
+def _en_cooldown_proactivo(
+    last_proactive_at: Any,
+    ahora: Optional[datetime] = None,
+    horas: int = _COOLDOWN_PROACTIVO_HORAS,
+) -> bool:
+    """True si Numa mencionó la memoria hace menos de `horas` (por defecto
+    _COOLDOWN_PROACTIVO_HORAS)."""
     if not last_proactive_at:
         return False
     try:
@@ -659,7 +646,7 @@ def _en_cooldown_proactivo(last_proactive_at: Any, ahora: Optional[datetime] = N
         marca = marca.replace(tzinfo=timezone.utc)
     if ahora is None:
         ahora = datetime.now(timezone.utc)
-    return (ahora - marca) < timedelta(hours=_COOLDOWN_PROACTIVO_HORAS)
+    return (ahora - marca) < timedelta(hours=horas)
 
 
 def get_proactive_memories(
@@ -735,6 +722,49 @@ def _palabras_relevantes(texto: str) -> set:
         w for w in _re.sub(r"[^\wáéíóúñ ]", " ", (texto or "").lower()).split()
         if len(w) > 3
     }
+
+
+# Palabras que aparecen en cualquier memoria o charla y no identifican un
+# tema: los verbos con que M08 redacta las memorias ("está", "siente",
+# "tiene"…) y relleno común. Sin sacarlas, "está todo bien" alcanzaba para
+# dar por hablado "Está peleado con su hermano".
+_PALABRAS_GENERICAS = {
+    "esta", "estas", "estaba", "estoy", "sabe", "tiene", "tenia", "tengo", "siente",
+    "sintio", "siento", "quiere", "quiero", "puede", "puedo", "hace", "hizo", "hago",
+    "mucho", "mucha", "muchos", "todo", "toda", "todos", "cosa", "cosas", "algo", "nada",
+    "siempre", "ahora", "bien", "hoy", "ayer", "porque", "pero", "cuando", "donde",
+    "sobre", "entre", "desde", "hasta", "otra", "otro", "usuario", "usuaria", "persona",
+    "piensa", "pensando", "duda", "dudas", "sigue", "seguis", "como", "igual", "tambien",
+    "mismo", "misma", "vez", "veces", "despues", "antes", "dias", "semana", "contaste",
+    "conto", "acuerdo", "quede", "pensaba", "sentis", "andas", "venis",
+}
+_TILDES = str.maketrans("áéíóúüÁÉÍÓÚÜ", "aeiouuAEIOUU")
+
+
+def _palabras_clave(texto: str) -> set:
+    """Raíces (5 letras, sin tildes) de las palabras que identifican el tema:
+    más de 3 letras y fuera de _PALABRAS_GENERICAS. La raíz hace que
+    "renunciar"/"renuncia" o "hermano"/"hermana" cuenten como lo mismo."""
+    t = (texto or "").lower().translate(_TILDES)
+    return {
+        w[:5]
+        for w in _re.sub(r"[^\wñ ]", " ", t).split()
+        if len(w) > 3 and w not in _PALABRAS_GENERICAS
+    }
+
+
+def respuesta_menciona_memoria(respuesta: str, memoria: Optional[Dict[str, Any]]) -> bool:
+    """True si la respuesta de Numa nombra la memoria que se le ofreció (su
+    título de evento o alguna palabra clave de su contenido). Pura → testeable.
+
+    Existe porque ofrecer una memoria no es usarla: el bloque deja que Numa
+    decida el momento, y antes la memoria se daba por usada (tema cerrado,
+    evento seguido) apenas entraba al prompt, aunque Numa no la nombrara."""
+    if not memoria or not respuesta:
+        return False
+    referencia = memoria.get("event_title") or memoria.get("content") or ""
+    claves = _palabras_clave(referencia)
+    return bool(claves and claves & _palabras_clave(respuesta))
 
 
 # Señales de que el evento NO ocurrió todavía (se pospuso / la fecha guardada
@@ -1142,7 +1172,7 @@ def elegir_memoria_respaldo(
         if (m.get("priority") or 3) >= prioridad_minima
         and (m.get("content") or "").strip()
         and es_de_dias_anteriores(m.get("created_at"), ahora)
-        and not _en_cooldown_proactivo(m.get("last_proactive_at"), ahora)
+        and not _en_cooldown_proactivo(m.get("last_proactive_at"), ahora, _COOLDOWN_RESPALDO_HORAS)
     ]
     if not candidatas:
         return None
@@ -1301,7 +1331,9 @@ def cerrar_temas_abiertos(user_id: str, mensaje: str) -> None:
     El desenlace en sí queda registrado por la memoria nueva que el LLM extrae
     de ese mismo mensaje; acá solo se cierra el ciclo del tema viejo.
     """
-    palabras_msg = _palabras_relevantes(mensaje)
+    # Palabras CLAVE, no cualquier palabra de 4+ letras: antes "está todo
+    # bien" compartía "está" con "Está peleado con su hermano" y lo cerraba.
+    palabras_msg = _palabras_clave(mensaje)
     if not palabras_msg:
         return
     if _RE_AUN_NO.search(mensaje):
@@ -1324,7 +1356,7 @@ def cerrar_temas_abiertos(user_id: str, mensaje: str) -> None:
     ids = [
         r["id"]
         for r in (res.data or [])
-        if _palabras_relevantes(r.get("content") or "") & palabras_msg
+        if _palabras_clave(r.get("content") or "") & palabras_msg
     ]
     if ids:
         try:
