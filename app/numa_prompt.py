@@ -935,7 +935,23 @@ MAL  → "¡Bienvenido a Numa! Soy tu compañero emocional. Aquí podrás encont
 "M23_inicio_sesion_con_memoria": """
 INICIO DE SESIÓN — TENÉS MEMORIAS DE ESTA PERSONA:
 
-Esta es la primera respuesta de esta conversación y tenés memorias de sesiones anteriores.
+Esta es la primera respuesta de una charla nueva y tenés memorias de charlas anteriores.
+Si en el historial hay mensajes de antes, son de otro momento (otro día u otra hora), no
+de ahora: no sigas ese hilo como si nunca se hubiera cortado.
+
+SI EL USUARIO SOLO SALUDÓ ("hola", "buenas", "hola Numa", "¿cómo andás?"):
+Es el mejor momento para que se note que lo conocés. Saludá con calidez y, en la MISMA
+respuesta, traé lo que el sistema te marcó como disponible ("EVENTO EN EL RADAR", "TEMA
+ABIERTO DEL USUARIO" o "ALGO QUE TE CONTÓ OTRO DÍA"). Una sola cosa, en una frase, como un
+amigo que se acuerda.
+BIEN → "¡Hola! Qué bueno leerte. ¿Cómo te fue al final con la entrevista?"
+BIEN → "Hola, ¿cómo andás? Me quedé pensando en lo de tu hermano, ¿cómo siguió eso?"
+MAL  → "Hola, ¿en qué te puedo ayudar hoy?" (ya lo conocés: no arranques como con un desconocido)
+MAL  → "Hola. Tengo registrado que tenías una entrevista." (robótico)
+- Si no hay ningún bloque disponible: saludá con calidez y preguntá cómo viene. NO
+  inventes ni elijas por tu cuenta un tema de las memorias de fondo.
+- Si el check-in de hoy dice que está mal: primero preguntá cómo está, y la memoria queda
+  para más adelante.
 
 SI hay un evento concreto que estaba por pasar (examen, entrevista, partido, cita, etc.):
 → Preguntá cómo le fue. Ese es tu primer mensaje.
@@ -961,16 +977,21 @@ USUARIO QUE VUELVE DESPUÉS DE VARIOS DÍAS:
 El usuario estuvo días sin usar la app (los datos concretos vienen en el bloque
 "DATOS DE REENGANCHE").
 
+Este módulo solo aparece en la PRIMERA respuesta de la vuelta: actuá en esta respuesta,
+no hay un "después" en el que te lo vuelvan a recordar.
+
 INSTRUCCIONES:
-- En el mensaje 1 o 2 de esta sesión: respondé normal, sin mencionar la ausencia ni la
-  memoria de reenganche. Solo acompañá lo que trae.
-- En el mensaje 3: de manera natural y sin que parezca un recordatorio, sacá el tema de
-  la memoria de reenganche. "¿Y aquello de [tema]? ¿Cómo quedó?" / "La última vez hablamos
-  de [tema]... ¿cómo está ese frente?" — según el tono de la conversación.
-  Si el usuario ya trajo ese tema, no lo repitas.
+- Recibilo con calidez, como a alguien que te alegra que vuelva.
+- Si solo saludó: además del saludo, traé el tema de reenganche en esta misma respuesta,
+  natural y sin que parezca un recordatorio. "¿Y cómo siguió lo de [tema]?" / "Me había
+  quedado pensando en lo de [tema], ¿cómo está eso?"
+- Si trajo algo propio: acompañá eso primero. El tema de reenganche entra solo si se
+  conecta con lo que trajo; si no, dejalo pasar.
+- Una sola cosa del pasado por respuesta. Si el usuario ya trajo ese tema, no lo repitas.
 - El objetivo no es demostrar que recordaste: es mostrar que seguís ahí y que lo que le
   importa te importa.
-- No uses las palabras "ausencia" ni "inactivo", ni menciones que tardó en volver.
+- No uses las palabras "ausencia" ni "inactivo", ni menciones que tardó en volver ni
+  cuántos días pasaron.
 """,
 
 "M25_ejercicios_disponibles": """
@@ -1927,11 +1948,25 @@ def _bloque_control_preguntas(
     return ""
 
 
-def _bloque_contexto_sesion(num_interacciones: int, es_primera_vez: bool, pide_ejercicio: bool = False) -> str:
+def _bloque_contexto_sesion(
+    num_interacciones: int,
+    es_primera_vez: bool,
+    pide_ejercicio: bool = False,
+    vuelve_tras_pausa: bool = False,
+) -> str:
     ejercicios_ok = num_interacciones >= 4 or pide_ejercicio
+    if vuelve_tras_pausa:
+        # La app reenvía la charla vieja: sin esta aclaración el modelo lee
+        # "20 mensajes" y sigue el hilo de hace días como si fuera de ahora.
+        linea_mensajes = (
+            "- Es el PRIMER mensaje de una charla nueva: la persona vuelve después de un rato "
+            "largo. Los mensajes anteriores del historial son de otro momento."
+        )
+    else:
+        linea_mensajes = f"- Mensajes en esta sesión: {num_interacciones}"
     return f"""CONTEXTO DE ESTA CONVERSACIÓN:
 
-- Mensajes en esta sesión: {num_interacciones}
+{linea_mensajes}
 - ¿Primera vez del usuario en la app?: {"sí" if es_primera_vez else "no"}
 - ¿Podés sugerir ejercicios?: {"sí" if ejercicios_ok else "no — todavía no, salvo que el usuario lo pida explícitamente"}"""
 
@@ -1981,8 +2016,26 @@ def _bloque_perfil(perfil: dict) -> str:
     return bloque
 
 
-def _bloque_reenganche(memorias: list, dias_inactivo: int) -> str:
-    """Parte dinámica del reenganche; las instrucciones están en M24."""
+def _bloque_reenganche(memorias: list, dias_inactivo: int, memoria_elegida: dict | None = None) -> str:
+    """Parte dinámica del reenganche; las instrucciones están en M24.
+
+    `memoria_elegida`: la que ya eligió el selector proactivo para este turno
+    (evento, tema abierto, recurso o respaldo). Si existe, el reenganche usa
+    ESA en vez de elegir otra: si no, el prompt ofrecía dos temas del pasado
+    a la vez y M24/M29 piden uno solo."""
+    if memoria_elegida:
+        tema = (
+            memoria_elegida.get("event_title") or memoria_elegida.get("content") or ""
+        ).strip()
+        if tema:
+            semanas = dias_inactivo // 7
+            dias_str = f"{dias_inactivo} días" if dias_inactivo < 14 else f"unas {semanas} semanas"
+            return (
+                f"DATOS DE REENGANCHE:\n"
+                f"- El usuario lleva {dias_str} sin usar la app.\n"
+                f'- Memoria para reenganchar: la misma del bloque "DISPONIBLE" de arriba ("{tema}"). '
+                f"No traigas otra."
+            )
     candidatas = []
     for m in memorias:
         if isinstance(m, dict):
@@ -2189,7 +2242,19 @@ _CRITERIO_TRAER_MEMORIA = (
 )
 
 
-def _bloque_tema_abierto(memoria: dict) -> str:
+# Variante para cuando la persona recién llega y solo saludó (ver M23): ahí
+# el buen momento es AHORA, no "cuando la charla se apague" — si se espera,
+# la charla arranca en frío y la memoria no se usa nunca.
+_CRITERIO_TRAER_MEMORIA_SALUDO = (
+    "- La persona recién llega y solo saludó: traelo EN ESTA respuesta, después del "
+    "saludo, con una frase natural. Es lo que hace que la charla no arranque en frío.\n"
+    "- Que se note que es de otro día ('el otro día me contaste…'), nunca como si lo "
+    "acabara de decir.\n"
+    "- Si el check-in de hoy dice que está mal, primero preguntá cómo está y dejalo para después."
+)
+
+
+def _bloque_tema_abierto(memoria: dict, apertura_saludo: bool = False) -> str:
     """Parte dinámica del tema abierto; las instrucciones de tono están en M32."""
     contenido = (memoria.get("content") or "").strip()
     if not contenido:
@@ -2199,7 +2264,7 @@ def _bloque_tema_abierto(memoria: dict) -> str:
     return (
         'TEMA ABIERTO DEL USUARIO — DISPONIBLE (seguí las reglas de "TEMA ABIERTO"):\n'
         f'- Lo que contó y quedó pendiente{desde}: "{contenido}"\n'
-        + _CRITERIO_TRAER_MEMORIA
+        + (_CRITERIO_TRAER_MEMORIA_SALUDO if apertura_saludo else _CRITERIO_TRAER_MEMORIA)
     )
 
 
@@ -2219,7 +2284,7 @@ def _bloque_memoria_recurso(memoria: dict) -> str:
     )
 
 
-def _bloque_memoria_para_retomar(memoria: dict) -> str:
+def _bloque_memoria_para_retomar(memoria: dict, apertura_saludo: bool = False) -> str:
     """Respaldo: una memoria común de días anteriores, cuando no hay tema
     abierto ni recurso disponible. Sin módulo propio — la instrucción completa
     entra acá porque es corta y solo aplica cuando esta memoria existe."""
@@ -2231,7 +2296,7 @@ def _bloque_memoria_para_retomar(memoria: dict) -> str:
     return (
         "ALGO QUE TE CONTÓ OTRO DÍA — DISPONIBLE:\n"
         f'- {contenido}{desde}\n'
-        + _CRITERIO_TRAER_MEMORIA
+        + (_CRITERIO_TRAER_MEMORIA_SALUDO if apertura_saludo else _CRITERIO_TRAER_MEMORIA)
     )
 
 
@@ -2323,6 +2388,8 @@ def construir_prompt(
     memoria_para_retomar: dict | None = None,
     router_hints: dict | None = None,
     sin_contacto: bool = False,
+    vuelve_tras_pausa: bool = False,
+    apertura_saludo: bool = False,
 ) -> str:
     tiene_memorias = bool(memorias)
     pide_ejercicio = _detectar_pedido_ejercicio(ultimo_mensaje)
@@ -2355,22 +2422,28 @@ def construir_prompt(
 
     # El bloque proactivo solo si M29 entró en el routing (mismo gate de crisis):
     # en crisis/post-contención el evento nunca compite con la seguridad.
+    # La memoria que efectivamente se le ofrece a Numa este turno (a lo sumo
+    # una). El reenganche (M24) reutiliza esta en vez de elegir otra.
+    memoria_ofrecida = None
     if evento_proactivo and "M29_memoria_proactiva" in modulos_ids:
         bloque_ev = _bloque_memoria_proactiva(evento_proactivo)
         if bloque_ev:
             secciones.append(bloque_ev)
+            memoria_ofrecida = evento_proactivo
 
     # Tema abierto / recurso propio: mismos gates que M29. El selector contextual
     # garantiza que solo una de las tres señales llega por turno.
     if tema_abierto and "M32_tema_abierto" in modulos_ids:
-        bloque_ta = _bloque_tema_abierto(tema_abierto)
+        bloque_ta = _bloque_tema_abierto(tema_abierto, apertura_saludo=apertura_saludo)
         if bloque_ta:
             secciones.append(bloque_ta)
+            memoria_ofrecida = tema_abierto
 
     if memoria_recurso and "M33_memoria_recurso" in modulos_ids:
         bloque_rec = _bloque_memoria_recurso(memoria_recurso)
         if bloque_rec:
             secciones.append(bloque_rec)
+            memoria_ofrecida = memoria_recurso
 
     # Respaldo: solo cuando el selector contextual no encontró ni evento ni tema
     # abierto ni recurso (chat_router ya garantiza la exclusividad). Mismos
@@ -2383,9 +2456,10 @@ def construir_prompt(
         and crisis_score < 0.35
         and not ultimo_modulo_critico
     ):
-        bloque_ret = _bloque_memoria_para_retomar(memoria_para_retomar)
+        bloque_ret = _bloque_memoria_para_retomar(memoria_para_retomar, apertura_saludo=apertura_saludo)
         if bloque_ret:
             secciones.append(bloque_ret)
+            memoria_ofrecida = memoria_para_retomar
 
     if ubicacion and (ubicacion.get("ciudad") or ubicacion.get("pais")):
         secciones.append(_bloque_ubicacion(ubicacion))
@@ -2394,7 +2468,7 @@ def construir_prompt(
         secciones.append(_bloque_perfil(perfil))
 
     if dias_inactivo >= 5 and tiene_memorias:
-        secciones.append(_bloque_reenganche(memorias, dias_inactivo))
+        secciones.append(_bloque_reenganche(memorias, dias_inactivo, memoria_ofrecida))
 
     if tiene_memorias:
         secciones.append(_bloque_memorias(memorias))
@@ -2406,7 +2480,9 @@ def construir_prompt(
         secciones.append(_bloque_checkin(checkin_hoy, checkin_recien_hecho=checkin_recien_hecho))
 
     # ── Contexto de sesión (datos operativos, al final) ──────
-    secciones.append(_bloque_contexto_sesion(num_interacciones, es_primera_vez, pide_ejercicio))
+    secciones.append(
+        _bloque_contexto_sesion(num_interacciones, es_primera_vez, pide_ejercicio, vuelve_tras_pausa)
+    )
 
     # ── Control de preguntas (último, para máxima salencia) ──
     # No aplica en contexto de riesgo: las preguntas de seguridad

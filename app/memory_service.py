@@ -398,6 +398,78 @@ def get_dias_inactivo(user_id: str) -> int:
         return 0
 
 
+# ── Inicio de sesión ─────────────────────────────────────────────────────────
+# numa-mobile guarda la charla en el teléfono y reenvía los últimos 20
+# mensajes en cada request, así que "la conversación trae un solo mensaje" ya
+# no sirve para saber que alguien vuelve: en la app eso pasaba una sola vez en
+# la vida del usuario y M23/M24 (saludo con memoria, reenganche) no se
+# activaban nunca. La señal confiable es el tiempo desde la última respuesta
+# de Numa guardada en la base, que vale igual para la web y para la app.
+HORAS_NUEVA_SESION = 4
+
+
+def get_ultima_respuesta_numa(user_id: str) -> Optional[datetime]:
+    """created_at de la última respuesta de Numa guardada, o None si el
+    usuario nunca recibió una. NO atrapa errores de la base: el caller tiene
+    que poder distinguir "sin historial" de "no se pudo consultar"."""
+    res = (
+        supabase.table("conversations")
+        .select("created_at")
+        .eq("user_id", user_id)
+        .eq("role", "assistant")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    marca = rows[0].get("created_at") if rows else None
+    if not marca:
+        return None
+    dt = datetime.fromisoformat(str(marca).replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def evaluar_inicio_sesion(
+    ultima_respuesta: Optional[datetime],
+    ahora: Optional[datetime] = None,
+    horas: int = HORAS_NUEVA_SESION,
+) -> Tuple[bool, int]:
+    """(es_inicio_de_sesion, dias_inactivo) a partir de la última respuesta de
+    Numa. Pura → testeable. Sin respuesta previa es inicio (primera charla)."""
+    if ultima_respuesta is None:
+        return True, 0
+    ahora = ahora or datetime.now(timezone.utc)
+    delta = ahora - ultima_respuesta
+    return delta >= timedelta(hours=horas), max(0, delta.days)
+
+
+_SALUDOS = {
+    "hola", "holaa", "holis", "buenas", "buen", "buenos", "hey", "ey", "hi", "hello",
+}
+# Palabras que pueden acompañar a un saludo sin que el mensaje traiga un tema.
+_RELLENO_SALUDO = {
+    "numa", "dia", "dias", "tardes", "noches", "como", "estas", "andas", "va",
+    "todo", "bien", "que", "tal", "onda", "che", "amigo", "amiga", "vos", "tu",
+    "y", "de", "nuevo", "otra", "vez", "aca", "estoy", "volvi",
+}
+
+
+def es_saludo_inicial(mensaje: str) -> bool:
+    """True si el mensaje es solo un saludo ("hola", "hola Numa", "buenas,
+    ¿cómo andás?") y no trae ningún tema propio. Es el momento en que Numa
+    puede abrir la charla trayendo algo que le contaron otro día."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (mensaje or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    palabras = _re.findall(r"[a-zñ]+", t)
+    if not palabras or len(palabras) > 7:
+        return False
+    primera = _re.sub(r"(.)\1+$", r"\1", palabras[0])  # "holaaa" → "hola"
+    if primera not in _SALUDOS and palabras[0] not in _SALUDOS:
+        return False
+    return all(p in _SALUDOS or p in _RELLENO_SALUDO for p in palabras[1:])
+
+
 # ════════════════════════════════════════════════════════════════════
 # MEMORIA PROACTIVA — eventos con fecha
 # ════════════════════════════════════════════════════════════════════
