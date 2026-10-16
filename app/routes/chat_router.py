@@ -41,6 +41,9 @@ from app.memory_service import (
     resolver_fecha_relativa,
     parse_fecha_llm,
     get_dias_inactivo,
+    get_ultima_respuesta_numa,
+    evaluar_inicio_sesion,
+    es_saludo_inicial,
     get_checkin_hoy_cached,
     MEMORY_WINDOW_DAYS_DEFAULT,
 )
@@ -264,8 +267,11 @@ class ChatResponse(BaseModel):
 # _preparar_turno (ver ThreadPoolExecutor ahí) — sus tiempos individuales se
 # guardan en "_tiempos" para diagnóstico, pero SUMARLOS exageraría el total
 # real (se solapan a propósito). "t_paralelo_ms" ya representa el tiempo de
-# pared de ese bloque, así que estos 4 quedan afuera de la suma.
-_TIEMPOS_EXCLUIDOS_DEL_TOTAL = {"t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms"}
+# pared de ese bloque, así que todas las tareas del bloque quedan afuera de la suma.
+_TIEMPOS_EXCLUIDOS_DEL_TOTAL = {
+    "t_context_router_ms", "t_memorias_ms", "t_patrones_ms", "t_metadatos_ms",
+    "t_mem_contextuales_ms", "t_temas_ms", "t_eventos_ms",
+}
 
 # Ejecutor propio para el context_router en paralelo. Tiene que estar a nivel
 # de módulo (y no adentro de _preparar_turno) por dos motivos: el
@@ -497,10 +503,22 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     def _tarea_metadatos():
         t0 = time.perf_counter()
         dias_inactivo_ = 0
-        if num_interacciones <= 4:
-            dias_inactivo_ = get_dias_inactivo(user_id)
+        # None = no se pudo saber (la base falló): se cae al criterio viejo,
+        # "la conversación trae un solo mensaje". Ver evaluar_inicio_sesion.
+        inicio_por_actividad_: Optional[bool] = None
+        try:
+            inicio_por_actividad_, dias_inactivo_ = evaluar_inicio_sesion(
+                get_ultima_respuesta_numa(user_id)
+            )
+        except Exception as e:
+            capturar_error(e, contexto="inicio_sesion")
+            print(f"⚠️ No se pudo calcular el inicio de sesión: {e}")
+            if num_interacciones <= 4:
+                dias_inactivo_ = get_dias_inactivo(user_id)
         critico = ultimo_modulo_critico
-        if not critico and num_interacciones <= 4:
+        # Al volver después de horas también se mira crisis_logs: el historial
+        # que reenvía la app puede no mostrar la crisis de la última vez.
+        if not critico and (num_interacciones <= 4 or inicio_por_actividad_):
             critico = feedback_repo.hay_crisis_reciente(user_id)
         checkin = None
         try:
@@ -508,7 +526,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         except Exception as e:
             capturar_error(e, contexto="cargar_checkin")
             print(f"⚠️ No se pudo cargar el check-in: {e}")
-        return dias_inactivo_, critico, checkin, round((time.perf_counter() - t0) * 1000, 1)
+        return dias_inactivo_, critico, checkin, inicio_por_actividad_, round((time.perf_counter() - t0) * 1000, 1)
 
     # Estado emocional SIN esperar al router: desde que el context_router corre
     # en paralelo con el LLM, `router_hints` acá es siempre ok=False, así que
@@ -543,17 +561,30 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         se hacían nunca, y en serie le sumarían al turno lo mismo que tarda
         get_proactive_memories (~600ms medidos). Acá cuestan 0 de pared."""
         t0 = time.perf_counter()
-        recursos_, temas_ = [], []
-        if crisis_score < 0.35:
+        recursos_ = []
+        if crisis_score < 0.35 and estado_local in ("triste_vacio", "ansioso", "abrumado"):
             try:
-                if estado_local in ("triste_vacio", "ansioso", "abrumado"):
-                    recursos_ = get_resource_memories(user_id=user_id)
-                elif estado_local in ("neutral", "metas", "buenas_noticias"):
-                    temas_ = get_open_topics(user_id=user_id)
+                recursos_ = get_resource_memories(user_id=user_id)
             except Exception as e:
                 capturar_error(e, contexto="memorias_contextuales")
-                print(f"⚠️ No se pudieron cargar temas/recursos: {e}")
-        return recursos_, temas_, round((time.perf_counter() - t0) * 1000, 1)
+                print(f"⚠️ No se pudieron cargar recursos: {e}")
+        return recursos_, round((time.perf_counter() - t0) * 1000, 1)
+
+    def _tarea_temas_abiertos():
+        """Temas abiertos, en un future aparte de los recursos para no
+        correrlos en serie. Se cargan SIEMPRE (fuera de crisis), no solo con
+        mood neutral: al volver después de horas el mood que manda el cliente
+        es el de la charla anterior y se descarta (ver más abajo), así que
+        acá todavía no se sabe qué estado va a usarse para elegir."""
+        t0 = time.perf_counter()
+        temas_ = []
+        if crisis_score < 0.35:
+            try:
+                temas_ = get_open_topics(user_id=user_id)
+            except Exception as e:
+                capturar_error(e, contexto="temas_abiertos")
+                print(f"⚠️ No se pudieron cargar temas abiertos: {e}")
+        return temas_, round((time.perf_counter() - t0) * 1000, 1)
 
     # El router se lanza en un ejecutor APARTE, que sobrevive a este bloque:
     # el `with` de abajo espera a sus tareas al salir, que es justo lo que no
@@ -562,11 +593,12 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     fut_router_paralelo = _EJECUTOR_ROUTER_PARALELO.submit(_tarea_router)
 
     _t_paralelo_inicio = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=6) as ejecutor:
+    with ThreadPoolExecutor(max_workers=7) as ejecutor:
         fut_memorias = ejecutor.submit(_tarea_memorias)
         fut_patrones = ejecutor.submit(_tarea_patrones)
         fut_metadatos = ejecutor.submit(_tarea_metadatos)
         fut_mem_ctx = ejecutor.submit(_tarea_memorias_contextuales)
+        fut_temas = ejecutor.submit(_tarea_temas_abiertos)
         fut_eventos = ejecutor.submit(_tarea_eventos_proactivos)
 
         # 0.0 = no se esperó acá. El router corre en paralelo y su tiempo real
@@ -575,8 +607,10 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         router_hints, tiempos["t_context_router_ms"] = resultado_vacio(), 0.0
         memorias_vigentes, ids_a_desactivar, tiempos["t_memorias_ms"] = fut_memorias.result()
         patrones, tiempos["t_patrones_ms"] = fut_patrones.result()
-        dias_inactivo, ultimo_modulo_critico, checkin_hoy, tiempos["t_metadatos_ms"] = fut_metadatos.result()
-        recursos_ctx, temas_ctx, tiempos["t_mem_contextuales_ms"] = fut_mem_ctx.result()
+        (dias_inactivo, ultimo_modulo_critico, checkin_hoy, inicio_por_actividad,
+         tiempos["t_metadatos_ms"]) = fut_metadatos.result()
+        recursos_ctx, tiempos["t_mem_contextuales_ms"] = fut_mem_ctx.result()
+        temas_ctx, tiempos["t_temas_ms"] = fut_temas.result()
         eventos_ctx, tiempos["t_eventos_ms"] = fut_eventos.result()
     # Tiempo de PARED del bloque paralelo — es el que realmente importa para
     # el total (la suma de los 4 de arriba exagera, se solapan a propósito).
@@ -606,6 +640,24 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     # consulta, solo la elección (pura). Por eso t_proactivo_ms pasa a ser ~0:
     # el tiempo de la consulta de eventos no desapareció, se mudó a
     # t_eventos_ms, adentro de t_paralelo_ms.
+    # ── Inicio de sesión ─────────────────────────────────────────────
+    # Se decide por el tiempo desde la última respuesta de Numa, no por el
+    # largo del historial: la app reenvía hasta 20 mensajes viejos, así que
+    # "un solo mensaje" casi nunca pasaba (ver evaluar_inicio_sesion).
+    es_inicio_sesion = len(conversation) == 1 or bool(inicio_por_actividad)
+    # Volvió después de horas con la charla vieja todavía en el historial.
+    vuelve_tras_pausa = es_inicio_sesion and len(conversation) > 1
+    # "hola" / "buenas, Numa" sin ningún tema: el momento de abrir la charla
+    # trayendo algo de otro día (ver M23).
+    apertura_saludo = es_inicio_sesion and es_saludo_inicial(ultimo_mensaje)
+    # El mood que manda el cliente es el de la ÚLTIMA respuesta de Numa, que
+    # al volver puede ser de hace días: no describe cómo llega hoy la persona.
+    mood_turno = None if vuelve_tras_pausa else body.ultimo_mood
+    if apertura_saludo:
+        estado_local = "neutral"
+    elif vuelve_tras_pausa:
+        estado_local = None  # sin estado confiable → solo eventos (rama conservadora)
+
     evento_proactivo: Optional[Dict[str, Any]] = None
     tema_abierto: Optional[Dict[str, Any]] = None
     memoria_recurso: Optional[Dict[str, Any]] = None
@@ -646,7 +698,12 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
                 # de días anteriores, de las que ya se cargaron para el prompt.
                 # Es lo que le da algo de dónde agarrarse a una charla apagada
                 # cuando no hay evento, ni tema abierto, ni recurso.
-                memoria_para_retomar = elegir_memoria_respaldo(memorias_vigentes)
+                # Ante un saludo al volver también vale prioridad 3 (contexto de
+                # vida: qué estudia, dónde trabaja): ahí la alternativa es una
+                # charla que arranca en frío, no un dato traído de relleno.
+                memoria_para_retomar = elegir_memoria_respaldo(
+                    memorias_vigentes, prioridad_minima=3 if apertura_saludo else 4
+                )
                 if memoria_para_retomar:
                     memoria_ctx_id = memoria_para_retomar.get("id")
         except Exception as e:
@@ -654,10 +711,9 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             print(f"⚠️ No se pudo elegir memoria contextual: {e}")
     _checkpoint("t_proactivo_ms")
 
-    # es_inicio_sesion/es_primera_vez son locales — no hacía falta paralelizarlas.
+    # es_inicio_sesion se resolvió más arriba (antes de elegir la memoria).
     # dias_inactivo, ultimo_modulo_critico y checkin_hoy ya se resolvieron
     # arriba, en el bloque paralelo (_tarea_metadatos).
-    es_inicio_sesion = len(conversation) == 1
     es_primera_vez = (num_interacciones == 1 and not memorias_vigentes)
 
     historial_reciente = [m.model_dump() for m in conversation[-4:]]
@@ -715,7 +771,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             crisis_score=crisis_score_,
             ultimo_modulo_critico=ultimo_modulo_critico,
             historial_reciente=historial_reciente,
-            mood_actual=body.ultimo_mood,
+            mood_actual=mood_turno,
             ultimo_mensaje=ultimo_mensaje,
             preguntas_seguidas=preguntas_seguidas,
             turnos_sin_preguntar=turnos_sin_preguntar,
@@ -725,6 +781,8 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             memoria_recurso=memoria_recurso_,
             memoria_para_retomar=memoria_para_retomar_,
             router_hints=router_hints_,
+            vuelve_tras_pausa=vuelve_tras_pausa,
+            apertura_saludo=apertura_saludo,
             modo_llamada=modo_llamada,
             sin_contacto=bool(body.sugerir_contacto),
         )
