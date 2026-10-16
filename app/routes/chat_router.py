@@ -655,7 +655,11 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     # La memoria ofrecida entera (no solo el id): al final del turno se mira si
     # la respuesta la nombró antes de darla por usada (_disparar_tareas_turno).
     memoria_ctx: Optional[Dict[str, Any]] = None
-    if crisis_score < 0.35:
+    # Si hoy marcó en el check-in que está mal, el saludo no arranca con un
+    # tema del pasado: primero cómo está (regla fija, no criterio del LLM —
+    # en el eval lo traía igual).
+    llega_mal_hoy = apertura_saludo and checkin_hoy == 1
+    if crisis_score < 0.35 and not llega_mal_hoy:
         try:
             evento_top = eventos_ctx[0] if eventos_ctx else None
 
@@ -780,11 +784,22 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         crisis_score, router_hints, evento_proactivo, tema_abierto, memoria_recurso,
         memoria_para_retomar,
     )
+
+    # Lo que ve el LLM principal. Si vuelve después de horas y solo saluda,
+    # NO se le pasa la charla vieja que reenvía la app: en el eval, con ella
+    # en contexto, Numa retomaba el último hilo de hace días en vez de la
+    # memoria ofrecida (o en vez de preguntar cómo está, con check-in malo).
+    # Lo importante de antes ya llega por las memorias, y un saludo no hace
+    # referencia a nada. Si vuelve contando algo, va todo como siempre (puede
+    # estar refiriéndose a lo anterior). Se guarda y se clasifica igual con la
+    # conversación completa; la regeneración por riesgo también la usa entera.
+    conversation_llm = conversation[-1:] if (vuelve_tras_pausa and apertura_saludo) else conversation
     _checkpoint("t_prompt_ms")
 
     return {
         "crisis_confirmada": False,
         "conversation": conversation,
+        "conversation_llm": conversation_llm,
         "system_prompt": system_prompt,
         "sugerir_contacto": bool(body.sugerir_contacto),
         "crisis_score": crisis_score,
@@ -1101,7 +1116,7 @@ def chat_endpoint(
         ultimo_modulo_critico = turno["ultimo_modulo_critico"]
 
         result = llm.generate_response(
-            conversation=[m.model_dump() for m in conversation],
+            conversation=[m.model_dump() for m in turno["conversation_llm"]],
             system_prompt=turno["system_prompt"],
         )
 
@@ -1385,7 +1400,7 @@ def _stream_chat_respuesta(
     metadata: Optional[Dict[str, Any]] = None
     try:
         for tipo, valor in llm.generate_response_stream(
-            conversation=[m.model_dump() for m in conversation],
+            conversation=[m.model_dump() for m in turno["conversation_llm"]],
             system_prompt=turno["system_prompt"],
         ):
             if tipo == "mensaje":

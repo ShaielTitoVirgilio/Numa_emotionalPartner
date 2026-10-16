@@ -126,7 +126,7 @@ for i in range(9):
     ]
 
 
-def _turno(ultima_respuesta, mensaje, temas=None, memorias=None, mood="sad"):
+def _turno(ultima_respuesta, mensaje, temas=None, memorias=None, mood="sad", checkin=None):
     body = cr.ChatRequest(
         conversation=_charla_vieja + [{"role": "user", "content": mensaje}],
         ultimo_mood=mood, perfil={},
@@ -136,7 +136,7 @@ def _turno(ultima_respuesta, mensaje, temas=None, memorias=None, mood="sad"):
         patch.object(cr, "get_recent_memories", return_value=(memorias or [], [])),
         patch.object(cr, "get_topic_patterns_cached", return_value=[]),
         patch.object(cr, "get_dias_inactivo", return_value=0),
-        patch.object(cr, "get_checkin_hoy_cached", return_value=None),
+        patch.object(cr, "get_checkin_hoy_cached", return_value=checkin),
         patch.object(cr, "get_proactive_memories", return_value=[]),
         patch.object(cr, "get_open_topics", return_value=temas or []),
         patch.object(cr, "get_resource_memories", return_value=[]),
@@ -159,13 +159,22 @@ check("integración: trae el tema abierto (mood viejo 'sad' descartado)", "TEMA 
 check("integración: queda marcado para el cierre", t["memoria_ctx_id"] == "t1")
 check("integración: M24 con los 6 días", "6 días sin usar la app" in sp)
 
+check("integración: 'hola' al volver → al LLM le llega solo el saludo",
+      [m.content for m in t["conversation_llm"]] == ["hola numa"])
+check("integración: se guarda con la conversación completa", len(t["conversation"]) == 19)
+
 t = _turno(_ahora - timedelta(days=2), "hola", temas=[], memorias=_mem_prio3)
 check(
     "integración: sin tema, el saludo acepta una memoria prioridad 3",
     "ALGO QUE TE CONTÓ OTRO DÍA — DISPONIBLE" in t["system_prompt"] and t["memoria_ctx_id"] == "m3",
 )
 
+t = _turno(_ahora - timedelta(days=2), "hola", temas=_tema_db, memorias=_mem_prio3, checkin=1)
+check("integración: check-in 'mal' + hola → no se ofrece memoria",
+      t["memoria_ctx_id"] is None and "— DISPONIBLE" not in t["system_prompt"])
+
 t = _turno(_ahora - timedelta(minutes=5), "hola", temas=_tema_db, memorias=_mem_prio3, mood="calm")
+check("integración: misma charla → el LLM ve todo", len(t["conversation_llm"]) == 19)
 check("integración: misma charla (hace 5 min) → sin M23", "INICIO DE SESIÓN" not in t["system_prompt"])
 check(
     "integración: misma charla → prioridad 3 NO alcanza para el respaldo",
@@ -175,6 +184,7 @@ check(
 t = _turno(_ahora - timedelta(days=3), "hola, hoy me fue horrible en el laburo",
            temas=_tema_db, memorias=_mem_prio3)
 check("integración: vuelve contando algo → M23 igual", "INICIO DE SESIÓN" in t["system_prompt"])
+check("integración: vuelve contando algo → el LLM ve la charla completa", len(t["conversation_llm"]) == 19)
 check(
     "integración: vuelve contando algo → sin estado confiable, no se fuerza tema",
     "TEMA ABIERTO DEL USUARIO — DISPONIBLE" not in t["system_prompt"],
