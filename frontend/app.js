@@ -19,6 +19,8 @@ import { initProfile, aplicarTamanoFuenteGuardado, aplicarTemaGuardado, alternar
 import { mostrarSelectorSonido } from './modules/ambientSound.js';
 import { toggleMic } from "./modules/chat.js";
 import { initFeedbackTab } from './modules/feedbackTab.js';
+import { abrirLlamada, cerrarLlamada, initLlamada } from './modules/llamada.js';
+import { olvidarTokenVoz } from './modules/voz.js';
 
 // ============================================
 // EXPONER FUNCIONES AL WINDOW
@@ -44,6 +46,10 @@ window.toggleMic = toggleMic;
 window.alternarTemaChat = alternarTemaChat;
 window.inicializarChat = inicializarChat;
 window.initFeedback = initFeedbackTab;
+window.abrirLlamada = abrirLlamada;
+window.cerrarLlamada = cerrarLlamada;
+window.initLlamada = initLlamada;
+window.olvidarTokenVoz = olvidarTokenVoz;
 
 
 

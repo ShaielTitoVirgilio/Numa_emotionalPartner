@@ -303,6 +303,15 @@
 
     <!-- INPUT + MIC -->
     <div class="input-container">
+      <!-- Modo llamada: hablás y Numa te contesta con voz. Oculto hasta que
+           /llamada/estado diga que esta cuenta lo tiene (ver llamada.js). -->
+      <button
+        class="llamada-btn hidden"
+        id="llamada-btn"
+        onclick="abrirLlamada()"
+        aria-label="Hablar con Numa por voz">
+        📞
+      </button>
       <button
         class="mic-btn"
         id="mic-btn"

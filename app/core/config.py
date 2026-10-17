@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +34,35 @@ class Config:
     CHAT_MODEL: str = os.getenv("CHAT_MODEL", "openai/gpt-5.6-luna")
     CHAT_FALLBACK_PROVIDER: str = os.getenv("CHAT_FALLBACK_PROVIDER", "openrouter")
     CHAT_FALLBACK_MODEL: str = os.getenv("CHAT_FALLBACK_MODEL", "google/gemini-3-flash-preview")
+
+    # ── Voz de Numa en el modo llamada (Cartesia) ──────────────────────
+    # El cliente NO lleva esta clave: pide un token de corta duración a
+    # /tts/token y con ese token habla directo con Cartesia. Así el audio no
+    # pasa por nuestro servidor (un salto de red menos, que en una llamada se
+    # nota) y la clave permanente nunca sale de acá.
+    #
+    # TTS_CARTESIA_HABILITADO=false apaga Cartesia sin deploy: el modo llamada
+    # avisa que la voz no está disponible y no se abre.
+    CARTESIA_API_KEY: str = os.getenv("CARTESIA_API_KEY", "")
+    CARTESIA_VERSION: str = os.getenv("CARTESIA_VERSION", "2026-08-14")
+
+    @property
+    def tts_cartesia_habilitado(self) -> bool:
+        prendido = os.getenv("TTS_CARTESIA_HABILITADO", "true").strip().lower() not in ("false", "0", "no")
+        return prendido and bool(self.CARTESIA_API_KEY)
+
+    # ── Modo llamada en producción: solo para cuentas de prueba ────────
+    # En producción el modo llamada (web) está detrás de esta lista de emails,
+    # separados por coma. Vacía = nadie lo ve. Existe para que Shaiel pueda
+    # probarlo con su cuenta real sin que el resto de los usuarios vea el
+    # botón ni gaste créditos de Cartesia. Para abrirlo a todos: "*".
+    LLAMADA_EMAILS: str = os.getenv("LLAMADA_EMAILS", "")
+
+    def llamada_habilitada_para(self, email: Optional[str]) -> bool:
+        permitidos = {e.strip().lower() for e in self.LLAMADA_EMAILS.split(",") if e.strip()}
+        if "*" in permitidos:
+            return True
+        return bool(email) and email.strip().lower() in permitidos
 
     # ── Verificador de crisis (capa 2, confirma si el riesgo es real) ───
     # 2026-07-18: se movió de Groq/Llama (bloqueado el 17/07) a OpenRouter, mismo

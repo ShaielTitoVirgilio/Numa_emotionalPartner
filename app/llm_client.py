@@ -265,6 +265,7 @@ class LLMClient:
         *,
         max_tokens_base: int = 600,
         extra_body: Optional[dict] = None,
+        modo_llamada: bool = False,
     ):
         """Generador para /chat/stream (streaming del chat escrito). Va
         devolviendo tuplas:
@@ -284,7 +285,12 @@ class LLMClient:
             proveedor (mostraría un mensaje "Frankenstein" de dos estilos) —
             se corta ahí con una metadata neutra de cortesía.
         """
-        system_prompt_streaming = system_prompt + _INSTRUCCION_FORMATO_STREAMING
+        # modo_llamada=True (solo /chat/stream/voz) suma _INSTRUCCION_MODO_LLAMADA:
+        # techo de extensión pensado para que se hable, no para que se lea.
+        instrucciones = _INSTRUCCION_FORMATO_STREAMING
+        if modo_llamada:
+            instrucciones += _INSTRUCCION_MODO_LLAMADA
+        system_prompt_streaming = system_prompt + instrucciones
 
         ultimo_error = None
         for i, (cliente, proveedor, modelo) in enumerate(self._targets()):
@@ -387,6 +393,54 @@ Escribí PRIMERO el mensaje para la persona, en texto plano y natural, tal cual 
 Cuando termines el mensaje, dejá una línea en blanco y escribí SOLO un JSON compacto de una línea con esta forma exacta:
 {"mood": "...", "suggested_action": ..., "memories": [...]}
 Usá los mismos valores posibles de mood/suggested_action/memories ya explicados arriba. No repitas el mensaje adentro de ese JSON — ahí van solo mood, suggested_action y memories.
+"""
+
+
+# Solo para el modo llamada (voz), NO para el chat escrito en streaming — los
+# dos pasan por generate_response_stream, así que esto se suma aparte y
+# condicional (ver modo_llamada arriba), no adentro de numa_prompt.py.
+#
+# M03_longitud_y_estructura (numa_prompt.py) ya pide corto por defecto y
+# permite extenderse si piden explicación/detalle — esto NO lo reemplaza, le
+# agrega un TECHO pensado para voz: en una llamada de verdad nadie suelta un
+# monólogo de diez oraciones aunque le hayas pedido que cuente algo largo,
+# lo dice en tandas cortas. Sin techo, "explicame X" podía generar un párrafo
+# entero de una — bien para leer, rarísimo para escuchar.
+#
+# ⚠️ La primera versión de este bloque decía "podés extenderte hasta un máximo
+# de 5 oraciones" y salió mal: medido en dispositivo real, NINGUNA respuesta
+# bajaba de ~4 oraciones (mensaje_len 241-337 en los logs del 2026-08-18). El
+# modelo tomó el 5 como objetivo en vez de como techo — es lo que suelen hacer
+# con un presupuesto explícito. Por eso ahora el default va primero, concreto y
+# sin número que invite a llenarlo, y la extensión queda como excepción atada a
+# un pedido explícito.
+#
+# Y no es solo cuestión de naturalidad: mientras el stream llegue en lote (ver
+# llm_chunks/t_llm_ultimo_token_ms en chat_router.py), se espera a que el modelo
+# termine de generar TODO antes de hablar, así que cada oración de más son
+# cientos de ms de silencio. Acortar acá es, hoy, la palanca de latencia más
+# barata que hay.
+#
+# Se resiste a bajar max_tokens para forzarlo por las malas: en streaming el
+# mensaje va primero y el JSON de metadata DESPUÉS, así que truncar por tokens
+# se come la metadata (mood, memorias) y deja el turno sin datos. El prompt es
+# el lugar correcto para esto.
+_INSTRUCCION_MODO_LLAMADA = """
+
+MODO LLAMADA (estás hablando por voz, en vivo, no escribiendo):
+
+Contestá como se contesta hablando: UNA idea por turno, en una o dos oraciones.
+Eso es lo normal, no la excepción — la enorme mayoría de tus turnos van así.
+Si podés decirlo en una línea, decilo en una línea.
+
+Solo si te piden explícitamente que expliques o cuentes algo en detalle
+("explicame", "contame bien", "dame ejemplos") podés estirarte un poco más, y
+aun ahí decí lo esencial y frenás. Preguntar "¿querés que siga?" siempre es
+mejor que soltar un monólogo.
+
+Nunca encadenes varias ideas en un mismo turno por las dudas. En una charla
+hablada el otro necesita poder meter bocado: un turno largo cuando alcanzaba
+con una línea se siente robótico, por más que el contenido esté bien.
 """
 
 

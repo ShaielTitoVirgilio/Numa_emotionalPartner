@@ -6,6 +6,12 @@ let isHappy = false;
 let isStressed = false;
 let isSad = false;
 let isThinking = false;
+let isHablando = false;   // modo llamada: Numa está diciendo su respuesta en voz alta
+
+// Tamaño del canvas. En el chat es 220; el modo llamada lo agranda con
+// setBearSize() para que el oso ocupe el centro de la pantalla.
+const BEAR_SIZE_DEFAULT = 220;
+let bearSize = BEAR_SIZE_DEFAULT;
 
 function init3DBear() {
   const container = document.getElementById('bear-container');
@@ -19,7 +25,7 @@ function init3DBear() {
   
   // Renderizador
   renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setSize(220, 220);
+  renderer.setSize(bearSize, bearSize);
   renderer.setClearColor(0x000000, 0);
   container.appendChild(renderer.domElement);
   
@@ -264,7 +270,18 @@ function animate() {
     bearGroup.rotation.y = Math.sin(time * 0.6) * 0.08;
     bearGroup.position.y = Math.sin(time * 0.5) * 0.1;
   }
-  
+
+  if (isHablando) {
+    // Modo llamada, Numa hablando: cabeceo rítmico y respiración marcada, como
+    // quien está contando algo. Más presente que 'calm' pero sin la inclinación
+    // curiosa de 'listening' (ahí el que habla es el usuario).
+    bearGroup.position.y = Math.sin(time * 3.2) * 0.08;
+    bearGroup.rotation.x = -0.1 + Math.sin(time * 3.2) * 0.05;
+    bearGroup.rotation.y = Math.sin(time * 1.1) * 0.06;
+    bearGroup.scale.y = 1 + Math.sin(time * 3.2) * 0.025;
+    bearGroup.scale.x = 1 - Math.sin(time * 3.2) * 0.012;
+  }
+
   renderer.render(scene, camera);
 }
 
@@ -294,6 +311,7 @@ function setBearState(state) {
   isStressed = false;
   isSad = false;
   isThinking = false;
+  isHablando = false;
 
   // Resetear transformaciones para que no queden residuos del estado anterior
   bearGroup.position.x = 0;
@@ -305,11 +323,24 @@ function setBearState(state) {
   else if (state === 'stressed')  isStressed = true;
   else if (state === 'sad')       isSad = true;
   else if (state === 'thinking')  isThinking = true;
+  else if (state === 'hablando')  isHablando = true;
   else isCalm = true; // fallback
+}
+
+// Cambia el tamaño del canvas del oso. Lo usa el modo llamada para agrandarlo
+// al centro de la pantalla y volverlo al tamaño del chat al salir.
+// setSize() re-escala el canvas de verdad (no es un zoom CSS), así que no se
+// pixela. La cámara es cuadrada (aspect 1) y sigue siéndolo, por eso no hace
+// falta tocar el aspect ni updateProjectionMatrix.
+function setBearSize(px) {
+  bearSize = Math.max(60, Math.round(px || BEAR_SIZE_DEFAULT));
+  if (renderer) renderer.setSize(bearSize, bearSize);
 }
 
 // Exponer al window para que chat.js pueda llamarlo
 window.setBearState = setBearState;
+window.setBearSize = setBearSize;
+window.BEAR_SIZE_DEFAULT = BEAR_SIZE_DEFAULT;
 
 // Inicializar cuando cargue la página
 if (document.readyState === 'loading') {

@@ -490,6 +490,12 @@ function _mostrarError(el, mensaje) {
 // ============================================
 
 function _logout() {
+    // Modo llamada: cortar si está abierta, olvidar el token de voz de esta
+    // sesión y esconder el botón hasta saber si la cuenta nueva lo tiene.
+    window.cerrarLlamada?.();
+    window.olvidarTokenVoz?.();
+    document.getElementById('llamada-btn')?.classList.add('hidden');
+
     localStorage.removeItem('numa_user');
     currentUser = null;
 

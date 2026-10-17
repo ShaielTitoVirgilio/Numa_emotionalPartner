@@ -70,6 +70,9 @@ _ESTADOS_VALIDOS = {
     "duelo", "buenas_noticias", "metas", "neutral",
 }
 _RIESGOS_VALIDOS = {"none", "implicita", "explicita"}
+# Cómo tiene que sonar Numa en el modo llamada (ver app/voz_tono.py, que lo
+# traduce a emoción/velocidad/risa de Cartesia). En el chat escrito no se pide.
+_TONOS_VOZ_VALIDOS = {"tranqui", "sensible", "curioso", "alegre", "risa", "euforico"}
 
 _RESULTADO_VACIO = {
     "ok": False,
@@ -78,6 +81,7 @@ _RESULTADO_VACIO = {
     "pide_ejercicio": False,
     "pregunta_app": False,
     "pregunta_capacidades": False,
+    "tono_voz": None,
 }
 
 _PROMPT = """Sos un clasificador de contexto para Numa, una app de apoyo emocional en español rioplatense. NO le respondés al usuario: solo etiquetás el contexto de la charla para decidir qué guía interna activar.
@@ -170,6 +174,124 @@ Ahora clasificá esta conversación (el último mensaje es el más reciente):
 
 Respondé SOLO con el JSON, sin texto extra."""
 
+# Variante del modo llamada: el mismo clasificador, más un campo `tono_voz`
+# (cómo tiene que SONAR Numa, ver app/voz_tono.py). Es una copia aparte y no
+# un agregado al de arriba a propósito: el chat escrito de producción sigue
+# usando el prompt de siempre, sin un solo cambio, y el router es una pieza de
+# seguridad. Si se toca la guía o los ejemplos de arriba, replicarlo acá.
+_PROMPT_LLAMADA = """Sos un clasificador de contexto para Numa, una app de apoyo emocional en español rioplatense. NO le respondés al usuario: solo etiquetás el contexto de la charla para decidir qué guía interna activar.
+
+Te paso los últimos mensajes de la conversación. Mirá TODO el contexto (no solo el último mensaje): el tono acumulado, lo que se viene hablando y cómo viene la persona.
+
+Clasificá con este JSON exacto:
+
+{{
+  "estado_emocional": uno de ["triste_vacio","ansioso","abrumado","enojado","duelo","buenas_noticias","metas","neutral"],
+  "senal_riesgo": uno de ["none","implicita","explicita"],
+  "pide_ejercicio": true/false,
+  "pregunta_app": true/false,
+  "pregunta_capacidades": true/false,
+  "tono_voz": uno de ["tranqui","sensible","curioso","alegre","risa","euforico"]
+}}
+
+Guía:
+- estado_emocional: el estado dominante de la persona AHORA. "neutral" si es charla informativa o sin carga emocional clara.
+  - triste_vacio: tristeza, vacío, desánimo, soledad, desesperanza.
+  - ansioso: ansiedad, nervios, preocupación, estrés agudo, insomnio.
+  - abrumado: saturación, "no doy más", demasiadas cosas encima.
+  - enojado: bronca, injusticia, frustración con alguien/algo.
+  - duelo: SOLO si hay una pérdida concreta (se murió alguien, una mascota, una relación que terminó). NO uses "duelo" para tristeza general.
+  - buenas_noticias: logro, alegría, algo que salió bien.
+  - metas: planes, proyectos, decisiones a futuro sin carga emocional negativa fuerte.
+- senal_riesgo: riesgo de autolesión o suicidio.
+  - explicita: ideación/método/autolesión clara y actual sobre SÍ MISMO/A ("me quiero matar", "cómo me corto"), o pregunta directa sobre cómo dañarse. TAMBIÉN es explicita un PLAN CONCRETO CON HORIZONTE TEMPORAL sobre sí mismo/a, aunque no nombre el acto ni el método ("ya tengo todo listo para hacerlo esta noche", "el viernes cuando no haya nadie en casa"): que no diga la palabra no lo hace menos inminente — un plan con fecha es la señal más urgente que existe. OJO: esto vale solo cuando lo que se planea es dañarse. Si la charla deja claro que el plan es otra cosa (una mudanza, una cena, un viaje, una entrega), es "none" — un plan con fecha en un contexto inocuo es simplemente un plan.
+  - implicita: desesperanza fuerte, despedidas, "no tiene sentido seguir", "ya no puedo más", "no es posible" dicho con resignación pesada, o preguntar por la ideación suicida en abstracto sin declararla propia todavía. TAMBIÉN cuenta como implicita cuando la persona DECLARA que está con depresión / muy deprimida / en un pozo, sobre todo si aparece junto a aislamiento o soledad ("estoy deprimido y solo", "tengo depresión y me dejan solo"): una depresión declarada merece el registro de cuidado aunque no haya ideación explícita.
+  - none: sin señales de riesgo. Un bajón puntual, tristeza pasajera o estar "medio triste" NO es implicita por sí solo; implicita pide o desesperanza, o depresión declarada, o riesgo real.
+  NO ES RIESGO, por más que aparezca la palabra — mirá DE QUÉ habla la frase, no qué palabra usa:
+    · HIPÉRBOLE / modismo rioplatense: "me quiero morir de vergüenza", "casi me muero de risa", "me mato estudiando", "del embole me tiro por la ventana". Hablan de vergüenza, risa, cansancio o aburrimiento — no de morirse. Son "none", incluso las que nombran un método.
+    · TERCEROS: quien está en riesgo es otra persona ("mi hermano tiene ideación suicida"). El que escribe está pidiendo cómo acompañar, no está en riesgo: "none".
+    · FICCIÓN / ESTUDIO: escribir un cuento o un guion, o entender el tema para la facultad o el trabajo. Hay distancia, no es sobre sí mismo/a: "none".
+    Regla corta: si el sujeto en riesgo NO es quien escribe, o el registro es de chiste, ficción o estudio, es "none".
+  ANTE LA DUDA entre "implicita" y "none", elegí "implicita". Es preferible activar contención de más. Mirá el CONTEXTO: en una charla que ya viene pesada (medicación, malestar, ganas de abandonar tratamiento), un mensaje corto y resignado puede ser señal implícita.
+- pide_ejercicio: la persona pide (o le vendría bien y lo insinúa) una técnica de respiración, meditación, yoga o relajación para calmarse.
+- pregunta_app: pregunta cómo USAR la app o una función concreta de la interfaz (agrandar la letra, modo oscuro, mandar audios, borrar recuerdos, cerrar/eliminar cuenta). NO es esto pedir recomendaciones (series, libros) ni preguntar qué sabe hacer Numa en general.
+- pregunta_capacidades: pregunta qué puede HACER Numa además de escuchar/chatear (qué funciones extra tiene, para qué más sirve, "¿qué más podés hacer?", "¿solo escuchás?").
+
+- tono_voz: cómo tiene que SONAR Numa al contestarle en voz, según cómo viene la persona AHORA.
+  - tranqui: charla normal, saludos, algo informativo, sin carga fuerte. Es el default.
+  - sensible: tristeza, angustia, ansiedad, duelo, enojo, cansancio, algo íntimo o difícil, o cualquier señal de riesgo.
+  - curioso: cuenta algo nuevo que da para preguntar con interés (planes, proyectos, algo que le pasó), sin carga negativa.
+  - alegre: buenas noticias, algo lindo, buen humor.
+  - risa: la persona hace un chiste, cuenta algo gracioso o se está riendo ("jaja"), y no hay nada doloroso de fondo. Numa se ríe con ella.
+  - euforico: un logro grande o algo muy para festejar (se recibió, consiguió el laburo, aprobó lo que temía), y la persona está eufórica.
+  Ante la duda entre un tono arriba (alegre/risa/euforico) y uno calmo, elegí el calmo. Nunca "risa" ni "euforico" si senal_riesgo no es "none" o si hay tristeza, enojo o miedo de fondo.
+
+EJEMPLOS (mirá cómo el contexto cambia la lectura):
+
+Mensajes:
+Usuario: no me siento bien con los medicamentos y los quiero dejar
+Numa: ¿hablaste con tu médico?
+Usuario: no es posible
+Salida: {{"estado_emocional":"abrumado","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Usuario: cómo hago con la ideación suicida?
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Usuario: hola
+Numa: Hola. ¿Cómo venís?
+Usuario: estoy con depresión, mis viejos se separaron y me dejan mucho solo en casa
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Numa: ¿Cómo estás ahora?
+Usuario: ya tengo todo listo para hacerlo esta noche
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Numa: ¿Cómo venís con la mudanza?
+Usuario: ya tengo todo listo, lo hago mañana temprano
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"curioso"}}
+
+Mensajes:
+Usuario: del embole que tengo en la oficina te juro que me tiro por la ventana
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
+
+Mensajes:
+Usuario: estoy escribiendo un cuento donde el personaje se suicida, ¿cómo lo hago creíble?
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
+
+Mensajes:
+Usuario: qué serie me recomendás para el finde?
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
+
+Mensajes:
+Usuario: hay algo más que puedas hacer además de escucharme?
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":true,"tono_voz":"tranqui"}}
+
+Mensajes:
+Usuario: se murió mi perro ayer, lo tuve 14 años
+Salida: {{"estado_emocional":"duelo","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Usuario: jaja hoy fui a la reunión con la remera al revés y nadie me avisó en toda la mañana
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"risa"}}
+
+Mensajes:
+Numa: ¿Cómo te fue en la entrevista?
+Usuario: ME TOMARON!!! empiezo el lunes, no lo puedo creer
+Salida: {{"estado_emocional":"buenas_noticias","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"euforico"}}
+
+Mensajes:
+Usuario: hoy salí a caminar por la rambla y estaba hermoso el día
+Salida: {{"estado_emocional":"buenas_noticias","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"alegre"}}
+
+Ahora clasificá esta conversación (el último mensaje es el más reciente):
+{conversacion}
+
+Respondé SOLO con el JSON, sin texto extra."""
+
 
 def _formatear_conversacion(conversation: list, max_mensajes: int = 6) -> str:
     """Arma el bloque de conversación para el prompt: últimos N mensajes,
@@ -199,6 +321,7 @@ def _normalizar(data: dict) -> dict:
         "pide_ejercicio": bool(data.get("pide_ejercicio")),
         "pregunta_app": bool(data.get("pregunta_app")),
         "pregunta_capacidades": bool(data.get("pregunta_capacidades")),
+        "tono_voz": data.get("tono_voz") if data.get("tono_voz") in _TONOS_VOZ_VALIDOS else None,
     }
 
 
@@ -214,7 +337,7 @@ def resultado_vacio() -> dict:
     return dict(_RESULTADO_VACIO)
 
 
-def clasificar_contexto(conversation: list) -> dict:
+def clasificar_contexto(conversation: list, modo_llamada: bool = False) -> dict:
     """Clasifica el contexto de la conversación con el LLM chico.
 
     Devuelve un dict con:
@@ -273,12 +396,13 @@ def clasificar_contexto(conversation: list) -> dict:
             # extra_body_for/max_tokens_for_provider ya saben qué mandarle a
             # cada proveedor (Groq por familia, OpenRouter con reasoning.effort)
             # para que el JSON no se trunque.
-            max_tokens=max_tokens_for_provider(120, proveedor, modelo),
+            # 140 en llamada: el JSON trae además tono_voz.
+            max_tokens=max_tokens_for_provider(140 if modo_llamada else 120, proveedor, modelo),
             timeout=_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
-                "content": _PROMPT.format(conversacion=bloque),
+                "content": (_PROMPT_LLAMADA if modo_llamada else _PROMPT).format(conversacion=bloque),
             }],
             extra_body=extra,
         )

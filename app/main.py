@@ -34,6 +34,7 @@ from app.routes.dashboard_router import router as dashboard_router
 from app.routes.account_router import router as account_router
 from app.routes.apple_router import router as apple_router
 from app.routes.memories_router import router as memories_router
+from app.routes.tts_router import router as tts_router
 from app.supabase_client import supabase
 from app.core.errors import NumaError, MENSAJE_GENERICO
 
@@ -127,7 +128,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _PREFIJOS_API = (
         "/chat", "/auth", "/onboarding", "/feedback", "/checkin",
         "/dashboard", "/account", "/apple", "/memories", "/subscribe",
-        "/api/",
+        "/api/", "/tts", "/llamada",
     )
 
     async def dispatch(self, request: Request, call_next):
@@ -340,3 +341,6 @@ app.include_router(dashboard_router)
 app.include_router(account_router)
 app.include_router(apple_router)
 app.include_router(memories_router)
+# Modo llamada (web): token efímero de Cartesia y si la cuenta lo tiene
+# habilitado (ver tts_router.py y LLAMADA_EMAILS en config.py).
+app.include_router(tts_router)

@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, UploadFile, File, Form, Depends
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from slowapi import Limiter
@@ -20,6 +21,7 @@ from app.conversation_signals import (
 )
 from app.memory_service import (
     get_recent_memories,
+    get_recent_memories_cached,
     get_topic_patterns_cached,
     invalidate_patterns_cache,
     get_proactive_memories,
@@ -46,6 +48,8 @@ from app.memory_service import (
 from app.crisis_detector import detectar_crisis, respuesta_contencion_generica
 from app.crisis_verifier import confirmar_riesgo_real
 from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
+from app.voz_tono import ArmadorVoz, rearmar, tono_desde_router, tono_provisorio
+from app.core.config import config
 from app.speech_service import speech_to_text
 from app.text_filters import (
     _quitar_pregunta_final,
@@ -223,6 +227,20 @@ class ChatRequest(BaseModel):
     sugerir_contacto: Optional[bool] = False
 
 
+class ChatVozRequest(BaseModel):
+    """Igual que ChatRequest pero SIN el último mensaje del usuario: ese es
+    el audio que viaja aparte, en el mismo request multipart (ver
+    /chat/stream/voz). Solo lo arma el modo llamada."""
+    conversation: List[Message] = []
+    perfil: Optional[Dict[str, Any]] = None
+    ubicacion: Optional[UbicacionData] = None
+    ultimo_mood: Optional[str] = None
+    # El tono de voz con el que terminó el turno anterior (el cliente lo
+    # devuelve tal cual lo recibió en el evento "final"). Es el tono
+    # provisorio mientras el router de este turno no contesta.
+    tono_voz_previo: Optional[str] = None
+
+
 class ImportMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -308,6 +326,21 @@ _EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=64, thread_name_prefi
 # numa_prompt.seleccionar_modulos.
 UMBRAL_CORTE_LLAMADA = 0.6
 
+# Modo llamada: cuánto se espera al router DESPUÉS de la última oración.
+# Medido (2026-10-17): el LLM termina de mandar todo en ~1.1-1.7s y el router
+# contesta en ~2.2-3.8s, así que sin esperar, su resultado casi nunca llegaba
+# al turno en curso: ni el tono (que corrige las oraciones que el cliente
+# todavía no le pidió a Cartesia y es el tono_voz_previo del turno siguiente)
+# ni el corte por riesgo en respuestas cortas.
+#
+# La espera NO suma silencio: se acota a lo que Numa tarda en decir lo que ya
+# mandó (estimado por largo de texto, a propósito por lo bajo), así que pasa
+# mientras se la escucha hablar. El router tiene su propio techo de 4s.
+_ESPERA_TONO_ROUTER_S = 2.5
+_CARACTERES_POR_S = 15.0      # más rápido que lo real (~13): subestima la duración
+_TTS_PRIMERA_ORACION_S = 0.5  # lo que tarda en empezar a sonar la primera (medido ~0.5-0.7s)
+_MARGEN_FIN_HABLA_S = 0.3
+
 
 def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
     return round(sum(v for k, v in tiempos.items() if k not in _TIEMPOS_EXCLUIDOS_DEL_TOTAL), 1)
@@ -338,7 +371,10 @@ def _estado_desde_mood(mood: Optional[str]) -> Optional[str]:
     return _MOOD_A_ESTADO.get(str(mood).strip().lower())
 
 
-def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+def _preparar_turno(
+    body: "ChatRequest", user_id: str, background_tasks: BackgroundTasks,
+    modo_llamada: bool = False, tono_voz_previo: Optional[str] = None,
+) -> Dict[str, Any]:
     """Todo el trabajo previo a llamar al LLM: límites, crisis, perfil,
     memorias, patrones, memoria proactiva, prompt. Extraído de chat_endpoint
     para poder testear el armado del turno por separado de la llamada al LLM.
@@ -458,16 +494,20 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
     # router.
     def _tarea_router():
         t0 = time.perf_counter()
-        hints = clasificar_contexto([m.model_dump() for m in conversation])
+        # En llamada el router devuelve además tono_voz (ver app/voz_tono.py).
+        hints = clasificar_contexto([m.model_dump() for m in conversation], modo_llamada=modo_llamada)
         return hints, round((time.perf_counter() - t0) * 1000, 1)
 
     def _tarea_memorias():
         t0 = time.perf_counter()
         vigentes, ids_old = memorias_sesion or [], []
         try:
-            m_db, ids_old = get_recent_memories(
-                user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12
-            )
+            # En llamada se usa la variante cacheada: es la consulta más cara
+            # de este bloque (103-382ms medidos) y no cambia entre turnos de
+            # una misma llamada. Lo que el usuario acaba de contar igual llega
+            # al prompt, porque viene aparte en memorias_sesion.
+            traer = get_recent_memories_cached if modo_llamada else get_recent_memories
+            m_db, ids_old = traer(user_id=user_id, days=MEMORY_WINDOW_DAYS_DEFAULT, max_items=12)
             seen = set()
             merged = []
             for m in (memorias_sesion or []) + m_db:
@@ -777,6 +817,7 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
             router_hints=router_hints_,
             vuelve_tras_pausa=vuelve_tras_pausa,
             apertura_saludo=apertura_saludo,
+            modo_llamada=modo_llamada,
             sin_contacto=bool(body.sugerir_contacto),
         )
 
@@ -823,6 +864,10 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "ultimo_modulo_critico": ultimo_modulo_critico,
         "familia_apertura_previa": familia_apertura_previa,
         "previo_cierre_presencia": previo_cierre_presencia,
+        # Mood del turno anterior traducido a estado: el modo llamada lo usa
+        # para el tono de voz provisorio mientras el router no contestó.
+        "estado_local": estado_local,
+        "tono_voz_previo": tono_voz_previo,
     }
 
 
@@ -1310,15 +1355,16 @@ def _stream_ndjson_fijo(payload: Dict[str, Any]):
 
 def _stream_chat_respuesta(
     turno: Dict[str, Any], user_id: str, background_tasks: BackgroundTasks, email: Optional[str] = None,
-    t_inicio_request: Optional[float] = None,
+    t_inicio_request: Optional[float] = None, modo_llamada: bool = False,
 ):
-    """Generador principal de /chat/stream: llama al LLM en streaming, va
-    filtrando/emitiendo oraciones vía BufferStreamingMensaje y al final
-    dispara el mismo post-procesamiento de memorias/background que /chat.
+    """Generador principal de /chat/stream y /chat/stream/voz: llama al LLM en
+    streaming, va filtrando/emitiendo oraciones vía BufferStreamingMensaje y
+    al final dispara el mismo post-procesamiento de memorias/background que
+    /chat.
 
-    Puerto de staging, acotado a chat escrito (sin modo_llamada — ChatRequest
-    en main no tiene ese campo, así que la retención del buffer queda siempre
-    en el default).
+    modo_llamada (solo /chat/stream/voz): retención 0 en el buffer, respuestas
+    cortas pensadas para voz, y cada delta lleva su pedido a Cartesia con el
+    tono de voz (ver app/voz_tono.py).
 
     t_inicio_request: perf_counter() tomado al ENTRAR al endpoint. Sirve para
     medir t_primer_delta_ms — ver el bloque de instrumentación más abajo.
@@ -1341,6 +1387,11 @@ def _stream_chat_respuesta(
         preguntas_seguidas=preguntas_seguidas,
         crisis_score=crisis_score,
         ultimo_modulo_critico=ultimo_modulo_critico,
+        # Modo llamada: 0 retención — arranca a emitir/hablar antes. Efecto
+        # secundario aceptado: _quitar_cierre_presencia/_quitar_pregunta_final
+        # solo ven la última oración aislada, así que a veces no recortan donde
+        # sí lo harían en el chat escrito, que mantiene el default (2).
+        retencion=0 if modo_llamada else BufferStreamingMensaje.RETENCION_DEFAULT,
     )
 
     # ── Instrumentación de latencia PERCIBIDA ────────────────────────
@@ -1360,9 +1411,12 @@ def _stream_chat_respuesta(
     t_primer_delta_ms: Optional[float] = None
     t_llm_primer_token_ms: Optional[float] = None
 
+    t_primer_delta_abs: Optional[float] = None
+
     def _marcar_primer_delta() -> None:
-        nonlocal t_primer_delta_ms
+        nonlocal t_primer_delta_ms, t_primer_delta_abs
         if t_primer_delta_ms is None:
+            t_primer_delta_abs = time.perf_counter()
             base = t_inicio_request if t_inicio_request is not None else t_inicio_stream
             t_primer_delta_ms = round((time.perf_counter() - base) * 1000, 1)
 
@@ -1374,6 +1428,18 @@ def _stream_chat_respuesta(
     router_par_score = 0.0
     t_router_paralelo_ms: Optional[float] = None
     corte_por_riesgo = False
+
+    # ── Tono de voz (solo modo llamada, ver app/voz_tono.py) ─────────
+    # Cada oración sale con su pedido a Cartesia ya armado (emoción,
+    # velocidad, risa, pausas). Arranca con un tono provisorio y, apenas el
+    # router contesta, toma el suyo. Las oraciones nunca lo esperan; el
+    # cierre del turno sí, un rato acotado (ver _ESPERA_TONO_ROUTER_S).
+    armador_voz = ArmadorVoz(tono_provisorio(
+        crisis_score, turno.get("estado_local"), ultimo_mensaje, turno.get("tono_voz_previo"),
+    )) if modo_llamada else None
+    oraciones_antes_del_router = 0
+    oraciones_emitidas: List[str] = []
+    tono_tardio = False
 
     def _riesgo_detectado() -> bool:
         """True si el router ya respondió y marcó riesgo explícito.
@@ -1393,15 +1459,32 @@ def _stream_chat_respuesta(
             return False
         if not hints.get("ok"):
             return False
+        if armador_voz is not None and armador_voz.fuente != "router":
+            armador_voz.usar_tono_router(tono_desde_router(hints, crisis_score))
         router_par_score = score_riesgo_router(hints.get("senal_riesgo", "none"))
         corte_por_riesgo = router_par_score >= UMBRAL_CORTE_LLAMADA
         return corte_por_riesgo
+
+    def _evento_delta(oracion: str) -> Dict[str, Any]:
+        """Delta del NDJSON. En modo llamada lleva además `voz`: el pedido a
+        Cartesia de esta oración, que el cliente manda tal cual. Se llama
+        DESPUÉS de _riesgo_detectado(), así que si el router ya contestó, el
+        tono es el suyo."""
+        nonlocal oraciones_antes_del_router
+        evento: Dict[str, Any] = {"type": "delta", "text": oracion}
+        if armador_voz is not None:
+            oraciones_emitidas.append(oracion)
+            if armador_voz.fuente != "router":
+                oraciones_antes_del_router += 1
+            evento["voz"] = armador_voz.armar(oracion)
+        return evento
 
     metadata: Optional[Dict[str, Any]] = None
     try:
         for tipo, valor in llm.generate_response_stream(
             conversation=[m.model_dump() for m in turno.get("conversation_llm", conversation)],
             system_prompt=turno["system_prompt"],
+            modo_llamada=modo_llamada,
         ):
             if tipo == "mensaje":
                 ahora = time.perf_counter()
@@ -1416,7 +1499,7 @@ def _stream_chat_respuesta(
                     if _riesgo_detectado():
                         break
                     _marcar_primer_delta()
-                    yield _evento_ndjson({"type": "delta", "text": oracion})
+                    yield _evento_ndjson(_evento_delta(oracion))
             else:
                 metadata = valor
             if corte_por_riesgo:
@@ -1427,13 +1510,35 @@ def _stream_chat_respuesta(
                 if _riesgo_detectado():
                     break
                 _marcar_primer_delta()
-                yield _evento_ndjson({"type": "delta", "text": oracion})
+                yield _evento_ndjson(_evento_delta(oracion))
+
+        # Espera al router mientras Numa sigue hablando (solo llamada, ver
+        # _ESPERA_TONO_ROUTER_S).
+        tono_antes = armador_voz.tono if armador_voz is not None else None
+        if (armador_voz is not None and not corte_por_riesgo and fut_router_par is not None
+                and oraciones_emitidas and t_primer_delta_abs is not None
+                and not fut_router_par.done()):
+            fin_habla = (t_primer_delta_abs + _TTS_PRIMERA_ORACION_S
+                         + sum(len(o) for o in oraciones_emitidas) / _CARACTERES_POR_S)
+            espera = min(_ESPERA_TONO_ROUTER_S, fin_habla - _MARGEN_FIN_HABLA_S - time.perf_counter())
+            if espera > 0.05:
+                try:
+                    fut_router_par.result(timeout=espera)
+                except Exception:
+                    pass  # no llegó o falló: se queda el provisorio (y _riesgo_detectado lo maneja)
 
         # Última chance: el router puede haber terminado justo al final, con
         # el mensaje ya emitido. Igual conviene cortar y mostrar la tarjeta —
         # el usuario dijo algo que necesita los teléfonos a la vista.
         if not corte_por_riesgo and fut_router_par is not None:
             _riesgo_detectado()
+
+        # Si el router cambió el tono después de emitidas las oraciones, se
+        # mandan rearmadas: el cliente reemplaza las que todavía no pidió.
+        if (armador_voz is not None and not corte_por_riesgo and oraciones_emitidas
+                and armador_voz.tono != tono_antes):
+            tono_tardio = True
+            yield _evento_ndjson({"type": "voz", "voces": rearmar(oraciones_emitidas, armador_voz.tono)})
 
         if corte_por_riesgo:
             # Mismo tipo de evento que la crisis por keywords: el cliente ya
@@ -1466,7 +1571,8 @@ def _stream_chat_respuesta(
         crisis_score = max(crisis_score, router_par_score)
         background_tasks.add_task(
             feedback_repo.save_crisis_log,
-            user_id, ultimo_mensaje, "ROUTER_PARALELO_CHAT_STREAM", "high",
+            user_id, ultimo_mensaje,
+            "ROUTER_PARALELO_LLAMADA" if modo_llamada else "ROUTER_PARALELO_CHAT_STREAM", "high",
         )
 
     memorias_llm: List[Dict[str, Any]] = metadata.get("memories") or []
@@ -1486,10 +1592,17 @@ def _stream_chat_respuesta(
         endpoint="/chat/stream",
         user_id=user_id,
         email=email,
+        modo_llamada=modo_llamada or None,
         router_paralelo=bool(fut_router_par),
         t_router_paralelo_ms=t_router_paralelo_ms,
         router_score=router_par_score or None,
         router_corte=corte_por_riesgo or None,
+        # Tono de voz: con qué tono salió cada oración y cuántas salieron
+        # antes de que el router contestara (esas usan el provisorio).
+        tonos_voz=",".join(armador_voz.tonos_usados) if armador_voz else None,
+        tono_voz_fuente=armador_voz.fuente if armador_voz else None,
+        oraciones_antes_del_router=oraciones_antes_del_router if armador_voz else None,
+        tono_voz_tardio=tono_tardio or None,
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
         llm_fallback=llm_info.get("fallback"),
@@ -1539,6 +1652,9 @@ def _stream_chat_respuesta(
         "sugirio_contacto": debe_sugerir_contacto(
             turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
         ),
+        # Modo llamada: el cliente lo devuelve en el turno siguiente como
+        # tono_voz_previo (ver tono_provisorio en app/voz_tono.py).
+        **({"tono_voz": armador_voz.tono} if armador_voz is not None else {}),
     })
 
 
@@ -1584,6 +1700,123 @@ def chat_stream_endpoint(
     # Response explícito y hay que pasárselo a mano para que corran.
     return StreamingResponse(
         generador,
+        media_type="application/x-ndjson",
+        background=background_tasks,
+    )
+
+
+@router.post("/chat/stream/voz")
+@limiter.limit("18/minute")
+async def chat_stream_voz_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    audio: UploadFile = File(...),
+    payload: str = Form(...),
+    auth_user_id: str = Depends(get_current_user_id),
+):
+    """Modo llamada: recibe el AUDIO del usuario, lo transcribe acá y sigue con
+    el MISMO pipeline que /chat/stream (_preparar_turno + _stream_chat_respuesta)
+    en un solo viaje de red, en vez de STT y chat como dos requests seguidos.
+
+    `payload` es un JSON (ChatVozRequest) mandado como campo de texto del mismo
+    form-data que el audio, así conversation/perfil/ubicacion viajan con su
+    forma real.
+
+    En producción está restringido a las cuentas de LLAMADA_EMAILS (ver
+    config.py): el resto recibe 403 y no se gasta nada.
+
+    Contrato NDJSON: el de /chat/stream, más
+      {"type": "texto_usuario", "text": ...}  — primera línea, lo que se entendió
+      {"type": "vacio"}                       — el audio no tenía nada entendible
+      cada "delta" con "voz": {indice, transcript, emotion, speed, tono}
+      {"type": "voz", "voces": [...]}         — tono tardío del router
+      el "final" con "tono_voz"
+    """
+    user_id = auth_user_id
+    email = getattr(request.state, "user_email", None)
+    if not config.llamada_habilitada_para(email):
+        raise HTTPException(status_code=403, detail="El modo llamada no está disponible para esta cuenta")
+    # ANTES de transcribir a propósito: t_primer_delta_ms tiene que incluir
+    # TODO el silencio real que el usuario experimenta (STT + turno + LLM).
+    t_inicio_request = time.perf_counter()
+
+    try:
+        body_previo = ChatVozRequest(**json.loads(payload))
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload inválido")
+
+    try:
+        audio_bytes = await audio.read()
+    except Exception:
+        raise HTTPException(status_code=400, detail="No se pudo leer el audio")
+    if len(audio_bytes) < 5000:
+        raise HTTPException(status_code=400, detail="Audio demasiado corto")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio demasiado largo")
+
+    try:
+        # A un thread, NO en el event loop: speech_to_text es una llamada
+        # HTTP bloqueante a Groq y este endpoint es async.
+        inicio_stt = time.perf_counter()
+        texto = await run_in_threadpool(speech_to_text, audio_bytes, audio.filename)
+        t_speech_to_text_ms = round((time.perf_counter() - inicio_stt) * 1000)
+    except Exception as e:
+        capturar_error(e, contexto="speech_to_text_voz")
+        raise HTTPException(status_code=503, detail="Servicio de transcripción no disponible")
+
+    texto = (texto or "").strip()
+    log_event(
+        "stt_turn", endpoint="/chat/stream/voz", user_id=user_id, email=email,
+        t_speech_to_text_ms=t_speech_to_text_ms, audio_bytes=len(audio_bytes),
+        texto_len=len(texto),
+    )
+
+    if not texto:
+        # Nadie dijo nada entendible (silencio, ruido, un "eh"): no se gasta
+        # un turno de LLM. Evento propio para que el cliente vuelva a escuchar.
+        def _vacio():
+            yield _evento_ndjson({"type": "vacio"})
+        return StreamingResponse(_vacio(), media_type="application/x-ndjson")
+
+    body = ChatRequest(
+        conversation=body_previo.conversation + [Message(role="user", content=texto)],
+        perfil=body_previo.perfil,
+        ubicacion=body_previo.ubicacion,
+        ultimo_mood=body_previo.ultimo_mood,
+    )
+
+    try:
+        # También a un thread: _preparar_turno hace llamadas bloqueantes
+        # (Supabase, el verificador de crisis si hay keywords).
+        turno = await run_in_threadpool(
+            _preparar_turno, body, user_id, background_tasks,
+            True, body_previo.tono_voz_previo,
+        )
+    except Exception:
+        raise HTTPException(status_code=500, detail=MENSAJE_GENERICO)
+
+    if turno["crisis_confirmada"]:
+        log_event(
+            "chat_turn", endpoint="/chat/stream/voz", user_id=user_id, email=email,
+            modo_llamada=True, crisis_hardcoded=True, risk_level="high", llm_provider=None,
+            t_speech_to_text_ms=t_speech_to_text_ms,
+            **turno.get("_tiempos", {}),
+        )
+        generador_base = _stream_ndjson_fijo(turno["respuesta_crisis"])
+    else:
+        generador_base = _stream_chat_respuesta(
+            turno, user_id, background_tasks, email=email,
+            t_inicio_request=t_inicio_request, modo_llamada=True,
+        )
+
+    def _con_texto_usuario():
+        # Primera línea SIEMPRE: el cliente no transcribe, así que es la única
+        # forma de saber qué entendió el servidor (para sumarlo al chat).
+        yield _evento_ndjson({"type": "texto_usuario", "text": texto})
+        yield from generador_base
+
+    return StreamingResponse(
+        _con_texto_usuario(),
         media_type="application/x-ndjson",
         background=background_tasks,
     )

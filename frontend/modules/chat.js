@@ -107,6 +107,9 @@ export async function inicializarChat() {
     console.warn('No se pudo cargar el perfil:', e);
   }
 
+  // Modo llamada: muestra el botón solo si la cuenta lo tiene (no bloquea).
+  window.initLlamada?.();
+
   // Rehidratar el chat: antes el historial vivía solo en memoria de la página
   // y al reabrir la PWA aparecía vacío ("Numa se olvidó de todo").
   return await _rehidratarHistorial();
@@ -305,7 +308,7 @@ if (!res.ok) {
 }
 
 
-function _procesarRespuesta(data, textoUsuario) {
+function _procesarRespuesta(data, textoUsuario, { desdeLlamada = false } = {}) {
 
   const mood = data.mood || 'neutral';
   ultimoMood = mood;
@@ -317,7 +320,7 @@ function _procesarRespuesta(data, textoUsuario) {
   // En una emergencia, copiar un número a mano es fricción innecesaria.
   if (data.risk_level === 'high') {
     _agregarMensajeCrisis(textoLimpio);
-    if (window.setBearState) window.setBearState('sad');
+    if (window.setBearState && !desdeLlamada) window.setBearState('sad');
     actualizarMoodIndicator(mood);
     _actualizarHistorial(textoUsuario, textoLimpio);
     return;
@@ -325,7 +328,8 @@ function _procesarRespuesta(data, textoUsuario) {
 
   agregarMensaje(textoLimpio, "oso", mood);
 
-  if (window.setBearState) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
+  // En llamada el oso lo maneja llamada.js (escuchando/pensando/hablando).
+  if (window.setBearState && !desdeLlamada) window.setBearState(MOOD_TO_BEAR_STATE[mood] || 'calm');
   actualizarMoodIndicator(mood);
 
   _actualizarHistorial(textoUsuario, textoLimpio);
@@ -341,7 +345,31 @@ function _procesarRespuesta(data, textoUsuario) {
       perfilCacheado._memorias_sesion.push(m);
     }
   }
-  verificarCheckinDiario();
+  // El check-in abre un modal: en medio de una llamada quedaría tapado.
+  if (!desdeLlamada) verificarCheckinDiario();
+}
+
+// ============================================
+// MODO LLAMADA (modules/llamada.js)
+// ============================================
+// La llamada no tiene historial propio: usa el del chat, y cada turno hablado
+// queda escrito acá (al salir se ve lo que se habló, y el próximo turno, de
+// voz o escrito, lleva el contexto completo).
+
+export function contextoParaLlamada() {
+  return {
+    conversation: historialConversacion.slice(-MAX_HISTORIAL),
+    perfil: perfilCacheado,
+    ultimo_mood: ultimoMood,
+  };
+}
+
+/** Suma al chat un turno de la llamada: el mensaje del usuario (lo que
+ *  transcribió el servidor) y la respuesta de Numa, con el mismo tratamiento
+ *  que el chat escrito (tarjeta de crisis, botón de ejercicio, memorias). */
+export function registrarTurnoLlamada(textoUsuario, data) {
+  agregarMensaje(textoUsuario, "user");
+  _procesarRespuesta(data, textoUsuario, { desdeLlamada: true });
 }
 
 function _limpiarMensaje(mensaje) {

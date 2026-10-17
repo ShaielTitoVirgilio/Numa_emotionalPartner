@@ -1,6 +1,13 @@
 // modules/profile.js
 
 import { authHeaders } from './utils.js';
+import { llamadaHabilitada } from './llamada.js';
+import { VOCES, leerVozElegida, elegirVoz, reproducirMuestra } from './voz.js';
+
+// Frase de prueba de las voces: la misma con la que se eligieron en la app.
+// Tiene voseo a propósito: es donde más se nota si una voz suena natural.
+const FRASE_MUESTRA_VOZ =
+  'Se nota que venís cargando bastante estos días. ¿Querés contarme qué fue lo que más te pesó hoy?';
 
 const PRIVACY_URL = 'https://shaieltitovirgilio.github.io/landing-numa/privacy-policy.html';
 const TERMS_URL   = 'https://shaieltitovirgilio.github.io/landing-numa/terms.html';
@@ -54,6 +61,7 @@ export async function initProfile() {
 
     contenedor.innerHTML = _htmlPerfil(nombre, email, checkin, user_id);
     _bindEvents(contenedor, user_id);
+    _bindVozNuma(contenedor);
     _renderMemorias();
     _cargado = true;
   } catch (e) {
@@ -104,6 +112,8 @@ function _htmlPerfil(nombre, email, checkin, userId) {
           <button class="prf-tema-btn" data-tema="oscuro" aria-label="Tema oscuro">🌙 Oscuro</button>
         </div>
       </div>
+
+      ${llamadaHabilitada() ? _htmlVozNuma() : ''}
 
       <!-- Tamaño de texto -->
       <div class="prf-card">
@@ -251,6 +261,68 @@ function _bindEvents(contenedor, userId) {
     btn.addEventListener('click', () => {
       aplicarTema(btn.dataset.tema);
       contenedor.querySelectorAll('.prf-tema-btn').forEach(b => b.classList.toggle('activo', b === btn));
+    });
+  });
+}
+
+// ── Voz de Numa (modo llamada) ──────────────────────────────────────────────
+// Elegir y escuchar son acciones separadas: tocar la fila elige, el ▶ solo
+// reproduce. Si escuchar eligiera, probar las dos dejaría siempre la última.
+
+function _htmlVozNuma() {
+  const elegida = leerVozElegida().id;
+  const filas = VOCES.map(v => `
+    <div class="prf-voz-fila ${v.id === elegida ? 'activo' : ''}" data-voz="${v.id}"
+         role="radio" aria-checked="${v.id === elegida}" tabindex="0"
+         aria-label="Voz ${_escapar(v.nombre)}, ${_escapar(v.descripcion)}">
+      <span class="prf-voz-check" aria-hidden="true">✓</span>
+      <div class="prf-voz-texto">
+        <p class="prf-voz-nombre">${_escapar(v.nombre)} · ${v.genero}</p>
+        <p class="prf-voz-desc">${_escapar(v.descripcion)}</p>
+      </div>
+      <button class="prf-voz-play" data-play="${v.id}" aria-label="Escuchar a ${_escapar(v.nombre)}">▶</button>
+    </div>`).join('');
+  return `
+      <div class="prf-card" id="voz-numa-card">
+        <p class="prf-card-titulo">Voz de Numa</p>
+        <p class="prf-card-subtexto">Con cuál te habla en el modo llamada. Tocá ▶ para escucharla antes de elegir.</p>
+        <div role="radiogroup" aria-label="Voz de Numa">${filas}</div>
+      </div>`;
+}
+
+function _bindVozNuma(contenedor) {
+  const card = contenedor.querySelector('#voz-numa-card');
+  if (!card) return;
+
+  const seleccionar = (id) => {
+    elegirVoz(id);
+    card.querySelectorAll('.prf-voz-fila').forEach(f => {
+      const activa = f.dataset.voz === id;
+      f.classList.toggle('activo', activa);
+      f.setAttribute('aria-checked', String(activa));
+    });
+  };
+
+  card.querySelectorAll('.prf-voz-fila').forEach(fila => {
+    fila.addEventListener('click', () => seleccionar(fila.dataset.voz));
+    fila.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seleccionar(fila.dataset.voz); }
+    });
+  });
+
+  card.querySelectorAll('.prf-voz-play').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();   // escuchar no elige
+      const voz = VOCES.find(v => v.id === btn.dataset.play);
+      if (!voz) return;
+      // Una a la vez: dos voces encimadas no se pueden comparar.
+      card.querySelectorAll('.prf-voz-play').forEach(b => { b.disabled = true; });
+      btn.textContent = '…';
+      const sono = await reproducirMuestra(voz, FRASE_MUESTRA_VOZ);
+      btn.textContent = '▶';
+      if (!sono) alert('No pude reproducir la voz ahora. Probá de nuevo en un rato.');
+      // La muestra dura ~6s: hasta entonces no se habilita otra.
+      setTimeout(() => card.querySelectorAll('.prf-voz-play').forEach(b => { b.disabled = false; }), sono ? 6000 : 0);
     });
   });
 }

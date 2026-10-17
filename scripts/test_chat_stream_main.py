@@ -3,8 +3,8 @@ Verifica /chat/stream en main (agregado 2026-09-04: faltaba, causó el bug
 real reportado en numa-mobile — "POST /chat/stream 404" apenas se subió el
 typewriter del chat escrito a producción sin este endpoint en el backend).
 
-A diferencia de staging, acá NO hay modo_llamada: ChatRequest no tiene ese
-campo, así que este test solo cubre el camino de chat escrito.
+El modo llamada no pasa por acá (es exclusivo de /chat/stream/voz, ver
+test_chat_stream_voz.py): este test solo cubre el chat escrito.
 
 Correr con: venv/bin/python scripts/test_chat_stream_main.py
 """
@@ -67,7 +67,7 @@ def _salir(parches):
 
 
 def _mock_llm_stream(mensaje="hola, ¿cómo estás?", mood="neutral"):
-    def _fake(*, conversation, system_prompt):
+    def _fake(*, conversation, system_prompt, modo_llamada=False):
         yield ("mensaje", mensaje)
         yield ("metadata", {
             "mood": mood, "suggested_action": None, "memories": [],
