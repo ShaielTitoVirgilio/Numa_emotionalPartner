@@ -114,14 +114,34 @@ def _fut(senal, demora=0.0, explota=False):
     return _pool.submit(_tarea)
 
 
-# ── 1. No se espera al router: el turno no tarda más que el stream ───────
+# ── 1. No se espera al router para HABLAR ────────────────────────────────
+# Las oraciones salen sin esperarlo. Lo que sí puede esperar (acotado, ver
+# _ESPERA_TONO_ROUTER_S) es el cierre del turno, para que el tono del router
+# llegue a las oraciones que la app todavía no sintetizó.
+_t_ultimo_delta = {}
+_orig_evento = cr._evento_ndjson
+
+
+def _evento_cronometrado(obj):
+    if obj.get("type") == "delta":
+        _t_ultimo_delta["t"] = time.perf_counter()
+    return _orig_evento(obj)
+
+
 inicio = time.perf_counter()
-eventos, log, _ = correr(_fut("none", demora=3.0))   # router lentísimo a propósito
+with patch.object(cr, "_evento_ndjson", _evento_cronometrado):
+    eventos, log, _ = correr(_fut("none", demora=3.0))   # router lentísimo a propósito
 dur = time.perf_counter() - inicio
+dur_habla = _t_ultimo_delta["t"] - inicio
 check(
-    "el turno NO espera al router (corre en paralelo)",
-    dur < 1.5,
-    f"tardó {dur*1000:.0f}ms; el stream falso son ~300ms y el router 3000ms",
+    "las oraciones NO esperan al router (corre en paralelo)",
+    dur_habla < 1.0,
+    f"la última oración salió a los {dur_habla*1000:.0f}ms; el stream falso son ~300ms y el router 3000ms",
+)
+check(
+    "el cierre del turno espera al router como mucho _ESPERA_TONO_ROUTER_S",
+    dur < 0.5 + cr._ESPERA_TONO_ROUTER_S + 0.5,
+    f"tardó {dur*1000:.0f}ms",
 )
 check("sin riesgo, el turno termina normal", any(e["type"] == "final" for e in eventos))
 check("sin riesgo, no hay evento crisis", not any(e["type"] == "crisis" for e in eventos))

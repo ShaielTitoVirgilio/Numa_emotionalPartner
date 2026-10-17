@@ -51,6 +51,7 @@ from app.memory_service import (
 from app.crisis_detector import detectar_crisis, respuesta_contencion_generica
 from app.crisis_verifier import confirmar_riesgo_real
 from app.context_router import clasificar_contexto, score_riesgo_router, resultado_vacio
+from app.voz_tono import ArmadorVoz, rearmar, tono_desde_router, tono_provisorio
 from app.speech_service import speech_to_text
 from app.repositories.user_repository import UserRepository
 from app.repositories.conversation_repository import ConversationRepository
@@ -234,6 +235,10 @@ class ChatRequest(BaseModel):
     # buffer a 0 (audio arranca antes) y le pide al LLM respuestas más
     # cortas para voz (ver _INSTRUCCION_MODO_LLAMADA en llm_client.py).
     modo_llamada: Optional[bool] = False
+    # Modo llamada: el tono de voz con el que terminó el turno anterior (la
+    # app lo devuelve tal cual lo recibió en el evento "final"). Es el tono
+    # provisorio mientras el router de este turno no contesta.
+    tono_voz_previo: Optional[str] = None
 
 
 class ChatVozRequest(BaseModel):
@@ -244,6 +249,7 @@ class ChatVozRequest(BaseModel):
     perfil: Optional[Dict[str, Any]] = None
     ubicacion: Optional[UbicacionData] = None
     ultimo_mood: Optional[str] = None
+    tono_voz_previo: Optional[str] = None
 
 
 class ImportMessage(BaseModel):
@@ -297,6 +303,22 @@ _EJECUTOR_ROUTER_PARALELO = ThreadPoolExecutor(max_workers=64, thread_name_prefi
 # frase es brusco, y una señal implícita no lo justifica — esa se maneja con
 # los módulos de crisis en el turno siguiente, como en el chat escrito.
 UMBRAL_CORTE_LLAMADA = 0.6
+
+# Modo llamada: cuánto se espera al router DESPUÉS de la última oración.
+# Medido (2026-10-17): el LLM termina de mandar todo en ~1.1-1.7s y el router
+# contesta en ~2.2-3.8s, así que sin esperar, su resultado casi nunca llegaba
+# al turno en curso: ni el tono (que corrige las oraciones que la app todavía
+# no le pidió a Cartesia y es el tono_voz_previo del turno siguiente) ni el
+# corte por riesgo en respuestas cortas.
+#
+# La espera NO suma silencio: se acota a lo que Numa tarda en decir lo que ya
+# mandó (estimado por largo de texto, a propósito por lo bajo), así que pasa
+# mientras se la escucha hablar. Un "Dale." casi no espera; una respuesta de
+# tres oraciones espera hasta el techo. El router tiene su propio techo de 4s.
+_ESPERA_TONO_ROUTER_S = 2.5
+_CARACTERES_POR_S = 15.0      # más rápido que lo real (~13): subestima la duración
+_TTS_PRIMERA_ORACION_S = 0.5  # lo que tarda en empezar a sonar la primera (medido ~0.5-0.7s)
+_MARGEN_FIN_HABLA_S = 0.3
 
 
 def _sumar_tiempos(tiempos: Dict[str, float]) -> float:
@@ -843,6 +865,10 @@ def _preparar_turno(body: "ChatRequest", user_id: str, background_tasks: Backgro
         "ultimo_modulo_critico": ultimo_modulo_critico,
         "familia_apertura_previa": familia_apertura_previa,
         "previo_cierre_presencia": previo_cierre_presencia,
+        # Mood del turno anterior traducido a estado: el modo llamada lo usa
+        # para el tono de voz provisorio mientras el router no contestó.
+        "estado_local": estado_local,
+        "tono_voz_previo": body.tono_voz_previo,
     }
 
 
@@ -1411,6 +1437,14 @@ def chat_endpoint(
 #   {"type": "final", "mood": ..., "suggested_action": ..., "risk_level": ...,
 #    "nuevas_memorias": [...], "sugirio_contacto": bool}
 #
+# Solo en modo llamada (ver app/voz_tono.py):
+#   - cada "delta" trae además "voz": {"indice", "transcript", "emotion",
+#     "speed", "tono"}, el pedido a Cartesia de esa oración ya armado;
+#   - {"type": "voz", "voces": [...]} — antes del final, si el router cambió
+#     el tono después de emitidas las oraciones (la app reemplaza las que
+#     todavía no sintetizó);
+#   - el "final" trae "tono_voz", que la app devuelve como tono_voz_previo.
+#
 # Por qué "crisis" es un tipo aparte y no un delta más: el cliente de voz
 # (modo llamada) habla cada delta apenas lo recibe. Si la contención llegara
 # como delta, para cuando el evento "final" avisara risk_level=high el cliente
@@ -1519,9 +1553,12 @@ def _stream_chat_respuesta(
     t_primer_delta_ms: Optional[float] = None
     t_llm_primer_token_ms: Optional[float] = None
 
+    t_primer_delta_abs: Optional[float] = None
+
     def _marcar_primer_delta() -> None:
-        nonlocal t_primer_delta_ms
+        nonlocal t_primer_delta_ms, t_primer_delta_abs
         if t_primer_delta_ms is None:
+            t_primer_delta_abs = time.perf_counter()
             base = t_inicio_request if t_inicio_request is not None else t_inicio_stream
             t_primer_delta_ms = round((time.perf_counter() - base) * 1000, 1)
 
@@ -1533,6 +1570,18 @@ def _stream_chat_respuesta(
     router_par_score = 0.0
     t_router_paralelo_ms: Optional[float] = None
     corte_por_riesgo = False
+
+    # ── Tono de voz (solo modo llamada, ver app/voz_tono.py) ─────────
+    # Cada oración sale con su pedido a Cartesia ya armado (emoción,
+    # velocidad, risa, pausas). Arranca con un tono provisorio y, apenas el
+    # router contesta, toma el suyo. Las oraciones nunca lo esperan; el
+    # cierre del turno sí, un rato acotado (ver _ESPERA_TONO_ROUTER_S).
+    armador_voz = ArmadorVoz(tono_provisorio(
+        crisis_score, turno.get("estado_local"), ultimo_mensaje, turno.get("tono_voz_previo"),
+    )) if modo_llamada else None
+    oraciones_antes_del_router = 0
+    oraciones_emitidas: List[str] = []
+    tono_tardio = False
 
     def _riesgo_detectado() -> bool:
         """True si el router ya respondió y marcó riesgo explícito.
@@ -1554,9 +1603,25 @@ def _stream_chat_respuesta(
             return False
         if not hints.get("ok"):
             return False
+        if armador_voz is not None and armador_voz.fuente != "router":
+            armador_voz.usar_tono_router(tono_desde_router(hints, crisis_score))
         router_par_score = score_riesgo_router(hints.get("senal_riesgo", "none"))
         corte_por_riesgo = router_par_score >= UMBRAL_CORTE_LLAMADA
         return corte_por_riesgo
+
+    def _evento_delta(oracion: str) -> Dict[str, Any]:
+        """Delta del NDJSON. En modo llamada lleva además `voz`: el pedido a
+        Cartesia de esta oración, que la app manda tal cual. Se llama DESPUÉS
+        de _riesgo_detectado(), así que si el router ya contestó, el tono es
+        el suyo."""
+        nonlocal oraciones_antes_del_router
+        evento: Dict[str, Any] = {"type": "delta", "text": oracion}
+        if armador_voz is not None:
+            oraciones_emitidas.append(oracion)
+            if armador_voz.fuente != "router":
+                oraciones_antes_del_router += 1
+            evento["voz"] = armador_voz.armar(oracion)
+        return evento
 
     metadata: Optional[Dict[str, Any]] = None
     try:
@@ -1578,7 +1643,7 @@ def _stream_chat_respuesta(
                     if _riesgo_detectado():
                         break
                     _marcar_primer_delta()
-                    yield _evento_ndjson({"type": "delta", "text": oracion})
+                    yield _evento_ndjson(_evento_delta(oracion))
             else:
                 metadata = valor
             if corte_por_riesgo:
@@ -1589,13 +1654,35 @@ def _stream_chat_respuesta(
                 if _riesgo_detectado():
                     break
                 _marcar_primer_delta()
-                yield _evento_ndjson({"type": "delta", "text": oracion})
+                yield _evento_ndjson(_evento_delta(oracion))
+
+        # Espera al router mientras Numa sigue hablando (solo llamada, ver
+        # _ESPERA_TONO_ROUTER_S).
+        tono_antes = armador_voz.tono if armador_voz is not None else None
+        if (armador_voz is not None and not corte_por_riesgo and fut_router_par is not None
+                and oraciones_emitidas and t_primer_delta_abs is not None
+                and not fut_router_par.done()):
+            fin_habla = (t_primer_delta_abs + _TTS_PRIMERA_ORACION_S
+                         + sum(len(o) for o in oraciones_emitidas) / _CARACTERES_POR_S)
+            espera = min(_ESPERA_TONO_ROUTER_S, fin_habla - _MARGEN_FIN_HABLA_S - time.perf_counter())
+            if espera > 0.05:
+                try:
+                    fut_router_par.result(timeout=espera)
+                except Exception:
+                    pass  # no llegó o falló: se queda el provisorio (y _riesgo_detectado lo maneja)
 
         # Última chance: el router puede haber terminado justo al final, con
         # el mensaje ya emitido. Igual conviene cortar la llamada y pasar al
         # chat — el usuario dijo algo que necesita los teléfonos a la vista.
         if not corte_por_riesgo and fut_router_par is not None:
             _riesgo_detectado()
+
+        # Si el router cambió el tono después de emitidas las oraciones, se
+        # mandan rearmadas: la app reemplaza las que todavía no pidió.
+        if (armador_voz is not None and not corte_por_riesgo and oraciones_emitidas
+                and armador_voz.tono != tono_antes):
+            tono_tardio = True
+            yield _evento_ndjson({"type": "voz", "voces": rearmar(oraciones_emitidas, armador_voz.tono)})
 
         if corte_por_riesgo:
             # Mismo tipo de evento que la crisis por keywords: el cliente ya
@@ -1662,6 +1749,13 @@ def _stream_chat_respuesta(
         t_router_paralelo_ms=t_router_paralelo_ms,
         router_score=router_par_score or None,
         router_corte=corte_por_riesgo or None,
+        # Tono de voz: con qué tono salió cada oración y cuántas salieron
+        # antes de que el router contestara (esas usan el provisorio). Si
+        # oraciones_antes_del_router es alto seguido, el router llega tarde.
+        tonos_voz=",".join(armador_voz.tonos_usados) if armador_voz else None,
+        tono_voz_fuente=armador_voz.fuente if armador_voz else None,
+        oraciones_antes_del_router=oraciones_antes_del_router if armador_voz else None,
+        tono_voz_tardio=tono_tardio or None,
         llm_provider=llm_info.get("provider"),
         llm_model=llm_info.get("model"),
         llm_fallback=llm_info.get("fallback"),
@@ -1720,6 +1814,9 @@ def _stream_chat_respuesta(
         "sugirio_contacto": debe_sugerir_contacto(
             turno.get("sugerir_contacto", False), crisis_score, ultimo_modulo_critico,
         ),
+        # Modo llamada: la app lo devuelve en el turno siguiente como
+        # tono_voz_previo (ver tono_provisorio en app/voz_tono.py).
+        **({"tono_voz": armador_voz.tono} if armador_voz is not None else {}),
     })
 
 
@@ -1861,6 +1958,7 @@ async def chat_stream_voz_endpoint(
         ubicacion=body_previo.ubicacion,
         ultimo_mood=body_previo.ultimo_mood,
         modo_llamada=True,
+        tono_voz_previo=body_previo.tono_voz_previo,
     )
 
     try:

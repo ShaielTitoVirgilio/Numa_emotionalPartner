@@ -69,6 +69,9 @@ _ESTADOS_VALIDOS = {
     "duelo", "buenas_noticias", "metas", "neutral",
 }
 _RIESGOS_VALIDOS = {"none", "implicita", "explicita"}
+# Cómo tiene que sonar Numa en el modo llamada (ver app/voz_tono.py, que lo
+# traduce a emoción/velocidad/risa de Cartesia). En el chat escrito no se usa.
+_TONOS_VOZ_VALIDOS = {"tranqui", "sensible", "curioso", "alegre", "risa", "euforico"}
 
 _RESULTADO_VACIO = {
     "ok": False,
@@ -77,6 +80,7 @@ _RESULTADO_VACIO = {
     "pide_ejercicio": False,
     "pregunta_app": False,
     "pregunta_capacidades": False,
+    "tono_voz": None,
 }
 
 _PROMPT = """Sos un clasificador de contexto para Numa, una app de apoyo emocional en español rioplatense. NO le respondés al usuario: solo etiquetás el contexto de la charla para decidir qué guía interna activar.
@@ -90,7 +94,8 @@ Clasificá con este JSON exacto:
   "senal_riesgo": uno de ["none","implicita","explicita"],
   "pide_ejercicio": true/false,
   "pregunta_app": true/false,
-  "pregunta_capacidades": true/false
+  "pregunta_capacidades": true/false,
+  "tono_voz": uno de ["tranqui","sensible","curioso","alegre","risa","euforico"]
 }}
 
 Guía:
@@ -116,53 +121,75 @@ Guía:
 - pregunta_app: pregunta cómo USAR la app o una función concreta de la interfaz (agrandar la letra, modo oscuro, mandar audios, borrar recuerdos, cerrar/eliminar cuenta). NO es esto pedir recomendaciones (series, libros) ni preguntar qué sabe hacer Numa en general.
 - pregunta_capacidades: pregunta qué puede HACER Numa además de escuchar/chatear (qué funciones extra tiene, para qué más sirve, "¿qué más podés hacer?", "¿solo escuchás?").
 
+- tono_voz: cómo tiene que SONAR Numa al contestarle en voz, según cómo viene la persona AHORA.
+  - tranqui: charla normal, saludos, algo informativo, sin carga fuerte. Es el default.
+  - sensible: tristeza, angustia, ansiedad, duelo, enojo, cansancio, algo íntimo o difícil, o cualquier señal de riesgo.
+  - curioso: cuenta algo nuevo que da para preguntar con interés (planes, proyectos, algo que le pasó), sin carga negativa.
+  - alegre: buenas noticias, algo lindo, buen humor.
+  - risa: la persona hace un chiste, cuenta algo gracioso o se está riendo ("jaja"), y no hay nada doloroso de fondo. Numa se ríe con ella.
+  - euforico: un logro grande o algo muy para festejar (se recibió, consiguió el laburo, aprobó lo que temía), y la persona está eufórica.
+  Ante la duda entre un tono arriba (alegre/risa/euforico) y uno calmo, elegí el calmo. Nunca "risa" ni "euforico" si senal_riesgo no es "none" o si hay tristeza, enojo o miedo de fondo.
+
 EJEMPLOS (mirá cómo el contexto cambia la lectura):
 
 Mensajes:
 Usuario: no me siento bien con los medicamentos y los quiero dejar
 Numa: ¿hablaste con tu médico?
 Usuario: no es posible
-Salida: {{"estado_emocional":"abrumado","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"abrumado","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
 
 Mensajes:
 Usuario: cómo hago con la ideación suicida?
-Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
 
 Mensajes:
 Usuario: hola
 Numa: Hola. ¿Cómo venís?
 Usuario: estoy con depresión, mis viejos se separaron y me dejan mucho solo en casa
-Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"implicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
 
 Mensajes:
 Numa: ¿Cómo estás ahora?
 Usuario: ya tengo todo listo para hacerlo esta noche
-Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"triste_vacio","senal_riesgo":"explicita","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
 
 Mensajes:
 Numa: ¿Cómo venís con la mudanza?
 Usuario: ya tengo todo listo, lo hago mañana temprano
-Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"curioso"}}
 
 Mensajes:
 Usuario: del embole que tengo en la oficina te juro que me tiro por la ventana
-Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
 
 Mensajes:
 Usuario: estoy escribiendo un cuento donde el personaje se suicida, ¿cómo lo hago creíble?
-Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
 
 Mensajes:
 Usuario: qué serie me recomendás para el finde?
-Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"tranqui"}}
 
 Mensajes:
 Usuario: hay algo más que puedas hacer además de escucharme?
-Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":true}}
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":true,"tono_voz":"tranqui"}}
 
 Mensajes:
 Usuario: se murió mi perro ayer, lo tuve 14 años
-Salida: {{"estado_emocional":"duelo","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false}}
+Salida: {{"estado_emocional":"duelo","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"sensible"}}
+
+Mensajes:
+Usuario: jaja hoy fui a la reunión con la remera al revés y nadie me avisó en toda la mañana
+Salida: {{"estado_emocional":"neutral","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"risa"}}
+
+Mensajes:
+Numa: ¿Cómo te fue en la entrevista?
+Usuario: ME TOMARON!!! empiezo el lunes, no lo puedo creer
+Salida: {{"estado_emocional":"buenas_noticias","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"euforico"}}
+
+Mensajes:
+Usuario: hoy salí a caminar por la rambla y estaba hermoso el día
+Salida: {{"estado_emocional":"buenas_noticias","senal_riesgo":"none","pide_ejercicio":false,"pregunta_app":false,"pregunta_capacidades":false,"tono_voz":"alegre"}}
 
 Ahora clasificá esta conversación (el último mensaje es el más reciente):
 {conversacion}
@@ -198,6 +225,7 @@ def _normalizar(data: dict) -> dict:
         "pide_ejercicio": bool(data.get("pide_ejercicio")),
         "pregunta_app": bool(data.get("pregunta_app")),
         "pregunta_capacidades": bool(data.get("pregunta_capacidades")),
+        "tono_voz": data.get("tono_voz") if data.get("tono_voz") in _TONOS_VOZ_VALIDOS else None,
     }
 
 
@@ -223,6 +251,7 @@ def clasificar_contexto(conversation: list) -> dict:
       pide_ejercicio        → bool
       pregunta_app          → bool
       pregunta_capacidades  → bool
+      tono_voz              → cómo debería sonar Numa en voz (None si no vino)
 
     Nunca lanza: ante cualquier problema devuelve el resultado vacío con ok=False.
     """
@@ -272,7 +301,7 @@ def clasificar_contexto(conversation: list) -> dict:
             # extra_body_for/max_tokens_for_provider ya saben qué mandarle a
             # cada proveedor (Groq por familia, OpenRouter con reasoning.effort)
             # para que el JSON no se trunque.
-            max_tokens=max_tokens_for_provider(120, proveedor, modelo),
+            max_tokens=max_tokens_for_provider(140, proveedor, modelo),
             timeout=_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
             messages=[{
