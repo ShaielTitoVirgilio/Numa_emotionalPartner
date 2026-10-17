@@ -8,7 +8,7 @@ import uuid
 from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.exception_handlers import http_exception_handler
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -70,6 +70,22 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ==========================
 # MIDDLEWARE
 # ==========================
+
+# soynuma.app (raíz) pasa a ser la landing; la web vive en app.soynuma.app.
+# Solo se redirige GET / en ese host: la API (/chat, /auth, …) que usa la app
+# móvil con API_URL=https://soynuma.app no se toca. Se registra antes que
+# NoCacheJSMiddleware para que este último quede por fuera y también le ponga
+# no-cache a la redirección.
+LANDING_URL = "https://www.soynuma.app"
+
+
+@app.middleware("http")
+async def landing_redirect(request: Request, call_next):
+    host = request.headers.get("host", "").split(":")[0]
+    if host == "soynuma.app" and request.method == "GET" and request.url.path == "/":
+        return RedirectResponse(LANDING_URL, status_code=302)
+    return await call_next(request)
+
 
 class NoCacheJSMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
