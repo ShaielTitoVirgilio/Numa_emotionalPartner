@@ -54,8 +54,13 @@ def exigir_llamada_habilitada(request: Request) -> None:
 
 @router.get("/llamada/estado")
 async def llamada_estado(request: Request, _user_id: str = Depends(get_current_user_id)):
-    """Le dice a la web si muestra el botón de llamada para esta cuenta."""
-    return {"habilitada": config.llamada_habilitada_para(getattr(request.state, "user_email", None))}
+    """Le dice a la web si muestra el botón de llamada para esta cuenta, y si
+    muestra el panel de debug del barge-in (ver config.llamada_debug_para)."""
+    email = getattr(request.state, "user_email", None)
+    return {
+        "habilitada": config.llamada_habilitada_para(email),
+        "debug": config.llamada_debug_para(email),
+    }
 
 
 @router.get("/tts/token")

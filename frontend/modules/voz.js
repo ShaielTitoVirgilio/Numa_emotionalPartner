@@ -392,6 +392,13 @@ export function estaHablando() {
   return pendientes > 0;
 }
 
+/** Hay audio saliendo por el parlante AHORA (no solo oraciones en cola: entre
+ *  oración y oración, mientras Cartesia sintetiza, no suena nada). Lo usa el
+ *  barge-in para calibrar el eco solo cuando el eco existe. */
+export function sonandoAhora() {
+  return fuenteActual !== null;
+}
+
 // ── Muestra para elegir voz ──────────────────────────────────────────
 let fuenteMuestra = null;
 

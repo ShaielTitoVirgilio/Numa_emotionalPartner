@@ -64,6 +64,13 @@ class Config:
             return True
         return bool(email) and email.strip().lower() in permitidos
 
+    def llamada_debug_para(self, email: Optional[str]) -> bool:
+        """Panel con los dB del barge-in en la pantalla de llamada (para
+        afinarlo en el teléfono). Solo para los emails puestos a mano en
+        LLAMADA_EMAILS: si algún día se abre a todos con "*", el resto no lo ve."""
+        permitidos = {e.strip().lower() for e in self.LLAMADA_EMAILS.split(",") if e.strip()}
+        return bool(email) and email.strip().lower() in permitidos
+
     # ── Verificador de crisis (capa 2, confirma si el riesgo es real) ───
     # 2026-07-18: se movió de Groq/Llama (bloqueado el 17/07) a OpenRouter, mismo
     # modelo que el fallback del chat. Deliberadamente separado de CHAT_FALLBACK_*

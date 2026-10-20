@@ -14,8 +14,11 @@
 // su pedido a Cartesia ya armado (emoción, velocidad, risa). Numa empieza a
 // hablar apenas llega la primera.
 //
-// El micro NO escucha mientras Numa habla: en parlantes se escucharía a sí
-// misma. Para interrumpirla se TOCA LA PANTALLA (igual que en la app).
+// Para interrumpirla se le HABLA ENCIMA (barge-in, ver bargeIn.js): el micro
+// sigue abierto mientras Numa habla, pero esa escucha NO graba — solo mide el
+// volumen para distinguir la voz del usuario del eco de Numa. Al detectarla,
+// Numa se calla y arranca un turno de escucha normal. Tocar la pantalla
+// también la corta (queda de respaldo).
 //
 // En producción solo está para las cuentas de LLAMADA_EMAILS (backend): el
 // botón aparece si /llamada/estado lo habilita (ver initLlamada).
@@ -24,8 +27,9 @@ import { authHeaders } from './utils.js';
 import { contextoParaLlamada, registrarTurnoLlamada } from './chat.js';
 import {
   hablar, detenerHabla, despertarVoz, alTerminarDeHablar, marcarFinDelStream,
-  actualizarVoces, rearmarVoz, vozListaParaLlamada, alFallarVoz,
+  actualizarVoces, rearmarVoz, vozListaParaLlamada, alFallarVoz, sonandoAhora,
 } from './voz.js';
+import { crearDetectorBargeIn, rmsADb, BARGE_IN_DEFAULTS } from './bargeIn.js';
 
 // ============================================
 // AFINADO DE LA DETECCIÓN DE VOZ (VAD)
@@ -80,6 +84,24 @@ let vozAcumuladaMs = 0;
 let yaHablo = false;
 let ultimoChequeo = null;
 
+// Barge-in (ver bargeIn.js). Un detector nuevo por cada vez que Numa habla:
+// el eco se recalibra en cada respuesta (el volumen pudo cambiar).
+const INTERVALO_BARGE_IN_MS = 50;
+let detectorBargeIn = null;
+let chequeoBargeIn = null;
+let ultimoChequeoBargeIn = null;
+
+// Cada turno tiene un número; interrumpir lo avanza. Las oraciones que siguen
+// llegando del turno interrumpido se ignoran: si no, Numa volvía a hablar
+// encima de lo que el usuario está diciendo y le cortaba la grabación.
+let turnoActual = 0;
+
+// Panel con los dB en vivo para afinar el barge-in en el teléfono. Solo para
+// las cuentas que /llamada/estado marca con debug (ver config.py).
+let debugVoz = false;
+let ultimoCorte = null;     // { db, umbralDb, ecoDb } del último barge-in
+const CLAVE_AJUSTES = 'numa_barge_in_ajustes';
+
 let tonoVozPrevio = null;   // el tono_voz del "final" anterior (ver app/voz_tono.py)
 let crisisEnCurso = false;  // durante la contención no se puede interrumpir
 
@@ -102,7 +124,11 @@ export async function initLlamada() {
   habilitada = false;
   try {
     const r = await fetch('/llamada/estado', { headers: await authHeaders() });
-    if (r.ok) habilitada = Boolean((await r.json())?.habilitada);
+    if (r.ok) {
+      const datos = await r.json();
+      habilitada = Boolean(datos?.habilitada);
+      debugVoz = habilitada && Boolean(datos?.debug);
+    }
   } catch { /* sin respuesta: queda oculto */ }
   document.getElementById('llamada-btn')?.classList.toggle('hidden', !habilitada);
   return habilitada;
@@ -173,6 +199,7 @@ export function cerrarLlamada() {
   abortoTurno = null;
 
   _pararEscucha();
+  _pararBargeIn();
   detenerHabla();
   alTerminarDeHablar(null);
   alFallarVoz(null);
@@ -210,7 +237,10 @@ function _elegirMime() {
   return '';
 }
 
-function _escuchar() {
+/** `porBargeIn`: el usuario ya está hablando (se lo detectó encima de Numa),
+ *  así que el turno arranca con su voz ya contada — si no, una frase corta
+ *  dicha justo al interrumpir no llegaba a MIN_VOZ_ACUMULADA_MS y se perdía. */
+function _escuchar(porBargeIn = false) {
   if (!enLlamada || !stream) return;
 
   // La llamada sigue: si se interrumpió a Numa, la voz quedó silenciada.
@@ -219,8 +249,8 @@ function _escuchar() {
 
   audioChunks = [];
   silencioDesde = null;
-  vozAcumuladaMs = 0;
-  yaHablo = false;
+  vozAcumuladaMs = porBargeIn ? MIN_VOZ_ACUMULADA_MS : 0;
+  yaHablo = porBargeIn;
   ultimoChequeo = null;
 
   try {
@@ -281,14 +311,9 @@ function _chequearVolumen() {
     : Math.min(ahora - ultimoChequeo, INTERVALO_CHEQUEO_MS * 5);
   ultimoChequeo = ahora;
 
-  const datos = new Float32Array(analyserNode.fftSize);
-  analyserNode.getFloatTimeDomainData(datos);
-
-  let suma = 0;
-  for (let i = 0; i < datos.length; i++) suma += datos[i] * datos[i];
-  const rms = Math.sqrt(suma / datos.length);
-
+  const rms = _rmsActual();
   _pintarNivel(rms);
+  if (debugVoz) _pintarDebug(rmsADb(rms));
 
   if (rms >= UMBRAL_VOZ) {
     yaHablo = true;
@@ -305,6 +330,14 @@ function _chequearVolumen() {
   } else if (ahora - silencioDesde >= SILENCIO_PARA_CORTAR_MS) {
     _cortarTurno();
   }
+}
+
+function _rmsActual() {
+  const datos = new Float32Array(analyserNode.fftSize);
+  analyserNode.getFloatTimeDomainData(datos);
+  let suma = 0;
+  for (let i = 0; i < datos.length; i++) suma += datos[i] * datos[i];
+  return Math.sqrt(suma / datos.length);
 }
 
 function _cortarTurno() {
@@ -325,13 +358,58 @@ function _pararEscucha() {
   mediaRecorder = null;
 }
 
-/** Tocar la pantalla mientras Numa habla: se calla y te toca a vos. Durante
- *  la contención no: ese mensaje tiene que terminar de decirse. */
-function _interrumpirTocando(e) {
-  if (e?.target?.closest?.('.llamada-salir')) return;
+/** Numa se calla y te toca a vos. Durante la contención no: ese mensaje
+ *  tiene que terminar de decirse. */
+function _interrumpir(porBargeIn) {
   if (!enLlamada || estado !== 'hablando' || crisisEnCurso) return;
+  turnoActual++;   // lo que siga llegando del turno cortado ya no se dice
+  _pararBargeIn();
   detenerHabla();
-  _escuchar();
+  _escuchar(porBargeIn);
+}
+
+/** Tocar la pantalla mientras Numa habla (respaldo del barge-in). */
+function _interrumpirTocando(e) {
+  if (e?.target?.closest?.('.llamada-salir, .llamada-debug')) return;
+  _interrumpir(false);
+}
+
+// ============================================
+// BARGE-IN: hablarle encima a Numa
+// ============================================
+
+function _empezarBargeIn() {
+  if (chequeoBargeIn || !analyserNode) return;
+  detectorBargeIn = crearDetectorBargeIn(_leerAjustes());
+  ultimoChequeoBargeIn = null;
+  chequeoBargeIn = setInterval(_chequearBargeIn, INTERVALO_BARGE_IN_MS);
+}
+
+function _pararBargeIn() {
+  clearInterval(chequeoBargeIn);
+  chequeoBargeIn = null;
+  detectorBargeIn = null;
+}
+
+function _chequearBargeIn() {
+  if (!enLlamada || !analyserNode || !detectorBargeIn || estado !== 'hablando' || crisisEnCurso) return;
+
+  // Mismo motivo que en _chequearVolumen: tiempo real, no ticks.
+  const ahora = Date.now();
+  const delta = ultimoChequeoBargeIn === null
+    ? INTERVALO_BARGE_IN_MS
+    : Math.min(ahora - ultimoChequeoBargeIn, INTERVALO_BARGE_IN_MS * 4);
+  ultimoChequeoBargeIn = ahora;
+
+  const db = rmsADb(_rmsActual());
+  const cortar = detectorBargeIn.muestra(db, sonandoAhora(), ahora, delta);
+  _pintarDebug(db);
+
+  if (cortar) {
+    const { umbralDb, ecoDb } = detectorBargeIn.estado();
+    ultimoCorte = { db, umbralDb, ecoDb };
+    _interrumpir(true);
+  }
 }
 
 // ============================================
@@ -340,6 +418,9 @@ function _interrumpirTocando(e) {
 
 async function _procesarTurno(blob, tipo) {
   _setEstado('pensando');
+  const miTurno = ++turnoActual;
+  // false = el usuario interrumpió este turno (o salió de la llamada).
+  const vigente = () => enLlamada && miTurno === turnoActual;
 
   let huboCrisis = false;
   let textoCrisis = null;
@@ -387,12 +468,12 @@ async function _procesarTurno(blob, tipo) {
         const limpio = (ev.text || '').replace(/\[EJERCICIO:\s*\w+\]/, '').trim();
         if (!limpio) return;
         mensaje = mensaje ? `${mensaje} ${limpio}` : limpio;
-        if (!enLlamada || huboCrisis) return;
+        if (!vigente() || huboCrisis) return;
         seEncoloAlgo = true;
         if (estado !== 'hablando') _setEstado('hablando');
         hablar(limpio, ev.voz && typeof ev.voz.transcript === 'string' ? ev.voz : undefined);
       } else if (ev.type === 'voz') {
-        if (enLlamada && !huboCrisis) actualizarVoces(ev.voces);
+        if (vigente() && !huboCrisis) actualizarVoces(ev.voces);
       } else if (ev.type === 'crisis') {
         huboCrisis = true;
         textoCrisis = ev.text || '';
@@ -413,7 +494,7 @@ async function _procesarTurno(blob, tipo) {
     }
     procesarLinea(buffer);
   } catch (e) {
-    if (!enLlamada || e?.name === 'AbortError') return;
+    if (!vigente() || e?.name === 'AbortError') return;
     console.error('Error hablando con Numa:', e);
     _setEstado('hablando');
     hablar('Perdón, se me cortó. ¿Me lo decís de nuevo?');
@@ -430,9 +511,16 @@ async function _procesarTurno(blob, tipo) {
     return;
   }
 
+  // La crisis se atiende AUNQUE el usuario haya interrumpido este turno: el
+  // router puede cortar la respuesta a mitad de camino (ver /chat/stream), y
+  // para entonces el usuario ya pudo haberle hablado encima a Numa. Lo que se
+  // esté grabando se descarta.
   if (huboCrisis && textoCrisis) {
     // La contención NO se dice en voz: lleva teléfonos que tienen que poder
     // tocarse. Queda la tarjeta en el chat, Numa avisa y se corta.
+    turnoActual++;
+    _pararEscucha();
+    _pararBargeIn();
     registrarTurnoLlamada(textoUsuario, { message: textoCrisis, mood: 'sad', risk_level: 'high' });
     crisisEnCurso = true;
     _setEstado('hablando');
@@ -461,7 +549,14 @@ async function _procesarTurno(blob, tipo) {
         nuevas_memorias: final.nuevas_memorias,
       });
     }
+  }
 
+  // Interrumpido: el turno nuevo (el que el usuario está diciendo ahora)
+  // maneja el micro. Este no reabre la escucha, ni cierra la llamada por un
+  // ejercicio que Numa no llegó a ofrecer en voz.
+  if (!vigente()) return;
+
+  if (final) {
     // Ejercicio sugerido: un ejercicio necesita pantalla, así que Numa
     // termina de decir la frase con la que lo ofrece y se vuelve al chat,
     // donde ya quedó el botón para empezarlo. El aviso de fin se cambia
@@ -496,7 +591,7 @@ async function _procesarTurno(blob, tipo) {
 const TEXTO_ESTADO = {
   escuchando: 'Te escucho…',
   pensando:   'Pensando…',
-  hablando:   'Tocá la pantalla para interrumpir',
+  hablando:   'Hablale encima para interrumpir',
 };
 
 const OSO_POR_ESTADO = {
@@ -514,6 +609,10 @@ function _setEstado(nuevo) {
 
   overlay?.classList.toggle('escuchando', nuevo === 'escuchando');
   if (nuevo !== 'escuchando') _pintarNivel(0);
+
+  if (nuevo === 'hablando' && !crisisEnCurso) _empezarBargeIn();
+  else _pararBargeIn();
+  if (debugVoz) _pintarDebug(null);
 }
 
 /** Halo que crece con el volumen de tu voz, para que se vea que te escucha. */
@@ -540,10 +639,12 @@ function _montarOverlay() {
       <div class="llamada-oso"></div>
     </div>
     <p class="llamada-estado"></p>
+    ${debugVoz ? _htmlDebug() : ''}
   `;
   overlay.querySelector('.llamada-salir').onclick = cerrarLlamada;
   // Toda la pantalla es tocable para interrumpir, no solo el oso.
   overlay.addEventListener('click', _interrumpirTocando);
+  if (debugVoz) _conectarDebug();
   document.body.appendChild(overlay);
 
   // Se MUEVE el canvas del oso (no se crea otro): conserva el contexto WebGL.
@@ -574,4 +675,112 @@ function _desmontarOverlay() {
 
   overlay?.remove();
   overlay = null;
+}
+
+// ============================================
+// DEBUG DEL BARGE-IN (solo cuentas con debug)
+// ============================================
+//
+// Muestra en vivo lo que mide el micro y deja ajustar los tres números que
+// importan sin hacer un deploy. Los ajustes quedan guardados en ESTE
+// navegador (localStorage); "Reset" vuelve a los de bargeIn.js. Cuando unos
+// valores anden bien, se pasan a BARGE_IN_DEFAULTS y se suben.
+
+const AJUSTABLES = [
+  { clave: 'pisoDb',      nombre: 'Piso',      paso: 2,  unidad: 'dB' },
+  { clave: 'margenDb',    nombre: 'Margen',    paso: 1,  unidad: 'dB' },
+  { clave: 'sostenidoMs', nombre: 'Sostenido', paso: 50, unidad: 'ms' },
+];
+
+function _leerAjustes() {
+  try {
+    const guardado = JSON.parse(localStorage.getItem(CLAVE_AJUSTES) || '{}');
+    const ajustes = {};
+    for (const { clave } of AJUSTABLES) {
+      if (typeof guardado[clave] === 'number') ajustes[clave] = guardado[clave];
+    }
+    return ajustes;
+  } catch {
+    return {};
+  }
+}
+
+function _guardarAjustes(ajustes) {
+  try { localStorage.setItem(CLAVE_AJUSTES, JSON.stringify(ajustes)); } catch { /* noop */ }
+}
+
+function _htmlDebug() {
+  const filas = AJUSTABLES.map(({ clave, nombre }) => `
+    <div class="llamada-debug-fila">
+      <span>${nombre}</span>
+      <button data-ajuste="${clave}" data-signo="-1">−</button>
+      <b data-valor="${clave}"></b>
+      <button data-ajuste="${clave}" data-signo="1">+</button>
+    </div>`).join('');
+  return `
+    <div class="llamada-debug">
+      <div data-debug="vivo"></div>
+      <div data-debug="corte"></div>
+      ${filas}
+      <button class="llamada-debug-reset" data-reset="1">Reset</button>
+    </div>`;
+}
+
+function _conectarDebug() {
+  const panel = overlay.querySelector('.llamada-debug');
+  // Tocar el panel NO interrumpe a Numa (ver _interrumpirTocando).
+  panel.addEventListener('click', (e) => {
+    const boton = e.target.closest('button');
+    if (!boton) return;
+    let ajustes = _leerAjustes();
+    if (boton.dataset.reset) {
+      ajustes = {};
+    } else {
+      const { clave, paso } = AJUSTABLES.find(a => a.clave === boton.dataset.ajuste);
+      const actual = ajustes[clave] ?? BARGE_IN_DEFAULTS[clave];
+      ajustes[clave] = actual + paso * Number(boton.dataset.signo);
+      if (clave === 'sostenidoMs') ajustes[clave] = Math.max(50, ajustes[clave]);
+    }
+    _guardarAjustes(ajustes);
+    // Rige desde la próxima vez que Numa hable (el detector se arma ahí).
+    _pintarDebug(null);
+  });
+  _pintarDebug(null);
+}
+
+function _fmt(db) {
+  return db === null || db === undefined ? '—' : `${Math.round(db)}`;
+}
+
+function _pintarDebug(db) {
+  if (!debugVoz || !overlay) return;
+  const panel = overlay.querySelector('.llamada-debug');
+  if (!panel) return;
+
+  const ajustes = { ...BARGE_IN_DEFAULTS, ..._leerAjustes() };
+  for (const { clave, unidad } of AJUSTABLES) {
+    const el = panel.querySelector(`[data-valor="${clave}"]`);
+    if (el) el.textContent = `${ajustes[clave]}${unidad}`;
+  }
+
+  const vivo = panel.querySelector('[data-debug="vivo"]');
+  if (vivo) {
+    let linea = `${estado} · mic ${_fmt(db)}dB`;
+    if (estado === 'hablando' && detectorBargeIn) {
+      const st = detectorBargeIn.estado();
+      linea += st.calibrando
+        ? ` · calibrando eco${sonandoAhora() ? '' : ' (esperando audio)'}`
+        : ` · eco ${_fmt(st.ecoDb)} · umbral ${_fmt(st.umbralDb)} · arriba ${Math.round(st.arribaMs)}ms`;
+    } else if (estado === 'escuchando') {
+      linea += ` · VAD ${_fmt(rmsADb(UMBRAL_VOZ))}`;
+    }
+    vivo.textContent = linea;
+  }
+
+  const corte = panel.querySelector('[data-debug="corte"]');
+  if (corte) {
+    corte.textContent = ultimoCorte
+      ? `último corte: ${_fmt(ultimoCorte.db)}dB (umbral ${_fmt(ultimoCorte.umbralDb)}, eco ${_fmt(ultimoCorte.ecoDb)})`
+      : 'último corte: —';
+  }
 }

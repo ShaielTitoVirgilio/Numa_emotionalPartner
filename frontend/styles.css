@@ -2666,6 +2666,39 @@ html.tema-oscuro .llamada-estado {
   color: #a8c8b8;
 }
 
+/* Debug del barge-in (solo cuentas con debug, ver llamada.js) */
+.llamada-debug {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #e8f5ee;
+  font: 12px/1.45 ui-monospace, Menlo, monospace;
+  z-index: 2;
+}
+.llamada-debug-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.llamada-debug-fila span { width: 72px; }
+.llamada-debug-fila b { min-width: 52px; text-align: center; }
+.llamada-debug button {
+  min-width: 36px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+.llamada-debug-reset { margin-top: 6px; padding: 0 12px; }
+
 /* ============================================
    ENTORNO DE PRUEBAS (NumaDev) — modules/entorno.js
    Franja permanente para que sea imposible confundir la app de pruebas
